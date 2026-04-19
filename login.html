@@ -10,7 +10,12 @@
     * { margin: 0; padding: 0; box-sizing: border-box; }
     body {
       font-family: 'DM Sans', sans-serif;
-      background: linear-gradient(135deg, #1A1A2E 0%, #2D1B1B 100%);
+      /* Maroon / burgundy field: echoes seal & keeps contrast with white card + #CC0000 button */
+      background:
+        radial-gradient(ellipse 95% 85% at 50% 0%, rgba(120, 32, 42, 0.55) 0%, transparent 52%),
+        radial-gradient(ellipse 80% 70% at 100% 100%, rgba(90, 18, 28, 0.35) 0%, transparent 45%),
+        radial-gradient(ellipse 70% 60% at 0% 85%, rgba(55, 12, 18, 0.5) 0%, transparent 42%),
+        linear-gradient(162deg, #120506 0%, #2a0c10 22%, #4a1420 48%, #5c1a28 68%, #2d0d12 88%, #0d0405 100%);
       min-height: 100vh;
       display: flex;
       align-items: center;

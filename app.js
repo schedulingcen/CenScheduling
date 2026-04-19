@@ -71,8 +71,16 @@ const HTML_TO_PAGE = {
 /** Create schedule: stored on each entry as schYear / schSem. */
 const SCHEDULE_FORM_YEARS = ['1st Year', '2nd Year', '3rd Year', '4th Year'];
 const SCHEDULE_FORM_SEMS = ['1st Semester', '2nd Semester'];
-/** Curriculum page filters & Add Subject modal (includes Midyear from IE catalog PDF). */
+/** Semester ordering for schedule cascade & curriculum rows that still use Midyear in data. */
 const CURRICULUM_FORM_SEMS = ['1st Semester', '2nd Semester', 'Midyear'];
+/** Curriculum page semester dropdowns (filters + Add Subject modal) — 1st / 2nd only. */
+const CURRICULUM_PAGE_SEMS = ['1st Semester', '2nd Semester'];
+
+/** Request a room modal: optional reason dropdown (stored on request as `reason`). */
+const REQUEST_ROOM_REASON_CHOICES = [
+  'Room Shortage: Requesting a room from another department',
+  'Teaching Assignment: Professor is from another department',
+];
 
 /** Append catalog rows from data.js that are not yet in arr (by id). */
 function mergeMissingCurriculumRowsInto(arr) {
@@ -151,6 +159,7 @@ function hydratePersistedData() {
     if (o.curriculumDeptFilter != null) state.curriculumDeptFilter = o.curriculumDeptFilter;
     if (o.curriculumYearFilter != null) state.curriculumYearFilter = o.curriculumYearFilter;
     if (o.curriculumSemFilter != null) state.curriculumSemFilter = o.curriculumSemFilter;
+    if (state.curriculumSemFilter === 'Midyear') state.curriculumSemFilter = 'all';
     if (o.requestTimetableDept != null) state.requestTimetableDept = o.requestTimetableDept;
     if (o.requestTimetableRoom != null) state.requestTimetableRoom = o.requestTimetableRoom;
   } catch (e) { /* ignore */ }
@@ -1086,9 +1095,9 @@ function renderCurriculumForm(d) {
   let totV = lecV + labV;
   let deptOpts = DEPARTMENTS.map(dept => `<option value="${escapeHtml(dept.id)}" ${(d.dept || '') === dept.id ? 'selected' : ''}>${escapeHtml(dept.code)} — ${escapeHtml(dept.name)}</option>`).join('');
   let ySel = d.year && !SCHEDULE_FORM_YEARS.includes(d.year) ? `<option value="${escapeHtml(d.year)}" selected>${escapeHtml(d.year)}</option>` : '';
-  let sSel = d.semester && !CURRICULUM_FORM_SEMS.includes(d.semester) ? `<option value="${escapeHtml(d.semester)}" selected>${escapeHtml(d.semester)}</option>` : '';
+  let sSel = d.semester && !CURRICULUM_PAGE_SEMS.includes(d.semester) ? `<option value="${escapeHtml(d.semester)}" selected>${escapeHtml(d.semester)}</option>` : '';
   let yearOpts = SCHEDULE_FORM_YEARS.map(y => `<option value="${escapeHtml(y)}" ${d.year === y ? 'selected' : ''}>${escapeHtml(y)}</option>`).join('');
-  let semOpts = CURRICULUM_FORM_SEMS.map(s => `<option value="${escapeHtml(s)}" ${d.semester === s ? 'selected' : ''}>${escapeHtml(s)}</option>`).join('');
+  let semOpts = CURRICULUM_PAGE_SEMS.map(s => `<option value="${escapeHtml(s)}" ${d.semester === s ? 'selected' : ''}>${escapeHtml(s)}</option>`).join('');
   return `<div class="form-grid form-grid-stacked curriculum-modal-form">
     <div class="form-group full"><label class="form-label" for="cc_dept">Department</label><select class="form-select" id="cc_dept">${deptOpts}</select></div>
     <div class="form-grid curriculum-form-year-sem"><div class="form-group"><label class="form-label" for="cc_year">Year</label><select class="form-select" id="cc_year"><option value="">Select year...</option>${yearOpts}${ySel}</select></div><div class="form-group"><label class="form-label" for="cc_semester">Semester</label><select class="form-select" id="cc_semester"><option value="">Select semester...</option>${semOpts}${sSel}</select></div></div>
@@ -1107,7 +1116,7 @@ function renderCurriculum() {
   });
   let deptFilter = `<select class="filter-select curriculum-filter-select" id="curriculumDeptFilter" aria-label="Department"><option value="all" ${state.curriculumDeptFilter === 'all' ? 'selected' : ''}>All departments</option>${DEPARTMENTS.map(d => `<option value="${d.id}" ${state.curriculumDeptFilter === d.id ? 'selected' : ''}>${escapeHtml(d.name)}</option>`).join('')}</select>`;
   let yearFilter = `<select class="filter-select curriculum-filter-select" id="curriculumYearFilter" aria-label="Year"><option value="all" ${state.curriculumYearFilter === 'all' ? 'selected' : ''}>Year</option>${SCHEDULE_FORM_YEARS.map(y => `<option value="${escapeHtml(y)}" ${state.curriculumYearFilter === y ? 'selected' : ''}>${escapeHtml(y)}</option>`).join('')}</select>`;
-  let semFilter = `<select class="filter-select curriculum-filter-select" id="curriculumSemFilter" aria-label="Semester"><option value="all" ${state.curriculumSemFilter === 'all' ? 'selected' : ''}>Semester</option>${CURRICULUM_FORM_SEMS.map(s => `<option value="${escapeHtml(s)}" ${state.curriculumSemFilter === s ? 'selected' : ''}>${escapeHtml(s)}</option>`).join('')}</select>`;
+  let semFilter = `<select class="filter-select curriculum-filter-select" id="curriculumSemFilter" aria-label="Semester"><option value="all" ${state.curriculumSemFilter === 'all' ? 'selected' : ''}>Semester</option>${CURRICULUM_PAGE_SEMS.map(s => `<option value="${escapeHtml(s)}" ${state.curriculumSemFilter === s ? 'selected' : ''}>${escapeHtml(s)}</option>`).join('')}</select>`;
   return `
     <div class="page-header curriculum-header">
       <div>
@@ -1443,6 +1452,9 @@ function renderRequestForm() {
   let ts = timeSlots.slice(0, -1).map(t => `<option value="${t}" ${slot && slot.timeStart === t ? 'selected' : ''}>${fmt12(t)}</option>`).join('');
   let te = timeSlots.slice(1).map(t => `<option value="${t}" ${slot && slot.timeEnd === t ? 'selected' : ''}>${fmt12(t)}</option>`).join('');
   let setSelect = `<select class="form-select" id="rq_set"><option value="">— None —</option><option value="Set A">Set A</option><option value="Set B">Set B</option></select>`;
+  let rqReasonOpts = REQUEST_ROOM_REASON_CHOICES.map(
+    t => `<option value="${escapeHtml(t)}">${escapeHtml(t)}</option>`
+  ).join('');
   return `<div class="request-room-form">
     <div id="rqFormAlert"></div>
     <div class="request-form-readrow">
@@ -1504,8 +1516,11 @@ function renderRequestForm() {
     </div>
     <div class="form-group full">
       <label class="form-label" for="rq_reason">Reason (optional)</label>
-      <textarea class="form-textarea" id="rq_reason" placeholder="e.g. All CPE rooms are fully occupied for this time slot." rows="3"></textarea>
-      <p class="form-hint">Encouraged for transparency — helps the receiving department understand your situation.</p>
+      <select class="form-select" id="rq_reason" aria-label="Reason for room request">
+        <option value="">Select reason </option>
+        ${rqReasonOpts}
+      </select>
+      <p class="form-hint">Helps the receiving department understand why you need to borrow a room.</p>
     </div>
   </div>`;
 }
