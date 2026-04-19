@@ -26,18 +26,13 @@
       box-shadow: 0 24px 80px rgba(0,0,0,0.3);
     }
     .login-logo { text-align: center; margin-bottom: 32px; }
-    .big-badge {
-      width: 64px;
-      height: 64px;
-      background: #CC0000;
-      border-radius: 16px;
-      display: inline-flex;
-      align-items: center;
-      justify-content: center;
-      font-size: 24px;
-      font-weight: 900;
-      color: #fff;
-      margin-bottom: 12px;
+    .login-logo-img {
+      display: block;
+      width: 152px;
+      height: auto;
+      max-height: 120px;
+      margin: 0 auto 12px;
+      object-fit: contain;
     }
     .login-logo h1 { font-size: 20px; font-weight: 800; color: #1A1A2E; }
     .login-logo p { font-size: 13px; color: #616161; margin-top: 4px; }
@@ -94,10 +89,9 @@
 <body>
   <div class="login-card">
     <div class="login-logo">
-      <div class="big-badge">CEN</div>
-      <h1>Academic Scheduling System</h1>
-      <p><b>College of Engineering</b></p>
-      <p>Southern Luzon State University</p>
+      <img class="login-logo-img" src="assets/cen_logo.png" alt="College of Engineering">
+      <h1>College of Engineering</h1>
+      <p><b>Southern Luzon State University</b></p>
     </div>
     <div class="login-form">
       <div id="loginErr"></div>

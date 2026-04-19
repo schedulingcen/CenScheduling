@@ -68,6 +68,40 @@ const HTML_TO_PAGE = {
   'account.html': 'account',
 };
 
+/** Create schedule: stored on each entry as schYear / schSem. */
+const SCHEDULE_FORM_YEARS = ['1st Year', '2nd Year', '3rd Year', '4th Year'];
+const SCHEDULE_FORM_SEMS = ['1st Semester', '2nd Semester'];
+/** Curriculum page filters & Add Subject modal (includes Midyear from IE catalog PDF). */
+const CURRICULUM_FORM_SEMS = ['1st Semester', '2nd Semester', 'Midyear'];
+
+/** Append catalog rows from data.js that are not yet in arr (by id). */
+function mergeMissingCurriculumRowsInto(arr) {
+  if (typeof CURRICULUM_DATA === 'undefined' || !Array.isArray(CURRICULUM_DATA)) return;
+  let seen = new Set(arr.map(c => c && c.id).filter(Boolean));
+  for (let b of CURRICULUM_DATA) {
+    if (b && b.id && !seen.has(b.id)) {
+      arr.push({ ...b });
+      seen.add(b.id);
+    }
+  }
+}
+
+function curriculumFilterDept(c) {
+  let d = c.dept;
+  if (d) return d;
+  return CURRICULUM_DATA?.find(b => b.id === c.id)?.dept;
+}
+function curriculumFilterYear(c) {
+  let y = (c.year || '').trim();
+  if (y) return y;
+  return (CURRICULUM_DATA?.find(b => b.id === c.id)?.year || '').trim();
+}
+function curriculumFilterSemester(c) {
+  let s = (c.semester || '').trim();
+  if (s) return s;
+  return (CURRICULUM_DATA?.find(b => b.id === c.id)?.semester || '').trim();
+}
+
 function pageHref(pageId) {
   return PAGE_TO_HTML[pageId] || 'dashboard.html';
 }
@@ -94,8 +128,29 @@ function hydratePersistedData() {
     if (o.filterSection != null) state.filterSection = o.filterSection;
     if (o.filterFaculty != null) state.filterFaculty = o.filterFaculty;
     if (o.filterRoom != null) state.filterRoom = o.filterRoom;
-    if (Array.isArray(o.curriculum)) state.curriculum = o.curriculum;
+    if (Array.isArray(o.curriculum)) {
+      let bundleById = {};
+      if (typeof CURRICULUM_DATA !== 'undefined' && Array.isArray(CURRICULUM_DATA)) {
+        for (let b of CURRICULUM_DATA) {
+          if (b && b.id) bundleById[b.id] = b;
+        }
+      }
+      let merged = o.curriculum.map(c => {
+        let base = bundleById[c.id] || {};
+        return {
+          ...base,
+          ...c,
+          id: c.id,
+          year: c.year || base.year || '1st Year',
+          semester: c.semester || base.semester || '1st Semester',
+        };
+      });
+      mergeMissingCurriculumRowsInto(merged);
+      state.curriculum = merged;
+    }
     if (o.curriculumDeptFilter != null) state.curriculumDeptFilter = o.curriculumDeptFilter;
+    if (o.curriculumYearFilter != null) state.curriculumYearFilter = o.curriculumYearFilter;
+    if (o.curriculumSemFilter != null) state.curriculumSemFilter = o.curriculumSemFilter;
     if (o.requestTimetableDept != null) state.requestTimetableDept = o.requestTimetableDept;
     if (o.requestTimetableRoom != null) state.requestTimetableRoom = o.requestTimetableRoom;
   } catch (e) { /* ignore */ }
@@ -132,6 +187,8 @@ function persistAppData() {
       filterRoom: state.filterRoom,
       curriculum: state.curriculum,
       curriculumDeptFilter: state.curriculumDeptFilter,
+      curriculumYearFilter: state.curriculumYearFilter,
+      curriculumSemFilter: state.curriculumSemFilter,
       requestTimetableDept: state.requestTimetableDept,
       requestTimetableRoom: state.requestTimetableRoom,
     })
@@ -157,6 +214,8 @@ let state = {
   requests: [...REQUESTS],
   curriculum: [...CURRICULUM_DATA],
   curriculumDeptFilter: 'all',
+  curriculumYearFilter: 'all',
+  curriculumSemFilter: 'all',
   requestTimetableDept: 'ie',
   requestTimetableRoom: '',
 };
@@ -171,6 +230,27 @@ function getDept(id) { return DEPARTMENTS.find(d=>d.id===id); }
 function escapeHtml(s) {
   if (s == null) return '';
   return String(s).replace(/&/g, '&amp;').replace(/</g, '&lt;').replace(/"/g, '&quot;');
+}
+/** Curriculum table cells: separate Lec / Lab / Total (PDF-style). */
+function curriculumColLec(c) {
+  if (c.lecUnits != null && Number.isFinite(Number(c.lecUnits))) return escapeHtml(String(Number(c.lecUnits)));
+  if (c.labUnits != null && c.lecUnits == null) return escapeHtml('0');
+  if (c.lecUnits == null && c.labUnits == null && c.units != null) return escapeHtml(String(Number(c.units)));
+  return '—';
+}
+function curriculumColLab(c) {
+  if (c.labUnits != null && Number.isFinite(Number(c.labUnits))) return escapeHtml(String(Number(c.labUnits)));
+  if (c.lecUnits != null && c.labUnits == null) return escapeHtml('0');
+  if (c.lecUnits == null && c.labUnits == null && c.units != null) return escapeHtml('0');
+  return '—';
+}
+function curriculumColTotal(c) {
+  if (c.units != null && Number.isFinite(Number(c.units))) return escapeHtml(String(Number(c.units)));
+  let lec = Number(c.lecUnits);
+  let lab = Number(c.labUnits);
+  if (Number.isFinite(lec) || Number.isFinite(lab))
+    return escapeHtml(String((Number.isFinite(lec) ? lec : 0) + (Number.isFinite(lab) ? lab : 0)));
+  return '—';
 }
 function fmt12(t) { let [h,m]=t.split(':').map(Number); return `${h%12||12}:${String(m).padStart(2,'0')} ${h>=12?'PM':'AM'}`; }
 /** Display slot start as 7:30, 8:00, … (every row of the timetable time column). */
@@ -202,6 +282,39 @@ function mergeSectionOptions(deptIds) {
   const samples = [];
   ids.forEach(id => { const arr = SECTION_SAMPLES_BY_DEPT[id]; if (arr) samples.push(...arr); });
   return [...new Set([...fromSched, ...samples])].sort((a, b) => String(a).localeCompare(String(b)));
+}
+/** Placeholder for section text fields (shown when the field is empty). */
+function sectionInputPlaceholder(deptKey) {
+  const d = deptKey && deptKey !== 'all' ? deptKey : 'ie';
+  const first = SECTION_SAMPLES_BY_DEPT[d]?.[0];
+  return first ? `e.g. ${first}` : 'e.g. BSIE IGK';
+}
+/** Set A / Set B only; preserves other saved values as an extra option when editing. */
+function setABSelectHtml(id, current) {
+  const legacy = current && current !== 'Set A' && current !== 'Set B' ? String(current) : '';
+  const legacyOpt = legacy
+    ? `<option value="${escapeHtml(legacy)}" selected>${escapeHtml(legacy)}</option>`
+    : '';
+  return `<select class="form-select" id="${id}">
+    <option value="">— None —</option>
+    <option value="Set A" ${current === 'Set A' ? 'selected' : ''}>Set A</option>
+    <option value="Set B" ${current === 'Set B' ? 'selected' : ''}>Set B</option>
+    ${legacyOpt}
+  </select>`;
+}
+function scheduleYearSelectHtml(id, selected) {
+  const legacy = selected && !SCHEDULE_FORM_YEARS.includes(selected)
+    ? `<option value="${escapeHtml(selected)}" selected>${escapeHtml(selected)}</option>`
+    : '';
+  const opts = SCHEDULE_FORM_YEARS.map(y => `<option value="${escapeHtml(y)}" ${selected === y ? 'selected' : ''}>${escapeHtml(y)}</option>`).join('');
+  return `<select class="form-select" id="${id}"><option value="">Select year...</option>${opts}${legacy}</select>`;
+}
+function scheduleSemSelectHtml(id, selected) {
+  const legacy = selected && !SCHEDULE_FORM_SEMS.includes(selected)
+    ? `<option value="${escapeHtml(selected)}" selected>${escapeHtml(selected)}</option>`
+    : '';
+  const opts = SCHEDULE_FORM_SEMS.map(s => `<option value="${escapeHtml(s)}" ${selected === s ? 'selected' : ''}>${escapeHtml(s)}</option>`).join('');
+  return `<select class="form-select" id="${id}"><option value="">Select semester...</option>${opts}${legacy}</select>`;
 }
 function getBorrowableRooms(u) {
   if (!u) return [];
@@ -295,7 +408,7 @@ function render() {
       <div class="sidebar ${state.sidebarOpen?'open':''}" id="sidebar">${renderSidebar()}</div>
       <div class="overlay ${state.sidebarOpen?'show':''}" id="overlay"></div>
       <div class="main">
-        <div class="topbar"><span class="hamburger" id="hamburger" role="button" tabindex="0" aria-label="Open menu">${icon('menu', 22)}</span><div class="page-title">${getPageTitle()}</div><div class="topbar-actions"><button type="button" class="btn btn-outline btn-sm theme-toggle" id="themeToggleBtn" aria-label="${document.documentElement.dataset.theme === 'dark' ? 'Switch to light mode' : 'Switch to dark mode'}">${document.documentElement.dataset.theme === 'dark' ? icon('sun', 18) : icon('moon', 18)}</button>${state.page==='schedule'?`<button class="btn btn-primary btn-sm" id="addSchedBtn">${icon('plus', 16)} Add Schedule</button>`:''}${state.page==='requests'&&state.currentUser?.role==='chairperson'?`<button class="btn btn-primary btn-sm" id="requestRoomTopBtn">${icon('plus', 16)} Request a Room</button>`:''}</div></div>
+        <div class="topbar"><span class="hamburger" id="hamburger" role="button" tabindex="0" aria-label="Open menu">${icon('menu', 22)}</span><div class="page-title">${getPageTitle()}</div><div class="topbar-actions"><button type="button" class="btn btn-outline btn-sm theme-toggle" id="themeToggleBtn" aria-label="${document.documentElement.dataset.theme === 'dark' ? 'Switch to light mode' : 'Switch to dark mode'}">${document.documentElement.dataset.theme === 'dark' ? icon('sun', 18) : icon('moon', 18)}</button>${state.page==='schedule'?`<button class="btn btn-primary btn-sm" id="addSchedBtn">${icon('plus', 16)} Add Schedule</button>`:''}${state.page==='curriculum'&&state.currentUser?.role==='admin'?`<button type="button" class="btn btn-primary btn-sm" id="addCurriculumBtn">${icon('plus', 16)} Add Subject</button>`:''}${state.page==='requests'&&state.currentUser?.role==='chairperson'?`<button class="btn btn-primary btn-sm" id="requestRoomTopBtn">${icon('plus', 16)} Request a Room</button>`:''}</div></div>
         <div class="content">${renderPage()}</div>
       </div>
     </div>
@@ -775,35 +888,73 @@ function renderRequests() {
 
 function renderCurriculumForm(d) {
   d = d || {};
+  let lecV = 3;
+  let labV = 0;
+  if (d.lecUnits != null || d.labUnits != null) {
+    lecV = d.lecUnits != null ? Number(d.lecUnits) : 0;
+    labV = d.labUnits != null ? Number(d.labUnits) : 0;
+  } else if (d.units != null) {
+    lecV = Number(d.units);
+    labV = 0;
+  }
+  if (!Number.isFinite(lecV)) lecV = 0;
+  if (!Number.isFinite(labV)) labV = 0;
+  let totV = lecV + labV;
   let deptOpts = DEPARTMENTS.map(dept => `<option value="${escapeHtml(dept.id)}" ${(d.dept || '') === dept.id ? 'selected' : ''}>${escapeHtml(dept.code)} — ${escapeHtml(dept.name)}</option>`).join('');
-  return `<div class="form-grid form-grid-stacked">
+  let ySel = d.year && !SCHEDULE_FORM_YEARS.includes(d.year) ? `<option value="${escapeHtml(d.year)}" selected>${escapeHtml(d.year)}</option>` : '';
+  let sSel = d.semester && !CURRICULUM_FORM_SEMS.includes(d.semester) ? `<option value="${escapeHtml(d.semester)}" selected>${escapeHtml(d.semester)}</option>` : '';
+  let yearOpts = SCHEDULE_FORM_YEARS.map(y => `<option value="${escapeHtml(y)}" ${d.year === y ? 'selected' : ''}>${escapeHtml(y)}</option>`).join('');
+  let semOpts = CURRICULUM_FORM_SEMS.map(s => `<option value="${escapeHtml(s)}" ${d.semester === s ? 'selected' : ''}>${escapeHtml(s)}</option>`).join('');
+  return `<div class="form-grid form-grid-stacked curriculum-modal-form">
     <div class="form-group full"><label class="form-label" for="cc_dept">Department</label><select class="form-select" id="cc_dept">${deptOpts}</select></div>
-    <div class="form-group"><label class="form-label" for="cc_courseCode">Course code</label><input class="form-input" id="cc_courseCode" placeholder="e.g. ME 100" value="${escapeHtml(d.courseCode || '')}"></div>
-    <div class="form-group full"><label class="form-label" for="cc_courseName">Course</label><input class="form-input" id="cc_courseName" placeholder="Course title" value="${escapeHtml(d.courseName || '')}"></div>
-    <div class="form-group"><label class="form-label" for="cc_subjectCode">Subject code</label><input class="form-input" id="cc_subjectCode" placeholder="Subject code" value="${escapeHtml(d.subjectCode || '')}"></div>
-    <div class="form-group full"><label class="form-label" for="cc_subjectName">Subject</label><input class="form-input" id="cc_subjectName" placeholder="Subject name" value="${escapeHtml(d.subjectName || '')}"></div>
-    <div class="form-group"><label class="form-label" for="cc_units">Units</label><input class="form-input" id="cc_units" type="number" value="${d.units != null ? escapeHtml(String(d.units)) : '3'}"></div>
-    <div class="form-group"><label class="form-label" for="cc_section">Section</label><input class="form-input" id="cc_section" placeholder="e.g. BSIE - IIGK" value="${escapeHtml(d.section || '')}"></div>
+    <div class="form-grid curriculum-form-year-sem"><div class="form-group"><label class="form-label" for="cc_year">Year</label><select class="form-select" id="cc_year"><option value="">Select year...</option>${yearOpts}${ySel}</select></div><div class="form-group"><label class="form-label" for="cc_semester">Semester</label><select class="form-select" id="cc_semester"><option value="">Select semester...</option>${semOpts}${sSel}</select></div></div>
+    <div class="form-grid curriculum-form-code-subject"><div class="form-group"><label class="form-label" for="cc_courseCode">Course code</label><input class="form-input" id="cc_courseCode" placeholder="e.g. IE 100" value="${escapeHtml(d.courseCode || '')}"></div><div class="form-group"><label class="form-label" for="cc_subject">Subject</label><input class="form-input" id="cc_subject" placeholder="Subject title" value="${escapeHtml(d.subjectName || '')}"></div></div>
+    <div class="form-grid curriculum-form-units"><div class="form-group"><label class="form-label" for="cc_lecUnits">Lec (units)</label><input class="form-input" id="cc_lecUnits" type="number" min="0" max="12" step="1" value="${escapeHtml(String(lecV))}"></div><div class="form-group"><label class="form-label" for="cc_labUnits">Lab (units)</label><input class="form-input" id="cc_labUnits" type="number" min="0" max="12" step="1" value="${escapeHtml(String(labV))}"></div><div class="form-group"><label class="form-label" for="cc_units_total">Total unit/s</label><input class="form-input" id="cc_units_total" type="text" readonly tabindex="-1" value="${escapeHtml(String(totV))}" aria-live="polite"></div></div>
   </div><input type="hidden" id="cc_edit_id" value="${escapeHtml(d.id || '')}">`;
 }
 
 function renderCurriculum() {
-  let rows = state.curriculum.filter(c => state.curriculumDeptFilter === 'all' || c.dept === state.curriculumDeptFilter);
-  let deptFilter = `<select class="filter-select" id="curriculumDeptFilter" aria-label="Filter by department"><option value="all" ${state.curriculumDeptFilter === 'all' ? 'selected' : ''}>All departments</option>${DEPARTMENTS.map(d => `<option value="${d.id}" ${state.curriculumDeptFilter === d.id ? 'selected' : ''}>${escapeHtml(d.code)} — ${escapeHtml(d.name)}</option>`).join('')}</select>`;
+  mergeMissingCurriculumRowsInto(state.curriculum);
+  let rows = state.curriculum.filter(c => {
+    if (state.curriculumDeptFilter !== 'all' && curriculumFilterDept(c) !== state.curriculumDeptFilter) return false;
+    if (state.curriculumYearFilter !== 'all' && curriculumFilterYear(c) !== state.curriculumYearFilter) return false;
+    if (state.curriculumSemFilter !== 'all' && curriculumFilterSemester(c) !== state.curriculumSemFilter) return false;
+    return true;
+  });
+  let deptFilter = `<select class="filter-select curriculum-filter-select" id="curriculumDeptFilter" aria-label="Department"><option value="all" ${state.curriculumDeptFilter === 'all' ? 'selected' : ''}>All departments</option>${DEPARTMENTS.map(d => `<option value="${d.id}" ${state.curriculumDeptFilter === d.id ? 'selected' : ''}>${escapeHtml(d.name)}</option>`).join('')}</select>`;
+  let yearFilter = `<select class="filter-select curriculum-filter-select" id="curriculumYearFilter" aria-label="Year"><option value="all" ${state.curriculumYearFilter === 'all' ? 'selected' : ''}>Year</option>${SCHEDULE_FORM_YEARS.map(y => `<option value="${escapeHtml(y)}" ${state.curriculumYearFilter === y ? 'selected' : ''}>${escapeHtml(y)}</option>`).join('')}</select>`;
+  let semFilter = `<select class="filter-select curriculum-filter-select" id="curriculumSemFilter" aria-label="Semester"><option value="all" ${state.curriculumSemFilter === 'all' ? 'selected' : ''}>Semester</option>${CURRICULUM_FORM_SEMS.map(s => `<option value="${escapeHtml(s)}" ${state.curriculumSemFilter === s ? 'selected' : ''}>${escapeHtml(s)}</option>`).join('')}</select>`;
   return `
     <div class="page-header curriculum-header">
       <div>
         <h2>Curriculum</h2>
-        <p class="curriculum-subhead">Add course and subject offerings (code, course, subject, units, section). Filter the timetable below by department.</p>
+        <p class="curriculum-subhead">Add course and subject entries by department, year, and semester. Filter the list below.</p>
       </div>
-      <button type="button" class="btn btn-primary" id="addCurriculumBtn">${icon('plus', 16)} Add row</button>
     </div>
-    <div class="timetable-toolbar curriculum-toolbar">${deptFilter}<span class="curriculum-count">${rows.length} row(s)</span></div>
-    <div class="table-wrap curriculum-table-wrap">
-      <table><thead><tr><th>Dept</th><th>Course code</th><th>Course</th><th>Subject code</th><th>Subject</th><th>Units</th><th>Section</th><th></th></tr></thead><tbody>
-        ${rows.map(c => `<tr><td><span class="badge-dept ${c.dept}">${escapeHtml(getDept(c.dept)?.code || '')}</span></td><td>${escapeHtml(c.courseCode)}</td><td>${escapeHtml(c.courseName)}</td><td>${escapeHtml(c.subjectCode)}</td><td>${escapeHtml(c.subjectName)}</td><td>${escapeHtml(String(c.units))}</td><td>${escapeHtml(c.section)}</td><td><button type="button" class="btn btn-outline btn-sm" data-editcrow="${escapeHtml(c.id)}">Edit</button> <button type="button" class="btn btn-danger btn-sm" data-delcrow="${escapeHtml(c.id)}">Delete</button></td></tr>`).join('')}
-      </tbody></table>
-      ${rows.length === 0 ? '<div class="empty-state" style="padding:32px">No curriculum rows for this filter.</div>' : ''}
+    <div class="curriculum-panel">
+      <div class="curriculum-filter-row" aria-hidden="false">
+        <div class="curriculum-filter-cell curriculum-filter-dept">${deptFilter}</div>
+        <div class="curriculum-filter-cell curriculum-filter-year">${yearFilter}</div>
+        <div class="curriculum-filter-cell curriculum-filter-sem">${semFilter}</div>
+        <div class="curriculum-filter-cell curriculum-filter-tail"></div>
+      </div>
+      <div class="table-wrap curriculum-table-wrap">
+        <table class="curriculum-table">
+          <colgroup>
+            <col class="curriculum-col-cc" />
+            <col class="curriculum-col-subj" />
+            <col class="curriculum-col-lec" />
+            <col class="curriculum-col-lab" />
+            <col class="curriculum-col-unit-total" />
+            <col class="curriculum-col-actions" />
+          </colgroup>
+          <thead><tr><th scope="col">Course code</th><th scope="col">Subject</th><th scope="col" class="curriculum-th-num">Lec</th><th scope="col" class="curriculum-th-num">Lab</th><th scope="col" class="curriculum-th-num">Unit/s</th><th scope="col" class="curriculum-th-actions" aria-label="Actions"></th></tr></thead>
+          <tbody>
+        ${rows.map(c => `<tr><td>${escapeHtml(c.courseCode)}</td><td class="curriculum-td-subj">${escapeHtml(c.subjectName)}</td><td class="curriculum-td-num">${curriculumColLec(c)}</td><td class="curriculum-td-num">${curriculumColLab(c)}</td><td class="curriculum-td-num">${curriculumColTotal(c)}</td><td class="curriculum-td-actions"><button type="button" class="btn btn-outline btn-sm" data-editcrow="${escapeHtml(c.id)}">Edit</button><button type="button" class="btn btn-danger btn-sm" data-delcrow="${escapeHtml(c.id)}">Delete</button></td></tr>`).join('')}
+          </tbody>
+        </table>
+        ${rows.length === 0 ? '<div class="curriculum-empty">No curriculum rows for this filter.</div>' : ''}
+      </div>
     </div>
   `;
 }
@@ -848,7 +999,7 @@ function renderModal() {
   }
   if(type==='addSubject') return modalWrap(data?.id?'Edit Subject':'Add Subject',renderSubjectForm(data));
   if(type==='addProfessor') return modalWrap(data?.id?'Edit Professor':'Add Professor',renderProfessorForm(data));
-  if(type==='addCurriculum') return modalWrap(data?.id ? 'Edit curriculum row' : 'Add curriculum row', renderCurriculumForm(data));
+  if(type==='addCurriculum') return modalWrap(data?.id ? 'Edit Subject' : 'Add Subject', renderCurriculumForm(data));
   if (type === 'newRequest') {
     const reqFooter = `<button class="btn btn-secondary" id="modalClose2">Cancel</button><button class="btn btn-primary" id="modalSaveBtn">Submit Request</button>`;
     return modalWrap('Request a room', renderRequestForm(), reqFooter, 'modal-request', 'Borrow a room from another department');
@@ -891,7 +1042,7 @@ function renderScheduleForm() {
   let roomOpts = roomList.map(r => `<option value="${escapeHtml(r.id)}">${escapeHtml(r.name)}</option>`).join('');
   let timeStartOpts = timeSlots.slice(0, -1).map(t => `<option value="${t}" ${slot && slot.timeStart === t ? 'selected' : ''}>${fmt12(t)}</option>`).join('');
   let timeEndOpts = timeSlots.slice(1).map(t => `<option value="${t}" ${slot && slot.timeEnd === t ? 'selected' : ''}>${fmt12(t)}</option>`).join('');
-  let sectionOpts = mergeSectionOptions(secDeptIds).map(s => `<option value="${escapeHtml(s)}">${escapeHtml(s)}</option>`).join('');
+  let secOpts = mergeSectionOptions(secDeptIds).map(s => `<option value="${escapeHtml(s)}">${escapeHtml(s)}</option>`).join('');
   const req = '<span class="label-req" aria-hidden="true">*</span>';
 
   let deptRow;
@@ -908,23 +1059,25 @@ function renderScheduleForm() {
   return `<div id="conflictAlert"></div>
   <div class="schedule-form-wrapper">
     ${deptRow}
-    <div class="schedule-form-2col">
-      <div class="schedule-form-col">
-        <div class="form-group"><label class="form-label" for="f_subject">Subject ${req}</label><select class="form-select" id="f_subject"><option value="">Select subject...</option>${subOpts}</select></div>
-        <div class="form-group"><label class="form-label" for="f_room">Classroom ${req}</label><select class="form-select" id="f_room"><option value="">Select room...</option>${roomOpts}</select></div>
-      </div>
-      <div class="schedule-form-col">
-        <div class="form-group"><label class="form-label" for="f_professor">Professor ${req}</label><select class="form-select" id="f_professor"><option value="">Select professor...</option>${profOpts}</select></div>
-        <div class="form-group"><label class="form-label" for="f_section">Class Section ${req}</label><select class="form-select" id="f_section"><option value="">e.g. BSIE - IIGK</option>${sectionOpts}</select></div>
-      </div>
+    <div class="schedule-form-inline-row">
+      <div class="form-group"><label class="form-label" for="f_year">Year ${req}</label>${scheduleYearSelectHtml('f_year', '')}</div>
+      <div class="form-group"><label class="form-label" for="f_section">Section ${req}</label><select class="form-select" id="f_section"><option value="">Select section...</option>${secOpts}</select></div>
+    </div>
+    <div class="schedule-form-inline-row schedule-form-row-sem-subject">
+      <div class="form-group"><label class="form-label" for="f_sem">Semester ${req}</label>${scheduleSemSelectHtml('f_sem', '')}</div>
+      <div class="form-group"><label class="form-label" for="f_subject">Subject ${req}</label><select class="form-select" id="f_subject"><option value="">Select subject...</option>${subOpts}</select></div>
     </div>
     <div class="schedule-form-inline-row">
-      <div class="form-group"><span class="form-label">Days ${req}</span><div class="days-check">${DAYS.map(d => `<input type="checkbox" class="day-checkbox" id="day_${d}" value="${d}" ${slot && slot.day === d ? 'checked' : ''}><label class="day-label" for="day_${d}">${d.slice(0, 3)}</label>`).join('')}</div></div>
-      <div class="form-group"><label class="form-label" for="f_set">Set (optional)</label><input class="form-input" id="f_set" placeholder="e.g. Set A" autocomplete="off"></div>
+      <div class="form-group"><label class="form-label" for="f_set">Set (optional)</label>${setABSelectHtml('f_set', '')}</div>
+      <div class="form-group"><label class="form-label" for="f_professor">Professor ${req}</label><select class="form-select" id="f_professor"><option value="">Select professor...</option>${profOpts}</select></div>
     </div>
     <div class="schedule-form-inline-row">
-      <div class="form-group"><label class="form-label" for="f_timeStart">Time Start ${req}</label><select class="form-select" id="f_timeStart">${timeStartOpts}</select></div>
-      <div class="form-group"><label class="form-label" for="f_timeEnd">Time End ${req}</label><select class="form-select" id="f_timeEnd">${timeEndOpts}</select></div>
+      <div class="form-group"><span class="form-label">Day(s) ${req}</span><div class="days-check">${DAYS.map(d => `<input type="checkbox" class="day-checkbox" id="day_${d}" value="${d}" ${slot && slot.day === d ? 'checked' : ''}><label class="day-label" for="day_${d}">${d.slice(0, 3)}</label>`).join('')}</div></div>
+      <div class="form-group"><label class="form-label" for="f_room">Room ${req}</label><select class="form-select" id="f_room"><option value="">Select room...</option>${roomOpts}</select></div>
+    </div>
+    <div class="schedule-form-inline-row">
+      <div class="form-group"><label class="form-label" for="f_timeStart">Time start ${req}</label><select class="form-select" id="f_timeStart">${timeStartOpts}</select></div>
+      <div class="form-group"><label class="form-label" for="f_timeEnd">Time end ${req}</label><select class="form-select" id="f_timeEnd">${timeEndOpts}</select></div>
     </div>
   </div>`;
 }
@@ -950,14 +1103,21 @@ function renderViewSchedule(d) {
       ? `<div class="vs-dept-readout"><span class="badge-dept ${dept.id}">${escapeHtml(dept.code)}</span> ${escapeHtml(dept.name)}</div>`
       : '—';
     return `<div class="view-schedule-form view-schedule-readonly">
-      ${viewScheduleFieldRow('Subject', `<div class="vs-readonly">${subLine}</div>`)}
       ${viewScheduleFieldRow('Department', `<div class="vs-readonly">${deptLine}</div>`)}
-      ${viewScheduleFieldRow('Professor', `<div class="vs-readonly">${prof ? escapeHtml(prof.name) : '—'}</div>`)}
-      ${viewScheduleFieldRow('Section', `<div class="vs-readonly">${escapeHtml(d.section || '—')}</div>`)}
-      ${viewScheduleFieldRow('Room', `<div class="vs-readonly">${room ? escapeHtml(room.name) : '—'}</div>`)}
-      ${viewScheduleFieldRow('Days', `<div class="vs-readonly">${escapeHtml(daysStr)}</div>`)}
-      ${viewScheduleFieldRow('Time', `<div class="vs-readonly">${escapeHtml(timeStr)}</div>`)}
+      <div class="schedule-form-inline-row">
+        <div class="form-group"><span class="form-label">Year</span><div class="vs-readonly">${escapeHtml(d.schYear || '—')}</div></div>
+        <div class="form-group"><span class="form-label">Section</span><div class="vs-readonly">${escapeHtml(d.section || '—')}</div></div>
+      </div>
+      <div class="schedule-form-inline-row schedule-form-row-sem-subject">
+        <div class="form-group"><span class="form-label">Semester</span><div class="vs-readonly">${escapeHtml(d.schSem || '—')}</div></div>
+        <div class="form-group"><span class="form-label">Subject</span><div class="vs-readonly">${subLine}</div></div>
+      </div>
       ${viewScheduleFieldRow('Set (optional)', `<div class="vs-readonly">${d.setLabel ? escapeHtml(d.setLabel) : 'None'}</div>`)}
+      ${viewScheduleFieldRow('Professor', `<div class="vs-readonly">${prof ? escapeHtml(prof.name) : '—'}</div>`)}
+      ${viewScheduleFieldRow('Day(s)', `<div class="vs-readonly">${escapeHtml(daysStr)}</div>`)}
+      ${viewScheduleFieldRow('Room', `<div class="vs-readonly">${room ? escapeHtml(room.name) : '—'}</div>`)}
+      ${viewScheduleFieldRow('Time start', `<div class="vs-readonly">${escapeHtml(fmtSlot24(d.timeStart))}</div>`)}
+      ${viewScheduleFieldRow('Time end', `<div class="vs-readonly">${escapeHtml(fmtSlot24(d.timeEnd))}</div>`)}
     </div>`;
   }
   let listDept = d.dept;
@@ -968,26 +1128,39 @@ function renderViewSchedule(d) {
   let subOpts = subList.map(x => `<option value="${escapeHtml(x.id)}" ${d.subjectId === x.id ? 'selected' : ''}>${escapeHtml(x.code)} — ${escapeHtml(x.name)}</option>`).join('');
   let profOpts = `<option value="" ${!d.professorId ? 'selected' : ''}>—</option>` + profList.map(p => `<option value="${escapeHtml(p.id)}" ${d.professorId === p.id ? 'selected' : ''}>${escapeHtml(p.name)}</option>`).join('');
   let roomOpts = roomList.map(r => `<option value="${escapeHtml(r.id)}" ${d.roomId === r.id ? 'selected' : ''}>${escapeHtml(r.name)}</option>`).join('');
-  let secOpts = mergeSectionOptions([listDept]).map(sec => `<option value="${escapeHtml(sec)}" ${d.section === sec ? 'selected' : ''}>${escapeHtml(sec)}</option>`).join('');
+  let secChoices = mergeSectionOptions([listDept]);
+  let secOpts = secChoices.map(sec => `<option value="${escapeHtml(sec)}" ${String(d.section) === sec ? 'selected' : ''}>${escapeHtml(sec)}</option>`).join('');
+  let secLegacyOpt =
+    d.section && !secChoices.includes(String(d.section))
+      ? `<option value="${escapeHtml(d.section)}" selected>${escapeHtml(d.section)}</option>`
+      : '';
   let deptOpts = DEPARTMENTS.map(x => `<option value="${x.id}" ${d.dept === x.id ? 'selected' : ''}>${escapeHtml(x.code)} — ${escapeHtml(x.name)}</option>`).join('');
   let timeStartOpts = timeSlots.slice(0, -1).map(t => `<option value="${t}" ${d.timeStart === t ? 'selected' : ''}>${fmt12(t)}</option>`).join('');
   let timeEndOpts = timeSlots.slice(1).map(t => `<option value="${t}" ${d.timeEnd === t ? 'selected' : ''}>${fmt12(t)}</option>`).join('');
-  let setInput = `<input type="text" class="form-input" id="vs_set" placeholder="e.g. Set A" value="${escapeHtml(d.setLabel || '')}" autocomplete="off">`;
+  let setInput = setABSelectHtml('vs_set', d.setLabel || '');
   let daysHtml = `<div class="days-check vs-days-check">${DAYS.map(day => `<input type="checkbox" class="day-checkbox" id="vsday_${day}" value="${day}" ${Array.isArray(d.days) && d.days.includes(day) ? 'checked' : ''}><label class="day-label" for="vsday_${day}">${day.slice(0, 3)}</label>`).join('')}</div>`;
   let timeRow = `<div class="vs-time-pair"><select class="form-select" id="vs_timeStart">${timeStartOpts}</select><select class="form-select" id="vs_timeEnd">${timeEndOpts}</select></div>`;
   let deptControl = isAdmin
     ? `<select class="form-select" id="vs_dept">${deptOpts}</select>`
     : `<div class="vs-dept-readout">${dept ? `<span class="badge-dept ${dept.id}">${escapeHtml(dept.code)}</span> ${escapeHtml(dept.name)}` : '—'}</div><input type="hidden" id="vs_dept" value="${escapeHtml(d.dept)}">`;
+  let vsSectionSelect = `<select class="form-select" id="vs_section"><option value="">Select section...</option>${secOpts}${secLegacyOpt}</select>`;
+  let vsSubjectSelect = `<select class="form-select" id="vs_subject"><option value="">Select subject</option>${subOpts}</select>`;
   return `<div id="vsConflictAlert"></div>
   <div class="view-schedule-form">
-    ${viewScheduleFieldRow('Subject', `<select class="form-select" id="vs_subject"><option value="">Select subject</option>${subOpts}</select>`)}
     ${viewScheduleFieldRow('Department', deptControl)}
-    ${viewScheduleFieldRow('Professor', `<select class="form-select" id="vs_professor"><option value="">Select professor</option>${profOpts}</select>`)}    
-    ${viewScheduleFieldRow('Section', `<select class="form-select" id="vs_section"><option value="">Select section</option>${secOpts}</select>`)}
-    ${viewScheduleFieldRow('Room', `<select class="form-select" id="vs_room"><option value="">Select room</option>${roomOpts}</select>`)}
-    ${viewScheduleFieldRow('Days', daysHtml)}
-    ${viewScheduleFieldRow('Time', timeRow)}
+    <div class="schedule-form-inline-row">
+      <div class="form-group"><label class="form-label" for="vs_year">Year</label>${scheduleYearSelectHtml('vs_year', d.schYear || '')}</div>
+      <div class="form-group"><label class="form-label" for="vs_section">Section</label>${vsSectionSelect}</div>
+    </div>
+    <div class="schedule-form-inline-row schedule-form-row-sem-subject">
+      <div class="form-group"><label class="form-label" for="vs_sem">Semester</label>${scheduleSemSelectHtml('vs_sem', d.schSem || '')}</div>
+      <div class="form-group"><label class="form-label" for="vs_subject">Subject</label>${vsSubjectSelect}</div>
+    </div>
     ${viewScheduleFieldRow('Set (optional)', setInput)}
+    ${viewScheduleFieldRow('Professor', `<select class="form-select" id="vs_professor"><option value="">Select professor</option>${profOpts}</select>`)}
+    ${viewScheduleFieldRow('Day(s)', daysHtml)}
+    ${viewScheduleFieldRow('Room', `<select class="form-select" id="vs_room"><option value="">Select room</option>${roomOpts}</select>`)}
+    ${viewScheduleFieldRow('Time start & time end', timeRow)}
   </div>`;
 }
 
@@ -1012,14 +1185,14 @@ function renderRequestForm() {
   let roomPlaceholder = roomsPick.length ? 'Select available room' : 'No rooms free for this slot — adjust days or times';
   let roomOpts = roomsPick.map(r => `<option value="${escapeHtml(r.id)}">${escapeHtml(r.name)} (${escapeHtml(getDept(r.dept)?.code || '')})</option>`).join('');
   let myDept = getDept(u.dept);
-  let sectionSuggestions = mergeSectionOptions([u.dept]).map(s => `<option value="${escapeHtml(s)}"></option>`).join('');
+  let rqSecOpts = mergeSectionOptions([u.dept]).map(s => `<option value="${escapeHtml(s)}">${escapeHtml(s)}</option>`).join('');
   let mySubs = [...state.subjects.filter(s => s.dept === u.dept)].sort((a, b) => a.code.localeCompare(b.code));
   let myProfs = [...state.professors.filter(p => p.dept === u.dept)].sort((a, b) => a.name.localeCompare(b.name));
   let subOpts = mySubs.map(s => `<option value="${escapeHtml(s.id)}">${escapeHtml(s.code)} — ${escapeHtml(s.name)}</option>`).join('');
   let profOpts = myProfs.map(p => `<option value="${escapeHtml(p.id)}">${escapeHtml(p.name)} (${escapeHtml(p.short)})</option>`).join('');
   let ts = timeSlots.slice(0, -1).map(t => `<option value="${t}" ${slot && slot.timeStart === t ? 'selected' : ''}>${fmt12(t)}</option>`).join('');
   let te = timeSlots.slice(1).map(t => `<option value="${t}" ${slot && slot.timeEnd === t ? 'selected' : ''}>${fmt12(t)}</option>`).join('');
-  let setSelect = `<select class="form-select" id="rq_set"><option value="">— None —</option><option value="Set A">Set A</option><option value="Set B">Set B</option><option value="Set C">Set C</option></select>`;
+  let setSelect = `<select class="form-select" id="rq_set"><option value="">— None —</option><option value="Set A">Set A</option><option value="Set B">Set B</option></select>`;
   return `<div class="request-room-form">
     <div id="rqFormAlert"></div>
     <div class="request-form-readrow">
@@ -1047,8 +1220,7 @@ function renderRequestForm() {
     </div>
     <div class="form-group full">
       <label class="form-label" for="rq_section">Section ${req}</label>
-      <input class="form-input" id="rq_section" list="rq_section_suggestions" placeholder="e.g. CPE II-GE" autocomplete="off" value="">
-      <datalist id="rq_section_suggestions">${sectionSuggestions}</datalist>
+      <select class="form-select" id="rq_section"><option value="">Select section...</option>${rqSecOpts}</select>
     </div>
     <div class="schedule-form-inline-row request-form-days-set-row">
       <div class="form-group">
@@ -1189,11 +1361,13 @@ function bindPage(){
         timeStart: document.getElementById('vs_timeStart')?.value || '',
         timeEnd: document.getElementById('vs_timeEnd')?.value || '',
         dept: deptVal,
+        schYear: (document.getElementById('vs_year')?.value || '').trim() || null,
+        schSem: (document.getElementById('vs_sem')?.value || '').trim() || null,
         setLabel: (document.getElementById('vs_set')?.value || '').trim() || null,
         labLabel: state.schedules[idx].labLabel ?? null,
         color: state.schedules[idx].color,
       };
-      if (!entry.subjectId || !profId || !entry.roomId || !entry.section || !days.length || !entry.timeStart || !entry.timeEnd) {
+      if (!entry.subjectId || !profId || !entry.roomId || !entry.section || !days.length || !entry.timeStart || !entry.timeEnd || !entry.schYear || !entry.schSem) {
         showFormValidationBanner('vsConflictAlert', MSG_FORM_INCOMPLETE);
         return;
       }
@@ -1242,11 +1416,13 @@ function bindPage(){
         timeStart: document.getElementById('f_timeStart')?.value,
         timeEnd: document.getElementById('f_timeEnd')?.value,
         dept: entryDept,
+        schYear: document.getElementById('f_year')?.value || '',
+        schSem: document.getElementById('f_sem')?.value || '',
         color: 'blue',
         setLabel: setV || null,
         labLabel: null,
       };
-      if (!entryDept || !entry.subjectId || !entry.professorId || !entry.roomId || !entry.section || !days.length || !entry.timeStart || !entry.timeEnd) {
+      if (!entryDept || !entry.subjectId || !entry.professorId || !entry.roomId || !entry.section || !days.length || !entry.timeStart || !entry.timeEnd || !entry.schYear || !entry.schSem) {
         showFormValidationBanner('conflictAlert', MSG_FORM_INCOMPLETE);
         return;
       }
@@ -1280,16 +1456,27 @@ function bindPage(){
     }
     if (mt === 'addCurriculum') {
       let editId = (document.getElementById('cc_edit_id')?.value || '').trim();
+      let courseCode = (document.getElementById('cc_courseCode')?.value || '').trim();
+      let subjectName = (document.getElementById('cc_subject')?.value || '').trim();
+      let lecU = parseInt(document.getElementById('cc_lecUnits')?.value, 10);
+      let labU = parseInt(document.getElementById('cc_labUnits')?.value, 10);
+      let lecUnits = Number.isFinite(lecU) ? lecU : 0;
+      let labUnits = Number.isFinite(labU) ? labU : 0;
+      let units = lecUnits + labUnits;
       let row = {
         dept: document.getElementById('cc_dept')?.value,
-        courseCode: (document.getElementById('cc_courseCode')?.value || '').trim(),
-        courseName: (document.getElementById('cc_courseName')?.value || '').trim(),
-        subjectCode: (document.getElementById('cc_subjectCode')?.value || '').trim(),
-        subjectName: (document.getElementById('cc_subjectName')?.value || '').trim(),
-        units: parseInt(document.getElementById('cc_units')?.value, 10) || 0,
-        section: (document.getElementById('cc_section')?.value || '').trim(),
+        year: (document.getElementById('cc_year')?.value || '').trim(),
+        semester: (document.getElementById('cc_semester')?.value || '').trim(),
+        courseCode,
+        subjectName,
+        lecUnits,
+        labUnits,
+        units,
+        courseName: subjectName,
+        subjectCode: courseCode.replace(/\s+/g, '') || subjectName.replace(/\s+/g, '').slice(0, 24) || '—',
+        section: '',
       };
-      if (!row.courseCode || !row.subjectCode || !row.section) return;
+      if (!row.courseCode || !row.subjectName || !row.year || !row.semester || units < 1) return;
       if (editId) {
         let i = state.curriculum.findIndex(c => c.id === editId);
         if (i >= 0) state.curriculum[i] = { ...state.curriculum[i], ...row, id: editId };
@@ -1357,7 +1544,7 @@ function bindPage(){
     if (!r) return;
     if (!window.confirm('Are you sure you want to approve this request?')) return;
     r.status='approved';
-    state.schedules.push({id:genId(),subjectId:r.subjectId,professorId:r.professorId||null,roomId:r.roomId,dept:r.fromDept,section:r.section,days:r.days,timeStart:r.timeStart,timeEnd:r.timeEnd,color:'orange',setLabel:r.setLabel||null,labLabel:r.labLabel||null});
+    state.schedules.push({id:genId(),subjectId:r.subjectId,professorId:r.professorId||null,roomId:r.roomId,dept:r.fromDept,section:r.section,days:r.days,timeStart:r.timeStart,timeEnd:r.timeEnd,color:'orange',setLabel:r.setLabel||null,labLabel:r.labLabel||null,schYear:'1st Year',schSem:'1st Semester'});
     window.alert('This request has been approved and added to the timetable.');
     render();
   }));
@@ -1373,6 +1560,22 @@ function bindPage(){
   document.querySelectorAll('[data-editcrow]').forEach(el=>el.addEventListener('click',()=>{let c=state.curriculum.find(x=>x.id===el.dataset.editcrow);if(c)openModal({type:'addCurriculum',data:{...c}});}));
   document.querySelectorAll('[data-delcrow]').forEach(el=>el.addEventListener('click',()=>{state.curriculum=state.curriculum.filter(c=>c.id!==el.dataset.delcrow);showToast('Row removed');render();}));
   document.getElementById('curriculumDeptFilter')?.addEventListener('change',e=>{state.curriculumDeptFilter=e.target.value;render();});
+  document.getElementById('curriculumYearFilter')?.addEventListener('change',e=>{state.curriculumYearFilter=e.target.value;render();});
+  document.getElementById('curriculumSemFilter')?.addEventListener('change',e=>{state.curriculumSemFilter=e.target.value;render();});
+  function syncCurriculumUnitsTotal() {
+    let lecEl = document.getElementById('cc_lecUnits');
+    let labEl = document.getElementById('cc_labUnits');
+    let out = document.getElementById('cc_units_total');
+    if (!lecEl || !labEl || !out) return;
+    let lec = parseInt(lecEl.value, 10);
+    let lab = parseInt(labEl.value, 10);
+    let a = Number.isFinite(lec) ? lec : 0;
+    let b = Number.isFinite(lab) ? lab : 0;
+    out.value = String(a + b);
+  }
+  document.getElementById('cc_lecUnits')?.addEventListener('input', syncCurriculumUnitsTotal);
+  document.getElementById('cc_labUnits')?.addEventListener('input', syncCurriculumUnitsTotal);
+  syncCurriculumUnitsTotal();
   document.getElementById('addProfBtn')?.addEventListener('click',()=>{openModal({type:'addProfessor',data:{}});});
   document.querySelectorAll('[data-editprof]').forEach(el=>el.addEventListener('click',()=>{let p=state.professors.find(x=>x.id===el.dataset.editprof);if(p)openModal({type:'addProfessor',data:{...p}});}));
   document.querySelectorAll('[data-delprof]').forEach(el=>el.addEventListener('click',()=>{state.professors=state.professors.filter(p=>p.id!==el.dataset.delprof);showToast('Professor deleted');render();}));

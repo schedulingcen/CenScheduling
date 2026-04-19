@@ -452,6 +452,13 @@ html[data-theme="dark"] .btn-secondary { background: #2a2a38; color: var(--text-
   line-height: 1.5;
   font-size: 14px;
 }
+.view-schedule-form .schedule-form-inline-row .form-label {
+  font-size: 11px;
+  font-weight: 600;
+  text-transform: uppercase;
+  letter-spacing: 0.04em;
+  color: var(--text-muted);
+}
 .vs-field {
   display: flex;
   flex-direction: column;
@@ -643,6 +650,12 @@ html[data-theme="dark"] #requestRoomTimetableArea .timetable-slot-empty:hover {
   margin-bottom: 14px;
 }
 .schedule-form-wrapper { display: flex; flex-direction: column; gap: 16px; }
+.schedule-form-wrapper > .form-group > .form-select {
+  width: 100%;
+  max-width: 100%;
+  min-width: 0;
+  box-sizing: border-box;
+}
 .schedule-form-2col {
   display: grid;
   grid-template-columns: 1fr 1fr;
@@ -655,12 +668,43 @@ html[data-theme="dark"] #requestRoomTimetableArea .timetable-slot-empty:hover {
 .schedule-form-col { display: flex; flex-direction: column; gap: 14px; min-width: 0; }
 .schedule-form-inline-row {
   display: grid;
-  grid-template-columns: 1fr 1fr;
+  grid-template-columns: minmax(0, 1fr) minmax(0, 1fr);
   gap: 16px 24px;
   align-items: start;
 }
 @media (max-width: 640px) {
   .schedule-form-inline-row { grid-template-columns: 1fr; }
+}
+/* Equal columns: native selects use min-content width from longest <option> unless constrained */
+.schedule-form-wrapper .schedule-form-inline-row > .form-group,
+.view-schedule-form .schedule-form-inline-row > .form-group {
+  min-width: 0;
+}
+.schedule-form-wrapper .form-group > .form-select,
+.schedule-form-wrapper .form-group > select.form-select,
+.view-schedule-form .schedule-form-inline-row .form-group > .form-select,
+.view-schedule-form .schedule-form-inline-row .form-group > select.form-select {
+  width: 100%;
+  max-width: 100%;
+  min-width: 0;
+  box-sizing: border-box;
+}
+/* Day toggles span full width of left column (align with Set above) */
+.schedule-form-wrapper .days-check,
+.view-schedule-form .days-check {
+  display: grid;
+  grid-template-columns: repeat(5, minmax(0, 1fr));
+  gap: 8px;
+  width: 100%;
+  min-width: 0;
+}
+.schedule-form-wrapper .day-label,
+.view-schedule-form .day-label {
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  text-align: center;
+  min-width: 0;
 }
 .schedule-form-spacer { min-height: 36px; }
 .label-req { color: var(--red); font-weight: 700; margin-left: 2px; }
@@ -730,10 +774,111 @@ td { padding: 12px 16px; border-bottom: 1px solid var(--border-ui); font-size: 1
 
 .page-header { display: flex; align-items: flex-start; justify-content: space-between; gap: 16px; margin-bottom: 20px; flex-wrap: wrap; }
 .page-header h2 { font-size: 22px; color: var(--text-primary); }
-.curriculum-header .curriculum-subhead { font-size: 13px; color: var(--text-muted); margin-top: 6px; max-width: 560px; line-height: 1.45; }
-.curriculum-toolbar { margin-bottom: 0; border-radius: 12px 12px 0 0; border-bottom: none; }
-.curriculum-toolbar .curriculum-count { font-size: 12px; color: var(--text-muted); margin-left: auto; }
-.curriculum-table-wrap { border-radius: 0 0 12px 12px; margin-bottom: 24px; }
+.curriculum-header .curriculum-subhead { font-size: 13px; color: var(--text-muted); margin-top: 6px; max-width: 640px; line-height: 1.45; }
+.curriculum-panel {
+  border: 1px solid var(--border-ui);
+  border-radius: 12px;
+  overflow: hidden;
+  background: var(--surface);
+  margin-bottom: 24px;
+}
+.curriculum-filter-row {
+  display: grid;
+  grid-template-columns: minmax(0, 1.15fr) minmax(0, 0.7fr) minmax(0, 2.1fr) minmax(120px, 1fr);
+  gap: 12px 20px;
+  padding: 16px 20px;
+  border-bottom: 1px solid var(--border-ui);
+  align-items: end;
+  background: var(--surface);
+}
+.curriculum-filter-cell .curriculum-filter-select,
+.curriculum-filter-cell.filter-select {
+  width: 100%;
+  max-width: 100%;
+  min-width: 0;
+  box-sizing: border-box;
+}
+.curriculum-filter-tail {
+  min-height: 38px;
+}
+.curriculum-table-wrap {
+  border-radius: 0;
+  margin-bottom: 0;
+  border: none;
+}
+.curriculum-table {
+  table-layout: fixed;
+  width: 100%;
+}
+.curriculum-table .curriculum-col-cc { width: 13%; }
+.curriculum-table .curriculum-col-subj { width: 34%; }
+.curriculum-table .curriculum-col-lec { width: 7%; }
+.curriculum-table .curriculum-col-lab { width: 7%; }
+.curriculum-table .curriculum-col-unit-total { width: 8%; }
+.curriculum-table .curriculum-col-actions { width: 31%; }
+.curriculum-table th,
+.curriculum-table td {
+  vertical-align: middle;
+}
+.curriculum-table .curriculum-th-num,
+.curriculum-table .curriculum-td-num {
+  text-align: right;
+  font-variant-numeric: tabular-nums;
+}
+.curriculum-table .curriculum-th-actions {
+  text-align: right;
+}
+.curriculum-table .curriculum-td-actions {
+  text-align: right;
+  white-space: nowrap;
+}
+.curriculum-table .curriculum-td-actions .btn {
+  margin-left: 8px;
+}
+.curriculum-table .curriculum-td-actions .btn:first-child {
+  margin-left: 0;
+}
+.curriculum-empty {
+  padding: 32px;
+  text-align: center;
+  color: var(--gray-400);
+  font-size: 14px;
+  border-top: 1px solid var(--border-ui);
+}
+.curriculum-form-year-sem,
+.curriculum-form-code-subject,
+.curriculum-form-units {
+  grid-column: 1 / -1;
+}
+.curriculum-form-units {
+  grid-template-columns: 1fr 1fr 1fr;
+  gap: 16px;
+}
+@media (max-width: 480px) {
+  .curriculum-form-year-sem,
+  .curriculum-form-code-subject {
+    grid-template-columns: 1fr !important;
+  }
+  .curriculum-form-units {
+    grid-template-columns: 1fr !important;
+  }
+}
+.curriculum-table .curriculum-td-subj {
+  word-break: break-word;
+}
+@media (max-width: 900px) {
+  .curriculum-filter-row {
+    grid-template-columns: 1fr 1fr;
+  }
+  .curriculum-filter-tail {
+    display: none;
+  }
+}
+@media (max-width: 520px) {
+  .curriculum-filter-row {
+    grid-template-columns: 1fr;
+  }
+}
 
 .request-tt-toolbar { flex-wrap: wrap; gap: 10px; align-items: center; }
 
