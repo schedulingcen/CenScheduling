@@ -225,6 +225,35 @@ const genId = () => `id_${++nextId}`;
 // Helpers
 function getSubject(id) { return state.subjects.find(s=>s.id===id); }
 function getProfessor(id) { return state.professors.find(p=>p.id===id); }
+
+/** Schedule/request uses this id when the user picks "Other" and types a name. */
+const PROFESSOR_OTHER_ID = '__other__';
+
+function professorDisplayLineFromPick(professorId, professorOtherName) {
+  if (!professorId) return '—';
+  if (professorId === PROFESSOR_OTHER_ID) {
+    let t = (professorOtherName || '').trim();
+    return t || '—';
+  }
+  let p = getProfessor(professorId);
+  return p?.short || p?.name || '—';
+}
+
+function professorDisplayLine(s) {
+  return professorDisplayLineFromPick(s.professorId, s.professorOtherName);
+}
+
+/** True when the same person is scheduled twice (including matching "Other" names). */
+function scheduleProfessorsOverlap(a, b) {
+  if (!a.professorId || !b.professorId) return false;
+  if (a.professorId !== b.professorId) return false;
+  if (a.professorId === PROFESSOR_OTHER_ID) {
+    let x = (a.professorOtherName || '').trim().toLowerCase();
+    let y = (b.professorOtherName || '').trim().toLowerCase();
+    return x.length > 0 && x === y;
+  }
+  return true;
+}
 function getRoom(id) { return ROOMS.find(r=>r.id===id); }
 function getDept(id) { return DEPARTMENTS.find(d=>d.id===id); }
 function escapeHtml(s) {
@@ -316,6 +345,162 @@ function scheduleSemSelectHtml(id, selected) {
   const opts = SCHEDULE_FORM_SEMS.map(s => `<option value="${escapeHtml(s)}" ${selected === s ? 'selected' : ''}>${escapeHtml(s)}</option>`).join('');
   return `<select class="form-select" id="${id}"><option value="">Select semester...</option>${opts}${legacy}</select>`;
 }
+
+function normalizeSubjectCode(s) {
+  return (s || '').toString().replace(/\s+/g, '').toUpperCase();
+}
+function curriculumCodeFromRow(r) {
+  let sc = (r.subjectCode || '').toString().replace(/\s+/g, '').trim();
+  if (sc) return sc;
+  return (r.courseCode || '').toString().replace(/\s+/g, '').trim();
+}
+function curriculumRowsForDept(dept) {
+  if (!dept || dept === 'all' || !Array.isArray(state.curriculum)) return [];
+  return state.curriculum.filter(c => (c.dept || '') === dept);
+}
+function distinctYearsFromCurriculumRows(rows) {
+  let set = new Set();
+  for (let r of rows) {
+    let y = (r.year || '').trim();
+    if (y) set.add(y);
+  }
+  return [...set].sort((a, b) => {
+    let ia = SCHEDULE_FORM_YEARS.indexOf(a);
+    let ib = SCHEDULE_FORM_YEARS.indexOf(b);
+    if (ia >= 0 && ib >= 0) return ia - ib;
+    return String(a).localeCompare(String(b));
+  });
+}
+function yearsOptionsForDept(deptKey) {
+  let rows = curriculumRowsForDept(deptKey);
+  let years = distinctYearsFromCurriculumRows(rows);
+  if (!years.length) years = [...SCHEDULE_FORM_YEARS];
+  return years;
+}
+function distinctSemsFromRows(rowList) {
+  let set = new Set();
+  for (let r of rowList) {
+    let s = (r.semester || '').trim();
+    if (s) set.add(s);
+  }
+  let ordered = CURRICULUM_FORM_SEMS.filter(s => set.has(s));
+  for (let s of set) {
+    if (!CURRICULUM_FORM_SEMS.includes(s)) ordered.push(s);
+  }
+  return ordered;
+}
+function semsForDeptYear(deptKey, year) {
+  let rows = curriculumRowsForDept(deptKey);
+  let forYear = rows.filter(r => (r.year || '').trim() === year);
+  if (forYear.length) return distinctSemsFromRows(forYear);
+  return [...CURRICULUM_FORM_SEMS];
+}
+function subjectCodesFromRowsForYearSem(rows, year, sem) {
+  let codes = new Set();
+  for (let r of rows) {
+    if ((r.year || '').trim() !== year) continue;
+    if ((r.semester || '').trim() !== sem) continue;
+    let c = curriculumCodeFromRow(r);
+    if (c) codes.add(c);
+  }
+  return codes;
+}
+function subjectsMatchingCurriculumCodes(dept, codeSet) {
+  if (!codeSet.size) return [];
+  let out = [];
+  for (let s of state.subjects) {
+    if (s.dept !== dept) continue;
+    let nc = normalizeSubjectCode(s.code);
+    for (let cc of codeSet) {
+      if (normalizeSubjectCode(cc) === nc) {
+        out.push(s);
+        break;
+      }
+    }
+  }
+  return out.sort((a, b) => a.code.localeCompare(b.code));
+}
+function subjectsForCreateScheduleSlot(dept, year, sem) {
+  let rows = curriculumRowsForDept(dept);
+  let codes = subjectCodesFromRowsForYearSem(rows, year, sem);
+  if (codes.size) return subjectsMatchingCurriculumCodes(dept, codes);
+  return [...state.subjects.filter(s => s.dept === dept)].sort((a, b) => a.code.localeCompare(b.code));
+}
+function getCreateScheduleDeptForCascade() {
+  let u = state.currentUser;
+  if (!u) return null;
+  let el = document.getElementById('f_schedule_dept');
+  if (u.role === 'admin') {
+    if (!el) return null;
+    let v = el.value;
+    return v === 'all' ? null : v;
+  }
+  return u.dept;
+}
+/** Populate Year → Semester → Subject from curriculum (DOM-only; Create Schedule modal). */
+function initCreateScheduleCurriculumCascade() {
+  let yEl = document.getElementById('f_year');
+  let sEl = document.getElementById('f_sem');
+  let subEl = document.getElementById('f_subject');
+  if (!yEl || !sEl || !subEl) return;
+
+  function fillYearSelect(years, selected) {
+    yEl.innerHTML = '<option value="">Select year...</option>' + years.map(y => `<option value="${escapeHtml(y)}" ${selected === y ? 'selected' : ''}>${escapeHtml(y)}</option>`).join('');
+  }
+  function fillSemSelect(sems, selected) {
+    sEl.innerHTML = '<option value="">Select semester...</option>' + sems.map(s => `<option value="${escapeHtml(s)}" ${selected === s ? 'selected' : ''}>${escapeHtml(s)}</option>`).join('');
+  }
+  function fillSubjectSelect(subjects, selectedId) {
+    subEl.innerHTML = '<option value="">Select subject...</option>' + subjects.map(s => `<option value="${escapeHtml(s.id)}" ${selectedId === s.id ? 'selected' : ''}>${escapeHtml(s.code)} — ${escapeHtml(s.name)}</option>`).join('');
+  }
+
+  function rebuildAll() {
+    let d = getCreateScheduleDeptForCascade();
+    if (!d) {
+      yEl.innerHTML = '<option value="">Select department first...</option>';
+      yEl.disabled = true;
+      sEl.innerHTML = '<option value="">Select semester...</option>';
+      sEl.disabled = true;
+      subEl.innerHTML = '<option value="">Select subject...</option>';
+      subEl.disabled = true;
+      return;
+    }
+    yEl.disabled = false;
+    sEl.disabled = false;
+    subEl.disabled = false;
+    let years = yearsOptionsForDept(d);
+    fillYearSelect(years, '');
+    fillSemSelect([], '');
+    fillSubjectSelect([], '');
+  }
+
+  rebuildAll();
+
+  yEl.addEventListener('change', () => {
+    let d = getCreateScheduleDeptForCascade();
+    if (!d) return;
+    let y = yEl.value;
+    if (!y) {
+      fillSemSelect([], '');
+      fillSubjectSelect([], '');
+      return;
+    }
+    let sems = semsForDeptYear(d, y);
+    fillSemSelect(sems, '');
+    fillSubjectSelect([], '');
+  });
+
+  sEl.addEventListener('change', () => {
+    let d = getCreateScheduleDeptForCascade();
+    let y = yEl.value;
+    let sem = sEl.value;
+    if (!d || !y || !sem) {
+      fillSubjectSelect([], '');
+      return;
+    }
+    fillSubjectSelect(subjectsForCreateScheduleSlot(d, y, sem), '');
+  });
+}
 function getBorrowableRooms(u) {
   if (!u) return [];
   if (u.role === 'admin') return [...ROOMS];
@@ -349,9 +534,9 @@ function checkConflicts(entry, excludeId=null) {
   for(let s of scheds){
     if(!s.days.some(d=>entry.days.includes(d))) continue;
     if(!timeOverlap(entry.timeStart,entry.timeEnd,s.timeStart,s.timeEnd)) continue;
-    if(s.professorId===entry.professorId){
-      let p=getProfessor(entry.professorId);
-      conflicts.push(`Professor ${p?.short} has class on ${s.days.join('/')} ${fmt12(s.timeStart)}–${fmt12(s.timeEnd)}`);
+    if(scheduleProfessorsOverlap(s, entry)){
+      let label = professorDisplayLineFromPick(entry.professorId, entry.professorOtherName);
+      conflicts.push(`Professor ${label} has class on ${s.days.join('/')} ${fmt12(s.timeStart)}–${fmt12(s.timeEnd)}`);
     }
     if(s.roomId===entry.roomId){
       let r=getRoom(entry.roomId);
@@ -370,6 +555,7 @@ function countSchedulesWithConflicts(schedulesToCheck) {
   for (let s of schedulesToCheck) {
     let entry = {
       professorId: s.professorId,
+      professorOtherName: s.professorOtherName,
       roomId: s.roomId,
       dept: s.dept,
       section: s.section,
@@ -483,7 +669,7 @@ function renderDashboard() {
       <div class="stat-card"><div class="${statIc}">${icon('building', 24)}</div><div><div class="stat-num">${roomCount}</div><div class="stat-label">Available Rooms</div></div></div>
       <div class="stat-card"><div class="${statIc}">${icon('inbox', 24)}</div><div><div class="stat-num">${pendingCount}</div><div class="stat-label">Pending Requests</div></div></div>
     </div>
-    <div class="card"><div class="card-header"><div class="card-title card-title-with-icon">${icon('calendar', 18)} Recent Schedules</div><a href="${pageHref('schedule')}" class="btn btn-outline btn-sm">View All →</a></div><div class="table-wrap"><table><thead><tr><th>Subject</th><th>Section</th><th>Professor</th><th>Room</th><th>Days</th><th>Time</th></tr></thead><tbody>${myScheds.slice(0,5).map(s=>{let sub=getSubject(s.subjectId),prof=getProfessor(s.professorId),room=getRoom(s.roomId);return `<tr><td><strong>${sub?.code}</strong><br><span style="font-size:11px">${sub?.name}</span></td><td>${s.section}</td><td>${prof?.short||'—'}</td><td>${room?.name||'—'}</td><td>${s.days.map(d=>d.slice(0,3)).join(',')}</td><td>${fmt12(s.timeStart)}–${fmt12(s.timeEnd)}</td></tr>`;}).join('')}</tbody></table>${myScheds.length===0?'<div class="empty-state">No schedules yet</div>':''}</div></div>
+    <div class="card"><div class="card-header"><div class="card-title card-title-with-icon">${icon('calendar', 18)} Recent Schedules</div><a href="${pageHref('schedule')}" class="btn btn-outline btn-sm">View All →</a></div><div class="table-wrap"><table><thead><tr><th>Subject</th><th>Section</th><th>Professor</th><th>Room</th><th>Days</th><th>Time</th></tr></thead><tbody>${myScheds.slice(0,5).map(s=>{let sub=getSubject(s.subjectId),room=getRoom(s.roomId);return `<tr><td><strong>${sub?.code}</strong><br><span style="font-size:11px">${sub?.name}</span></td><td>${s.section}</td><td>${escapeHtml(professorDisplayLine(s))}</td><td>${room?.name||'—'}</td><td>${s.days.map(d=>d.slice(0,3)).join(',')}</td><td>${fmt12(s.timeStart)}–${fmt12(s.timeEnd)}</td></tr>`;}).join('')}</tbody></table>${myScheds.length===0?'<div class="empty-state">No schedules yet</div>':''}</div></div>
   `;
 }
 
@@ -564,11 +750,11 @@ function scheduleGridCellLayout() {
   return 'section';
 }
 
-function buildScheduleCellInnerHtml(s, sub, prof, cellLayout) {
+function buildScheduleCellInnerHtml(s, sub, cellLayout) {
   let room = getRoom(s.roomId);
   let roomLine = escapeHtml(room?.name || '—');
   let subLine = escapeHtml(sub?.code || '—');
-  let profLine = escapeHtml(prof?.short || prof?.name || '—');
+  let profLine = escapeHtml(professorDisplayLine(s));
   let sectionLine = escapeHtml(s.section || '—');
   let setLine = s.setLabel ? escapeHtml(s.setLabel) : '';
   let subStyle = 'font-weight: 700; font-size: 11px;';
@@ -612,12 +798,11 @@ function renderTimetableGrid(scheds, gridOpts) {
     const startRow = timeToRow(s.timeStart);
     const duration = timeDuration(s.timeStart, s.timeEnd);
     const sub = getSubject(s.subjectId);
-    const prof = getProfessor(s.professorId);
     
     s.days.forEach(day => {
       const col = DAYS.indexOf(day);
       if (col >= 0 && startRow >= 0) {
-        grid[startRow][col] = { schedule: s, sub, prof, duration };
+        grid[startRow][col] = { schedule: s, sub, duration };
       }
     });
   });
@@ -644,7 +829,6 @@ function renderTimetableGrid(scheds, gridOpts) {
       if (cell && row === timeToRow(cell.schedule.timeStart)) {
         const s = cell.schedule;
         const sub = cell.sub;
-        const prof = cell.prof;
         const rowspan = cell.duration;
         
         const bg = s.color === 'blue' ? 'var(--blue-light)' : s.color === 'purple' ? 'var(--purple-light)' : s.color === 'orange' ? 'var(--orange-light)' : 'var(--green-light)';
@@ -654,7 +838,7 @@ function renderTimetableGrid(scheds, gridOpts) {
           ? `<td rowspan="${rowspan}" data-schedid="${escapeHtml(s.id)}" title="Click for details" style="cursor:pointer; padding: 6px; border: 1px solid var(--border-ui); background: ${bg}; border-left: 3px solid ${border};">`
           : `<td rowspan="${rowspan}" class="timetable-slot-busy" title="" style="cursor:default; padding: 6px; border: 1px solid var(--border-ui); background: ${bg}; border-left: 3px solid ${border};">`;
         html += tdOpen;
-        html += buildScheduleCellInnerHtml(s, sub, prof, cellLayout);
+        html += buildScheduleCellInnerHtml(s, sub, cellLayout);
         html += `</td>`;
       } else if (!cell || row !== timeToRow(cell.schedule.timeStart)) {
         // Skip cells that are part of a rowspan
@@ -830,7 +1014,7 @@ function renderRequests() {
                   <div class="request-icon">${icon('building', 20)}</div>
                   <div class="request-info">
                     <div class="request-title">${room?.name || 'Unknown Room'} — ${r.section}</div>
-                    <div class="request-meta">From: <span class="badge-dept ${r.fromDept}">${from?.code || '?'}</span> · ${sub?.code || '?'} · ${r.professorId ? escapeHtml(getProfessor(r.professorId)?.short || '') + ' · ' : ''}${r.days.map(d => d.slice(0, 3)).join(', ')} ${fmtSlot24(r.timeStart)}–${fmtSlot24(r.timeEnd)}</div>
+                    <div class="request-meta">From: <span class="badge-dept ${r.fromDept}">${from?.code || '?'}</span> · ${sub?.code || '?'} · ${r.professorId ? escapeHtml(professorDisplayLineFromPick(r.professorId, r.professorOtherName)) + ' · ' : ''}${r.days.map(d => d.slice(0, 3)).join(', ')} ${fmtSlot24(r.timeStart)}–${fmtSlot24(r.timeEnd)}</div>
                     ${r.reason ? `<div class="request-meta request-reason" style="margin-top: 4px; font-style: italic;">${icon('fileText', 14)} "${escapeHtml(r.reason)}"</div>` : ''}
                     <div class="request-meta" style="margin-top: 4px;">Requested: ${r.created}</div>
                   </div>
@@ -861,7 +1045,7 @@ function renderRequests() {
                   <div class="request-icon">${icon('refresh', 20)}</div>
                   <div class="request-info">
                     <div class="request-title">${room?.name || 'Unknown Room'} from <span class="badge-dept ${r.toDept}">${to?.code || '?'}</span></div>
-                    <div class="request-meta">${sub?.code || '?'} · ${r.section} · ${r.professorId ? escapeHtml(getProfessor(r.professorId)?.short || '') + ' · ' : ''}${r.days.map(d => d.slice(0, 3)).join(', ')} ${fmtSlot24(r.timeStart)}–${fmtSlot24(r.timeEnd)}</div>
+                    <div class="request-meta">${sub?.code || '?'} · ${r.section} · ${r.professorId ? escapeHtml(professorDisplayLineFromPick(r.professorId, r.professorOtherName)) + ' · ' : ''}${r.days.map(d => d.slice(0, 3)).join(', ')} ${fmtSlot24(r.timeStart)}–${fmtSlot24(r.timeEnd)}</div>
                     <div style="margin-top: 6px;"><span class="badge-status ${r.status}">${r.status.charAt(0).toUpperCase() + r.status.slice(1)}</span></div>
                   </div>
                 </div>
@@ -1007,6 +1191,33 @@ function renderModal() {
   return '';
 }
 
+/** Prefill Create Schedule from current Schedule tab filters (user can still change). */
+function scheduleFormFilterDefaults() {
+  if (state.page !== 'schedule') return {};
+  let u = state.currentUser;
+  let o = {};
+  if (u.role === 'chairperson' && state.filterMode === 'section' && state.filterSection) {
+    o.defaultSection = state.filterSection;
+  } else if (u.role === 'admin' && state.filterMode === 'department' && state.filterSection) {
+    o.defaultSection = state.filterSection;
+  }
+  if (state.filterMode === 'faculty' && state.filterFaculty) {
+    o.defaultProfessorId = state.filterFaculty;
+  }
+  if (state.filterMode === 'room' && state.filterRoom) {
+    o.defaultRoomId = state.filterRoom;
+  }
+  return o;
+}
+
+/** Prefill Request form “Available room” from Requests timetable room filter. */
+function requestFormBorrowRoomPrefill() {
+  if (state.page !== 'requests') return {};
+  let rid = state.requestTimetableRoom;
+  if (rid && rid !== 'all') return { prefillBorrowRoomId: rid };
+  return {};
+}
+
 function modalWrap(title, body, footer = `<button class="btn btn-secondary" id="modalClose2">Cancel</button><button class="btn btn-primary" id="modalSaveBtn">Save</button>`, panelClass = '', subtitle = '') {
   const panelCls = 'modal' + (panelClass ? ' ' + panelClass : '');
   const titleBlock = subtitle
@@ -1017,32 +1228,53 @@ function modalWrap(title, body, footer = `<button class="btn btn-secondary" id="
 
 function renderScheduleForm() {
   let u = state.currentUser;
-  let slot = (state.modal && state.modal.type === 'addSchedule' && state.modal.slot) ? state.modal.slot : null;
+  let m = state.modal && state.modal.type === 'addSchedule' ? state.modal : null;
+  let slot = m?.slot || null;
+  let defSec = (m && m.defaultSection) || '';
+  let defProf = (m && m.defaultProfessorId) || '';
+  let defRoom = (m && m.defaultRoomId) || '';
   let isAdmin = u.role === 'admin';
   let formDept = state.modal?.formDept;
   if (!isAdmin) formDept = u.dept;
   else if (!formDept || formDept === '') formDept = 'all';
 
-  let subList, profList, roomList, secDeptIds;
+  let profList, roomList, secDeptIds;
   if (isAdmin && formDept === 'all') {
-    subList = [...state.subjects].sort((a, b) => a.code.localeCompare(b.code));
     profList = [...state.professors].sort((a, b) => a.name.localeCompare(b.name));
     roomList = [...ROOMS].sort((a, b) => a.name.localeCompare(b.name));
     secDeptIds = DEPARTMENTS.map(d => d.id);
   } else {
     let d = formDept;
-    subList = [...state.subjects.filter(s => s.dept === d)].sort((a, b) => a.code.localeCompare(b.code));
     profList = [...state.professors.filter(p => p.dept === d)].sort((a, b) => a.name.localeCompare(b.name));
     roomList = [...ROOMS.filter(r => r.dept === d)].sort((a, b) => a.name.localeCompare(b.name));
     secDeptIds = [d];
   }
 
-  let subOpts = subList.map(s => `<option value="${escapeHtml(s.id)}">${escapeHtml(s.code)} — ${escapeHtml(s.name)}</option>`).join('');
-  let profOpts = profList.map(p => `<option value="${escapeHtml(p.id)}">${escapeHtml(p.name)} (${escapeHtml(getDept(p.dept)?.code || '')})</option>`).join('');
-  let roomOpts = roomList.map(r => `<option value="${escapeHtml(r.id)}">${escapeHtml(r.name)}</option>`).join('');
+  let profBody = profList.map(p => `<option value="${escapeHtml(p.id)}" ${defProf && defProf === p.id ? 'selected' : ''}>${escapeHtml(p.name)} (${escapeHtml(getDept(p.dept)?.code || '')})</option>`).join('');
+  let profLegacyOpt =
+    defProf && defProf !== PROFESSOR_OTHER_ID && !profList.some(p => p.id === defProf)
+      ? (() => {
+          let px = getProfessor(defProf);
+          return px ? `<option value="${escapeHtml(defProf)}" selected>${escapeHtml(px.name)} (${escapeHtml(getDept(px.dept)?.code || '')})</option>` : '';
+        })()
+      : '';
+  let profOpts = profBody + profLegacyOpt + `<option value="${PROFESSOR_OTHER_ID}">Others:</option>`;
+  let roomOpts = roomList.map(r => `<option value="${escapeHtml(r.id)}" ${defRoom && defRoom === r.id ? 'selected' : ''}>${escapeHtml(r.name)}</option>`).join('');
+  let roomLegacyOpt =
+    defRoom && !roomList.some(r => r.id === defRoom)
+      ? (() => {
+          let rx = ROOMS.find(x => x.id === defRoom);
+          return rx ? `<option value="${escapeHtml(defRoom)}" selected>${escapeHtml(rx.name)}</option>` : '';
+        })()
+      : '';
   let timeStartOpts = timeSlots.slice(0, -1).map(t => `<option value="${t}" ${slot && slot.timeStart === t ? 'selected' : ''}>${fmt12(t)}</option>`).join('');
   let timeEndOpts = timeSlots.slice(1).map(t => `<option value="${t}" ${slot && slot.timeEnd === t ? 'selected' : ''}>${fmt12(t)}</option>`).join('');
-  let secOpts = mergeSectionOptions(secDeptIds).map(s => `<option value="${escapeHtml(s)}">${escapeHtml(s)}</option>`).join('');
+  let secChoices = mergeSectionOptions(secDeptIds);
+  let secOpts = secChoices.map(s => `<option value="${escapeHtml(s)}" ${defSec && defSec === s ? 'selected' : ''}>${escapeHtml(s)}</option>`).join('');
+  let secLegacyOpt =
+    defSec && !secChoices.includes(defSec)
+      ? `<option value="${escapeHtml(defSec)}" selected>${escapeHtml(defSec)}</option>`
+      : '';
   const req = '<span class="label-req" aria-hidden="true">*</span>';
 
   let deptRow;
@@ -1060,20 +1292,33 @@ function renderScheduleForm() {
   <div class="schedule-form-wrapper">
     ${deptRow}
     <div class="schedule-form-inline-row">
-      <div class="form-group"><label class="form-label" for="f_year">Year ${req}</label>${scheduleYearSelectHtml('f_year', '')}</div>
-      <div class="form-group"><label class="form-label" for="f_section">Section ${req}</label><select class="form-select" id="f_section"><option value="">Select section...</option>${secOpts}</select></div>
+      <div class="form-group"><label class="form-label" for="f_year">Year ${req}</label><select class="form-select" id="f_year"><option value="">Select year...</option></select></div>
+      <div class="form-group"><label class="form-label" for="f_section">Section ${req}</label><select class="form-select" id="f_section"><option value="">Select section...</option>${secOpts}${secLegacyOpt}</select></div>
     </div>
     <div class="schedule-form-inline-row schedule-form-row-sem-subject">
-      <div class="form-group"><label class="form-label" for="f_sem">Semester ${req}</label>${scheduleSemSelectHtml('f_sem', '')}</div>
-      <div class="form-group"><label class="form-label" for="f_subject">Subject ${req}</label><select class="form-select" id="f_subject"><option value="">Select subject...</option>${subOpts}</select></div>
+      <div class="form-group"><label class="form-label" for="f_sem">Semester ${req}</label><select class="form-select" id="f_sem"><option value="">Select semester...</option></select></div>
+      <div class="form-group"><label class="form-label" for="f_subject">Subject ${req}</label><select class="form-select" id="f_subject"><option value="">Select subject...</option></select></div>
     </div>
     <div class="schedule-form-inline-row">
       <div class="form-group"><label class="form-label" for="f_set">Set (optional)</label>${setABSelectHtml('f_set', '')}</div>
-      <div class="form-group"><label class="form-label" for="f_professor">Professor ${req}</label><select class="form-select" id="f_professor"><option value="">Select professor...</option>${profOpts}</select></div>
+      <div class="form-group professor-select-group">
+        <label class="form-label" id="f_professor_lb">Professor ${req}</label>
+        <div class="professor-field-slot">
+          <div id="f_professor_select_wrap">
+            <select class="form-select" id="f_professor" aria-labelledby="f_professor_lb"><option value="">Select professor...</option>${profOpts}</select>
+          </div>
+          <div id="f_professor_other_wrap" hidden>
+            <div class="professor-other-row">
+              <input type="text" class="form-input" id="f_professor_other" autocomplete="off" aria-labelledby="f_professor_lb">
+              <button type="button" class="btn btn-outline btn-sm professor-pick-list-btn" id="f_professor_list_btn" aria-label="Choose from faculty list">List</button>
+            </div>
+          </div>
+        </div>
+      </div>
     </div>
     <div class="schedule-form-inline-row">
       <div class="form-group"><span class="form-label">Day(s) ${req}</span><div class="days-check">${DAYS.map(d => `<input type="checkbox" class="day-checkbox" id="day_${d}" value="${d}" ${slot && slot.day === d ? 'checked' : ''}><label class="day-label" for="day_${d}">${d.slice(0, 3)}</label>`).join('')}</div></div>
-      <div class="form-group"><label class="form-label" for="f_room">Room ${req}</label><select class="form-select" id="f_room"><option value="">Select room...</option>${roomOpts}</select></div>
+      <div class="form-group"><label class="form-label" for="f_room">Room ${req}</label><select class="form-select" id="f_room"><option value="">Select room...</option>${roomOpts}${roomLegacyOpt}</select></div>
     </div>
     <div class="schedule-form-inline-row">
       <div class="form-group"><label class="form-label" for="f_timeStart">Time start ${req}</label><select class="form-select" id="f_timeStart">${timeStartOpts}</select></div>
@@ -1094,7 +1339,8 @@ function viewScheduleFieldRow(label, controlHtml) {
 /** Schedule details: read-only until "Edit schedule"; draft in state.modal.data. */
 function renderViewSchedule(d) {
   let mode = state.modal?.viewScheduleMode || 'view';
-  let sub = getSubject(d.subjectId), prof = getProfessor(d.professorId), room = getRoom(d.roomId), dept = getDept(d.dept);
+  let reqStar = '<span class="label-req" aria-hidden="true">*</span>';
+  let sub = getSubject(d.subjectId), room = getRoom(d.roomId), dept = getDept(d.dept);
   if (mode === 'view') {
     let daysStr = Array.isArray(d.days) && d.days.length ? d.days.join(', ') : '—';
     let timeStr = `${fmtSlot24(d.timeStart)} – ${fmtSlot24(d.timeEnd)} (${fmt12(d.timeStart)} – ${fmt12(d.timeEnd)})`;
@@ -1113,7 +1359,7 @@ function renderViewSchedule(d) {
         <div class="form-group"><span class="form-label">Subject</span><div class="vs-readonly">${subLine}</div></div>
       </div>
       ${viewScheduleFieldRow('Set (optional)', `<div class="vs-readonly">${d.setLabel ? escapeHtml(d.setLabel) : 'None'}</div>`)}
-      ${viewScheduleFieldRow('Professor', `<div class="vs-readonly">${prof ? escapeHtml(prof.name) : '—'}</div>`)}
+      ${viewScheduleFieldRow('Professor', `<div class="vs-readonly">${escapeHtml(professorDisplayLine(d))}</div>`)}
       ${viewScheduleFieldRow('Day(s)', `<div class="vs-readonly">${escapeHtml(daysStr)}</div>`)}
       ${viewScheduleFieldRow('Room', `<div class="vs-readonly">${room ? escapeHtml(room.name) : '—'}</div>`)}
       ${viewScheduleFieldRow('Time start', `<div class="vs-readonly">${escapeHtml(fmtSlot24(d.timeStart))}</div>`)}
@@ -1126,7 +1372,8 @@ function renderViewSchedule(d) {
   let profList = [...state.professors.filter(p => p.dept === listDept)].sort((a, b) => a.name.localeCompare(b.name));
   let roomList = [...ROOMS.filter(r => r.dept === listDept)].sort((a, b) => a.name.localeCompare(b.name));
   let subOpts = subList.map(x => `<option value="${escapeHtml(x.id)}" ${d.subjectId === x.id ? 'selected' : ''}>${escapeHtml(x.code)} — ${escapeHtml(x.name)}</option>`).join('');
-  let profOpts = `<option value="" ${!d.professorId ? 'selected' : ''}>—</option>` + profList.map(p => `<option value="${escapeHtml(p.id)}" ${d.professorId === p.id ? 'selected' : ''}>${escapeHtml(p.name)}</option>`).join('');
+  let profOpts = `<option value="" ${!d.professorId ? 'selected' : ''}>—</option>` + profList.map(p => `<option value="${escapeHtml(p.id)}" ${d.professorId === p.id ? 'selected' : ''}>${escapeHtml(p.name)}</option>`).join('')
+    + `<option value="${PROFESSOR_OTHER_ID}" ${d.professorId === PROFESSOR_OTHER_ID ? 'selected' : ''}>Others:</option>`;
   let roomOpts = roomList.map(r => `<option value="${escapeHtml(r.id)}" ${d.roomId === r.id ? 'selected' : ''}>${escapeHtml(r.name)}</option>`).join('');
   let secChoices = mergeSectionOptions([listDept]);
   let secOpts = secChoices.map(sec => `<option value="${escapeHtml(sec)}" ${String(d.section) === sec ? 'selected' : ''}>${escapeHtml(sec)}</option>`).join('');
@@ -1157,7 +1404,7 @@ function renderViewSchedule(d) {
       <div class="form-group"><label class="form-label" for="vs_subject">Subject</label>${vsSubjectSelect}</div>
     </div>
     ${viewScheduleFieldRow('Set (optional)', setInput)}
-    ${viewScheduleFieldRow('Professor', `<select class="form-select" id="vs_professor"><option value="">Select professor</option>${profOpts}</select>`)}
+    ${viewScheduleFieldRow('Professor', `<div class="professor-field-slot"><div id="vs_professor_select_wrap" ${d.professorId === PROFESSOR_OTHER_ID ? 'hidden' : ''}><select class="form-select" id="vs_professor" aria-label="Professor"><option value="">Select professor</option>${profOpts}</select></div><div id="vs_professor_other_wrap" ${d.professorId === PROFESSOR_OTHER_ID ? '' : 'hidden'}><div class="professor-other-row"><input type="text" class="form-input" id="vs_professor_other" value="${escapeHtml(d.professorOtherName || '')}" autocomplete="off" aria-label="Professor name when Others is selected"><button type="button" class="btn btn-outline btn-sm professor-pick-list-btn" id="vs_professor_list_btn" aria-label="Choose from faculty list">List</button></div></div></div>`)}
     ${viewScheduleFieldRow('Day(s)', daysHtml)}
     ${viewScheduleFieldRow('Room', `<select class="form-select" id="vs_room"><option value="">Select room</option>${roomOpts}</select>`)}
     ${viewScheduleFieldRow('Time start & time end', timeRow)}
@@ -1176,20 +1423,23 @@ function renderProfessorForm(d){
 
 function renderRequestForm() {
   let u = state.currentUser;
-  let slot = (state.modal && state.modal.type === 'newRequest' && state.modal.requestSlot) ? state.modal.requestSlot : null;
+  let m = state.modal && state.modal.type === 'newRequest' ? state.modal : null;
+  let slot = m?.requestSlot || null;
+  let prefillBorrowRoomId = m?.prefillBorrowRoomId || '';
   let daysForRooms = slot && slot.day ? [slot.day] : [];
   let timeS = slot?.timeStart || '';
   let timeE = slot?.timeEnd || '';
   let roomsPick = roomsFreeForBorrowing(u, daysForRooms, timeS, timeE);
   let req = '<span class="label-req" aria-hidden="true">*</span>';
   let roomPlaceholder = roomsPick.length ? 'Select available room' : 'No rooms free for this slot — adjust days or times';
-  let roomOpts = roomsPick.map(r => `<option value="${escapeHtml(r.id)}">${escapeHtml(r.name)} (${escapeHtml(getDept(r.dept)?.code || '')})</option>`).join('');
+  let roomOpts = roomsPick.map(r => `<option value="${escapeHtml(r.id)}" ${prefillBorrowRoomId && prefillBorrowRoomId === r.id ? 'selected' : ''}>${escapeHtml(r.name)} (${escapeHtml(getDept(r.dept)?.code || '')})</option>`).join('');
   let myDept = getDept(u.dept);
   let rqSecOpts = mergeSectionOptions([u.dept]).map(s => `<option value="${escapeHtml(s)}">${escapeHtml(s)}</option>`).join('');
   let mySubs = [...state.subjects.filter(s => s.dept === u.dept)].sort((a, b) => a.code.localeCompare(b.code));
   let myProfs = [...state.professors.filter(p => p.dept === u.dept)].sort((a, b) => a.name.localeCompare(b.name));
   let subOpts = mySubs.map(s => `<option value="${escapeHtml(s.id)}">${escapeHtml(s.code)} — ${escapeHtml(s.name)}</option>`).join('');
-  let profOpts = myProfs.map(p => `<option value="${escapeHtml(p.id)}">${escapeHtml(p.name)} (${escapeHtml(p.short)})</option>`).join('');
+  let profOpts = myProfs.map(p => `<option value="${escapeHtml(p.id)}">${escapeHtml(p.name)} (${escapeHtml(p.short)})</option>`).join('')
+    + `<option value="${PROFESSOR_OTHER_ID}">Others:</option>`;
   let ts = timeSlots.slice(0, -1).map(t => `<option value="${t}" ${slot && slot.timeStart === t ? 'selected' : ''}>${fmt12(t)}</option>`).join('');
   let te = timeSlots.slice(1).map(t => `<option value="${t}" ${slot && slot.timeEnd === t ? 'selected' : ''}>${fmt12(t)}</option>`).join('');
   let setSelect = `<select class="form-select" id="rq_set"><option value="">— None —</option><option value="Set A">Set A</option><option value="Set B">Set B</option></select>`;
@@ -1215,8 +1465,18 @@ function renderRequestForm() {
       <select class="form-select" id="rq_subject"><option value="">Select subject</option>${subOpts}</select>
     </div>
     <div class="form-group full">
-      <label class="form-label" for="rq_professor">Professor / instructor ${req}</label>
-      <select class="form-select" id="rq_professor"><option value="">Select professor</option>${profOpts}</select>
+      <label class="form-label" id="rq_professor_lb">Professor / instructor ${req}</label>
+      <div class="professor-field-slot">
+        <div id="rq_professor_select_wrap">
+          <select class="form-select" id="rq_professor" aria-labelledby="rq_professor_lb"><option value="">Select professor</option>${profOpts}</select>
+        </div>
+        <div id="rq_professor_other_wrap" hidden>
+          <div class="professor-other-row">
+            <input type="text" class="form-input" id="rq_professor_other" autocomplete="off" aria-labelledby="rq_professor_lb">
+            <button type="button" class="btn btn-outline btn-sm professor-pick-list-btn" id="rq_professor_list_btn" aria-label="Choose from faculty list">List</button>
+          </div>
+        </div>
+      </div>
     </div>
     <div class="form-group full">
       <label class="form-label" for="rq_section">Section ${req}</label>
@@ -1272,7 +1532,11 @@ function openModal(modalState) {
 
 function bindPage(){
   document.getElementById('addSchedBtn')?.addEventListener('click', () => {
-    openModal({ type: 'addSchedule', formDept: state.currentUser.role === 'admin' ? 'all' : state.currentUser.dept });
+    openModal({
+      type: 'addSchedule',
+      formDept: state.currentUser.role === 'admin' ? 'all' : state.currentUser.dept,
+      ...scheduleFormFilterDefaults(),
+    });
   });
   document.querySelectorAll('[data-filter]').forEach(el=>el.addEventListener('click',()=>{state.filterMode=el.dataset.filter;render();}));
   document.getElementById('filterDept')?.addEventListener('change', e => { state.filterDept = e.target.value; render(); });
@@ -1311,6 +1575,7 @@ function bindPage(){
       type: 'addSchedule',
       slot: { day: el.dataset.slotDay, timeStart: el.dataset.slotStart, timeEnd: el.dataset.slotEnd },
       formDept: state.currentUser.role === 'admin' ? 'all' : state.currentUser.dept,
+      ...scheduleFormFilterDefaults(),
     });
   }));
   document.getElementById('requestTtDept')?.addEventListener('change', e => {
@@ -1330,13 +1595,15 @@ function bindPage(){
           timeStart: el.dataset.slotStart,
           timeEnd: el.dataset.slotEnd,
         },
+        ...requestFormBorrowRoomPrefill(),
       });
     }));
   }
   document.getElementById('printBtn')?.addEventListener('click',()=>window.print());
   document.getElementById('f_schedule_dept')?.addEventListener('change', e => {
     if (!state.modal || state.modal.type !== 'addSchedule' || state.currentUser.role !== 'admin') return;
-    state.modal = { ...state.modal, formDept: e.target.value };
+    let { defaultSection, defaultProfessorId, defaultRoomId, ...rest } = state.modal;
+    state.modal = { ...rest, formDept: e.target.value };
     render();
   });
   document.getElementById('modalSaveBtn')?.addEventListener('click',()=>{
@@ -1351,10 +1618,12 @@ function bindPage(){
       let deptVal = document.getElementById('vs_dept')?.value || draft.dept;
       let days = [...document.querySelectorAll('#modalBackdrop [id^="vsday_"]:checked')].map(c => c.value);
       let profId = document.getElementById('vs_professor')?.value || '';
+      let profOtherTxt = (document.getElementById('vs_professor_other')?.value || '').trim();
       let entry = {
         id: draft.id,
         subjectId: document.getElementById('vs_subject')?.value || '',
-        professorId: profId || null,
+        professorId: profId === PROFESSOR_OTHER_ID ? PROFESSOR_OTHER_ID : (profId || null),
+        professorOtherName: profId === PROFESSOR_OTHER_ID ? profOtherTxt : null,
         roomId: document.getElementById('vs_room')?.value || '',
         section: document.getElementById('vs_section')?.value || '',
         days,
@@ -1369,6 +1638,10 @@ function bindPage(){
       };
       if (!entry.subjectId || !profId || !entry.roomId || !entry.section || !days.length || !entry.timeStart || !entry.timeEnd || !entry.schYear || !entry.schSem) {
         showFormValidationBanner('vsConflictAlert', MSG_FORM_INCOMPLETE);
+        return;
+      }
+      if (profId === PROFESSOR_OTHER_ID && !profOtherTxt) {
+        showFormValidationBanner('vsConflictAlert', 'Enter the professor or instructor name when Others is selected.');
         return;
       }
       if (timeToRow(entry.timeEnd) <= timeToRow(entry.timeStart)) {
@@ -1407,9 +1680,12 @@ function bindPage(){
       } else {
         entryDept = state.currentUser.dept;
       }
+      let profSel = document.getElementById('f_professor')?.value || '';
+      let profOtherAdd = (document.getElementById('f_professor_other')?.value || '').trim();
       let entry = {
         subjectId: fSub.value,
-        professorId: document.getElementById('f_professor')?.value,
+        professorId: profSel === PROFESSOR_OTHER_ID ? PROFESSOR_OTHER_ID : profSel,
+        professorOtherName: profSel === PROFESSOR_OTHER_ID ? profOtherAdd : null,
         roomId: document.getElementById('f_room')?.value,
         section: document.getElementById('f_section')?.value,
         days,
@@ -1422,8 +1698,12 @@ function bindPage(){
         setLabel: setV || null,
         labLabel: null,
       };
-      if (!entryDept || !entry.subjectId || !entry.professorId || !entry.roomId || !entry.section || !days.length || !entry.timeStart || !entry.timeEnd || !entry.schYear || !entry.schSem) {
+      if (!entryDept || !entry.subjectId || !profSel || !entry.roomId || !entry.section || !days.length || !entry.timeStart || !entry.timeEnd || !entry.schYear || !entry.schSem) {
         showFormValidationBanner('conflictAlert', MSG_FORM_INCOMPLETE);
+        return;
+      }
+      if (profSel === PROFESSOR_OTHER_ID && !profOtherAdd) {
+        showFormValidationBanner('conflictAlert', 'Enter the professor or instructor name when Others is selected.');
         return;
       }
       if (timeToRow(entry.timeEnd) <= timeToRow(entry.timeStart)) {
@@ -1499,8 +1779,13 @@ function bindPage(){
       let setV = (document.getElementById('rq_set')?.value || '').trim();
       let subId = document.getElementById('rq_subject')?.value || '';
       let profReq = document.getElementById('rq_professor')?.value || '';
+      let profOtherRq = (document.getElementById('rq_professor_other')?.value || '').trim();
       if (!roomId || !subId || !profReq || !section || !days.length || !timeStart || !timeEnd) {
         showFormValidationBanner('rqFormAlert', MSG_FORM_INCOMPLETE);
+        return;
+      }
+      if (profReq === PROFESSOR_OTHER_ID && !profOtherRq) {
+        showFormValidationBanner('rqFormAlert', 'Enter the professor or instructor name when Others is selected.');
         return;
       }
       if (timeToRow(timeEnd) <= timeToRow(timeStart)) {
@@ -1521,7 +1806,8 @@ function bindPage(){
         roomId,
         subjectId: subId,
         section,
-        professorId: profReq || null,
+        professorId: profReq === PROFESSOR_OTHER_ID ? PROFESSOR_OTHER_ID : profReq || null,
+        professorOtherName: profReq === PROFESSOR_OTHER_ID ? profOtherRq : null,
         days,
         timeStart,
         timeEnd,
@@ -1538,13 +1824,15 @@ function bindPage(){
     }
   });
   document.querySelectorAll('[data-delschedid]').forEach(el=>el.addEventListener('click',()=>{state.schedules=state.schedules.filter(s=>s.id!==el.dataset.delschedid);state.modal=null;showToast('Deleted');render();}));
-  document.getElementById('requestRoomTopBtn')?.addEventListener('click',()=>{openModal({type:'newRequest'});});
+  document.getElementById('requestRoomTopBtn')?.addEventListener('click', () => {
+    openModal({ type: 'newRequest', ...requestFormBorrowRoomPrefill() });
+  });
   document.querySelectorAll('[data-approve]').forEach(el=>el.addEventListener('click',()=>{
     let r=state.requests.find(x=>x.id===el.dataset.approve);
     if (!r) return;
     if (!window.confirm('Are you sure you want to approve this request?')) return;
     r.status='approved';
-    state.schedules.push({id:genId(),subjectId:r.subjectId,professorId:r.professorId||null,roomId:r.roomId,dept:r.fromDept,section:r.section,days:r.days,timeStart:r.timeStart,timeEnd:r.timeEnd,color:'orange',setLabel:r.setLabel||null,labLabel:r.labLabel||null,schYear:'1st Year',schSem:'1st Semester'});
+    state.schedules.push({id:genId(),subjectId:r.subjectId,professorId:r.professorId||null,professorOtherName:r.professorOtherName||null,roomId:r.roomId,dept:r.fromDept,section:r.section,days:r.days,timeStart:r.timeStart,timeEnd:r.timeEnd,color:'orange',setLabel:r.setLabel||null,labLabel:r.labLabel||null,schYear:'1st Year',schSem:'1st Semester'});
     window.alert('This request has been approved and added to the timetable.');
     render();
   }));
@@ -1579,6 +1867,45 @@ function bindPage(){
   document.getElementById('addProfBtn')?.addEventListener('click',()=>{openModal({type:'addProfessor',data:{}});});
   document.querySelectorAll('[data-editprof]').forEach(el=>el.addEventListener('click',()=>{let p=state.professors.find(x=>x.id===el.dataset.editprof);if(p)openModal({type:'addProfessor',data:{...p}});}));
   document.querySelectorAll('[data-delprof]').forEach(el=>el.addEventListener('click',()=>{state.professors=state.professors.filter(p=>p.id!==el.dataset.delprof);showToast('Professor deleted');render();}));
+  /** When "Others:" is chosen, swap dropdown for text input in the same slot; "List" restores the dropdown. */
+  function bindProfessorOtherSwap(prefix) {
+    let sel = document.getElementById(prefix);
+    let selWrap = document.getElementById(prefix + '_select_wrap');
+    let otherWrap = document.getElementById(prefix + '_other_wrap');
+    let otherIn = document.getElementById(prefix + '_other');
+    let listBtn = document.getElementById(prefix + '_list_btn');
+    if (!sel || !selWrap || !otherWrap) return;
+    let lastSelVal = sel.value;
+    function showDropdown(show) {
+      selWrap.hidden = !show;
+      otherWrap.hidden = show;
+      if (!show && otherIn) {
+        otherIn.focus();
+      } else if (show) {
+        sel.focus();
+      }
+    }
+    function syncFromSelect() {
+      showDropdown(sel.value !== PROFESSOR_OTHER_ID);
+    }
+    sel.addEventListener('change', () => {
+      let v = sel.value;
+      if (v === PROFESSOR_OTHER_ID && lastSelVal !== PROFESSOR_OTHER_ID && otherIn) otherIn.value = '';
+      lastSelVal = v;
+      syncFromSelect();
+    });
+    listBtn?.addEventListener('click', () => {
+      sel.value = '';
+      lastSelVal = '';
+      if (otherIn) otherIn.value = '';
+      showDropdown(true);
+    });
+    syncFromSelect();
+  }
+  bindProfessorOtherSwap('f_professor');
+  bindProfessorOtherSwap('rq_professor');
+  bindProfessorOtherSwap('vs_professor');
+  if (state.modal?.type === 'addSchedule') initCreateScheduleCurriculumCascade();
 }
 
 function showToast(msg){state.toast=msg;render();setTimeout(()=>{state.toast=null;render();},3000);}
