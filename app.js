@@ -1021,6 +1021,7 @@ function renderRequestForm() {
   let te = timeSlots.slice(1).map(t => `<option value="${t}" ${slot && slot.timeEnd === t ? 'selected' : ''}>${fmt12(t)}</option>`).join('');
   let setSelect = `<select class="form-select" id="rq_set"><option value="">— None —</option><option value="Set A">Set A</option><option value="Set B">Set B</option><option value="Set C">Set C</option></select>`;
   return `<div class="request-room-form">
+    <div id="rqFormAlert"></div>
     <div class="request-form-readrow">
       <div class="form-group">
         <label class="form-label" for="rq_from_dept_read">Requesting department</label>
@@ -1192,28 +1193,25 @@ function bindPage(){
         labLabel: state.schedules[idx].labLabel ?? null,
         color: state.schedules[idx].color,
       };
-      if (!entry.section) {
-        document.getElementById('vsConflictAlert').innerHTML = `<div class="alert">${icon('alertTriangle', 18)} Please select a section.</div>`;
+      if (!entry.subjectId || !profId || !entry.roomId || !entry.section || !days.length || !entry.timeStart || !entry.timeEnd) {
+        showFormValidationBanner('vsConflictAlert', MSG_FORM_INCOMPLETE);
         return;
       }
-      if (!days.length) {
-        document.getElementById('vsConflictAlert').innerHTML = `<div class="alert">${icon('alertTriangle', 18)} Select at least one day.</div>`;
+      if (timeToRow(entry.timeEnd) <= timeToRow(entry.timeStart)) {
+        showFormValidationBanner('vsConflictAlert', 'End time must be after start time.');
         return;
       }
       let subj = getSubject(entry.subjectId);
-      if (!entry.subjectId || !subj || subj.dept !== entry.dept) {
-        document.getElementById('vsConflictAlert').innerHTML = `<div class="alert">${icon('alertTriangle', 18)} Choose a subject that belongs to the selected department.</div>`;
+      if (!subj || subj.dept !== entry.dept) {
+        showFormValidationBanner('vsConflictAlert', 'Choose a subject that belongs to the selected department.');
         return;
       }
-      if (entry.timeStart && entry.timeEnd && timeToRow(entry.timeEnd) <= timeToRow(entry.timeStart)) {
-        document.getElementById('vsConflictAlert').innerHTML = `<div class="alert">${icon('alertTriangle', 18)} End time must be after start time.</div>`;
-        return;
-      }
+      if (!window.confirm(MSG_CONFIRM_FIELDS_OK)) return;
       if (getRoom(entry.roomId)?.type === 'laboratory') entry.color = 'purple';
       else entry.color = 'blue';
       let conflicts = checkConflicts(entry, draft.id);
       if (conflicts.length) {
-        document.getElementById('vsConflictAlert').innerHTML = `<div class="alert">${icon('alertTriangle', 18)} ${escapeHtml(conflicts[0])}</div>`;
+        showFormValidationBanner('vsConflictAlert', conflicts[0]);
         return;
       }
       state.schedules[idx] = { ...state.schedules[idx], ...entry };
@@ -1235,10 +1233,6 @@ function bindPage(){
       } else {
         entryDept = state.currentUser.dept;
       }
-      if (!entryDept) {
-        document.getElementById('conflictAlert').innerHTML = `<div class="alert">${icon('alertTriangle', 18)} Choose a department and subject, or pick a subject under All departments.</div>`;
-        return;
-      }
       let entry = {
         subjectId: fSub.value,
         professorId: document.getElementById('f_professor')?.value,
@@ -1252,14 +1246,26 @@ function bindPage(){
         setLabel: setV || null,
         labLabel: null,
       };
-      if (!entry.section) {
-        document.getElementById('conflictAlert').innerHTML = `<div class="alert">${icon('alertTriangle', 18)} Please select a section.</div>`;
+      if (!entryDept || !entry.subjectId || !entry.professorId || !entry.roomId || !entry.section || !days.length || !entry.timeStart || !entry.timeEnd) {
+        showFormValidationBanner('conflictAlert', MSG_FORM_INCOMPLETE);
         return;
       }
+      if (timeToRow(entry.timeEnd) <= timeToRow(entry.timeStart)) {
+        showFormValidationBanner('conflictAlert', 'End time must be after start time.');
+        return;
+      }
+      if (!window.confirm(MSG_CONFIRM_FIELDS_OK)) return;
       if (getRoom(entry.roomId)?.type === 'laboratory') entry.color = 'purple';
       let conflicts = checkConflicts(entry);
-      if (conflicts.length) document.getElementById('conflictAlert').innerHTML = `<div class="alert">${icon('alertTriangle', 18)} ${escapeHtml(conflicts[0])}</div>`;
-      else { entry.id = genId(); state.schedules.push(entry); state.modal = null; showToast('Schedule saved'); render(); }
+      if (conflicts.length) {
+        showFormValidationBanner('conflictAlert', conflicts[0]);
+        return;
+      }
+      entry.id = genId();
+      state.schedules.push(entry);
+      state.modal = null;
+      showToast('Schedule saved');
+      render();
       return;
     }
     if (mt === 'addSubject') {
@@ -1304,26 +1310,31 @@ function bindPage(){
       let timeStart = document.getElementById('rq_timeStart')?.value || '';
       let timeEnd = document.getElementById('rq_timeEnd')?.value || '';
       let setV = (document.getElementById('rq_set')?.value || '').trim();
-      if (timeStart && timeEnd && timeToRow(timeEnd) <= timeToRow(timeStart)) {
-        showToast('End time must be after start time');
+      let subId = document.getElementById('rq_subject')?.value || '';
+      let profReq = document.getElementById('rq_professor')?.value || '';
+      if (!roomId || !subId || !profReq || !section || !days.length || !timeStart || !timeEnd) {
+        showFormValidationBanner('rqFormAlert', MSG_FORM_INCOMPLETE);
         return;
       }
-      if (roomId && days.length && timeStart && timeEnd) {
-        for (let day of days) {
-          if (roomSlotOccupied(roomId, day, timeStart, timeEnd)) {
-            showToast('That room is no longer free for one of the selected days.');
-            return;
-          }
+      if (timeToRow(timeEnd) <= timeToRow(timeStart)) {
+        showFormValidationBanner('rqFormAlert', 'End time must be after start time.');
+        return;
+      }
+      for (let day of days) {
+        if (roomSlotOccupied(roomId, day, timeStart, timeEnd)) {
+          showFormValidationBanner('rqFormAlert', 'That room is no longer free for one of the selected days.');
+          return;
         }
       }
+      if (!window.confirm(MSG_CONFIRM_FIELDS_OK)) return;
       let req = {
         id: genId(),
         fromDept: state.currentUser.dept,
         toDept: room?.dept,
         roomId,
-        subjectId: document.getElementById('rq_subject')?.value || '',
+        subjectId: subId,
         section,
-        professorId: document.getElementById('rq_professor')?.value || null,
+        professorId: profReq || null,
         days,
         timeStart,
         timeEnd,
@@ -1333,18 +1344,31 @@ function bindPage(){
         status: 'pending',
         created: new Date().toISOString().slice(0, 10),
       };
-      if (req.roomId && req.subjectId && req.section && req.professorId && days.length) {
-        state.requests.push(req);
-        state.modal = null;
-        showToast('Request submitted');
-        render();
-      }
+      state.requests.push(req);
+      state.modal = null;
+      showToast('Request submitted');
+      render();
     }
   });
   document.querySelectorAll('[data-delschedid]').forEach(el=>el.addEventListener('click',()=>{state.schedules=state.schedules.filter(s=>s.id!==el.dataset.delschedid);state.modal=null;showToast('Deleted');render();}));
   document.getElementById('requestRoomTopBtn')?.addEventListener('click',()=>{openModal({type:'newRequest'});});
-  document.querySelectorAll('[data-approve]').forEach(el=>el.addEventListener('click',()=>{let r=state.requests.find(x=>x.id===el.dataset.approve);if(r){r.status='approved';state.schedules.push({id:genId(),subjectId:r.subjectId,professorId:r.professorId||null,roomId:r.roomId,dept:r.fromDept,section:r.section,days:r.days,timeStart:r.timeStart,timeEnd:r.timeEnd,color:'orange',setLabel:r.setLabel||null,labLabel:r.labLabel||null});showToast('Request approved');render();}}));
-  document.querySelectorAll('[data-decline]').forEach(el=>el.addEventListener('click',()=>{let r=state.requests.find(x=>x.id===el.dataset.decline);if(r){r.status='declined';showToast('Request declined');render();}}));
+  document.querySelectorAll('[data-approve]').forEach(el=>el.addEventListener('click',()=>{
+    let r=state.requests.find(x=>x.id===el.dataset.approve);
+    if (!r) return;
+    if (!window.confirm('Are you sure you want to approve this request?')) return;
+    r.status='approved';
+    state.schedules.push({id:genId(),subjectId:r.subjectId,professorId:r.professorId||null,roomId:r.roomId,dept:r.fromDept,section:r.section,days:r.days,timeStart:r.timeStart,timeEnd:r.timeEnd,color:'orange',setLabel:r.setLabel||null,labLabel:r.labLabel||null});
+    window.alert('This request has been approved and added to the timetable.');
+    render();
+  }));
+  document.querySelectorAll('[data-decline]').forEach(el=>el.addEventListener('click',()=>{
+    let r=state.requests.find(x=>x.id===el.dataset.decline);
+    if (!r) return;
+    if (!window.confirm('Are you sure you want to decline this request?')) return;
+    r.status='declined';
+    window.alert('This request has been declined.');
+    render();
+  }));
   document.getElementById('addCurriculumBtn')?.addEventListener('click',()=>{openModal({type:'addCurriculum',data:{}});});
   document.querySelectorAll('[data-editcrow]').forEach(el=>el.addEventListener('click',()=>{let c=state.curriculum.find(x=>x.id===el.dataset.editcrow);if(c)openModal({type:'addCurriculum',data:{...c}});}));
   document.querySelectorAll('[data-delcrow]').forEach(el=>el.addEventListener('click',()=>{state.curriculum=state.curriculum.filter(c=>c.id!==el.dataset.delcrow);showToast('Row removed');render();}));
@@ -1355,6 +1379,15 @@ function bindPage(){
 }
 
 function showToast(msg){state.toast=msg;render();setTimeout(()=>{state.toast=null;render();},3000);}
+
+const MSG_FORM_INCOMPLETE = 'Complete all fields before Submitting Request';
+const MSG_CONFIRM_FIELDS_OK = 'Are you sure all fields are correct?';
+
+function showFormValidationBanner(containerId, message) {
+  let box = document.getElementById(containerId);
+  if (!box) return;
+  box.innerHTML = `<div class="alert form-validation-alert" role="alert">${icon('alertTriangle', 18)}<span class="form-validation-alert-text">${escapeHtml(message)}</span></div>`;
+}
 
 // Init
 initAppTheme();

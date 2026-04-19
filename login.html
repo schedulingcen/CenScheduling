@@ -95,14 +95,15 @@
   <div class="login-card">
     <div class="login-logo">
       <div class="big-badge">CEN</div>
-      <h1>Timetable Management System</h1>
-      <p>College of Engineering — Pamantasan ng Lungsod ng Maynila</p>
+      <h1>Academic Scheduling System</h1>
+      <p><b>College of Engineering</b></p>
+      <p>Southern Luzon State University</p>
     </div>
     <div class="login-form">
       <div id="loginErr"></div>
       <div class="form-group">
         <div class="form-label">Email Address</div>
-        <input class="form-input" id="loginEmail" type="email" placeholder="Enter your email address" value="admin@plm.edu.ph">
+        <input class="form-input" id="loginEmail" type="email" placeholder="Enter your email address" value="admin@slsu.edu.ph">
       </div>
       <div class="form-group">
         <div class="form-label">Password</div>
@@ -111,7 +112,7 @@
       <button class="btn-primary" id="loginBtn">Sign In →</button>
     </div>
     <div class="login-footer">
-      <strong>Demo accounts:</strong> admin@plm.edu.ph · ie.chair@plm.edu.ph · cpe.chair@plm.edu.ph<br>
+      <strong>Demo accounts:</strong> admin@slsu.edu.ph · ie.chair@slsu.edu.ph · cpe.chair@slsu.edu.ph<br>
       (any password works)
     </div>
   </div>
@@ -119,13 +120,13 @@
   <script>
     // Shared user data
     const USERS = [
-      { id:'admin', name:'Dr. Maria Corazon B. Abejo', email:'admin@plm.edu.ph', role:'admin', dept:null, initials:'MCA' },
-      { id:'ie', name:'Engr. Lynnevel R. Amparo', email:'ie.chair@plm.edu.ph', role:'chairperson', dept:'ie', initials:'LA' },
-      { id:'ee', name:'Engr. Maurino N. Abuel', email:'ee.chair@plm.edu.ph', role:'chairperson', dept:'ee', initials:'MA' },
-      { id:'ce', name:'Engr. John Christopher D. Tayoto', email:'ce.chair@plm.edu.ph', role:'chairperson', dept:'ce', initials:'JT' },
-      { id:'me', name:'Engr. Ronnel S. Nombrefia', email:'me.chair@plm.edu.ph', role:'chairperson', dept:'me', initials:'RN' },
-      { id:'ece', name:'Engr. Pitz Gerald G. Lagrazon', email:'ece.chair@plm.edu.ph', role:'chairperson', dept:'ece', initials:'PL' },
-      { id:'cpe', name:'Engr. Julie Ann Susa-Gili', email:'cpe.chair@plm.edu.ph', role:'chairperson', dept:'cpe', initials:'JS' },
+      { id:'admin', name:'Dr. Maria Corazon B. Abejo', email:'admin@slsu.edu.ph', role:'admin', dept:null, initials:'MCA' },
+      { id:'ie', name:'Engr. Lynnevel R. Amparo', email:'ie.chair@slsu.edu.ph', role:'chairperson', dept:'ie', initials:'LA' },
+      { id:'ee', name:'Engr. Maurino N. Abuel', email:'ee.chair@slsu.edu.ph', role:'chairperson', dept:'ee', initials:'MA' },
+      { id:'ce', name:'Engr. John Christopher D. Tayoto', email:'ce.chair@slsu.edu.ph', role:'chairperson', dept:'ce', initials:'JT' },
+      { id:'me', name:'Engr. Ronnel S. Nombrefia', email:'me.chair@slsu.edu.ph', role:'chairperson', dept:'me', initials:'RN' },
+      { id:'ece', name:'Engr. Pitz Gerald G. Lagrazon', email:'ece.chair@slsu.edu.ph', role:'chairperson', dept:'ece', initials:'PL' },
+      { id:'cpe', name:'Engr. Julie Ann Susa-Gili', email:'cpe.chair@slsu.edu.ph', role:'chairperson', dept:'cpe', initials:'JS' },
     ];
 
     document.getElementById('loginBtn').addEventListener('click', doLogin);
