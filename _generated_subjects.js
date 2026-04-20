@@ -190,7 +190,7 @@ const SUBJECTS_DATA = [
   { id:'s_ece_MAT04', code:'MAT04', name:'Calculus 1 (Differential Calculus)', dept:'ece', units:3, sem:'catalog', active:true },
   { id:'s_ece_MAT05', code:'MAT05', name:'Calculus 2 (Integral)', dept:'ece', units:3, sem:'catalog', active:true },
   { id:'s_ece_NST01', code:'NST01', name:'National Service Training Program 1', dept:'ece', units:3, sem:'catalog', active:true },
-  { id:'s_ece_OJT', code:'OJT', name:'On the Job Training / Electronics Engineering Immersion', dept:'ece', units:3, sem:'catalog', active:true },
+  { id:'s_ece_OJT', code:'OJT', name:'On the Job Training / Electronics and Communication Engineering Immersion', dept:'ece', units:3, sem:'catalog', active:true },
   { id:'s_ece_PEO01', code:'PEO01', name:'Physical Fitness', dept:'ece', units:2, sem:'catalog', active:true },
   { id:'s_ece_PEO03', code:'PEO03', name:'Individual/Dual Sports', dept:'ece', units:2, sem:'catalog', active:true },
   { id:'s_ece_PEO04', code:'PEO04', name:'Team Sports / Games', dept:'ece', units:2, sem:'catalog', active:true },
