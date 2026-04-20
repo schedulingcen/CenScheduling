@@ -854,7 +854,7 @@ function render() {
       <div class="sidebar ${state.sidebarOpen?'open':''}" id="sidebar">${renderSidebar()}</div>
       <div class="overlay ${state.sidebarOpen?'show':''}" id="overlay"></div>
       <div class="main">
-        <div class="topbar"><span class="hamburger" id="hamburger" role="button" tabindex="0" aria-label="Open menu">${icon('menu', 22)}</span><div class="page-title">${getPageTitle()}</div><div class="topbar-actions"><button type="button" class="btn btn-outline btn-sm theme-toggle" id="themeToggleBtn" aria-label="${document.documentElement.dataset.theme === 'dark' ? 'Switch to light mode' : 'Switch to dark mode'}">${document.documentElement.dataset.theme === 'dark' ? icon('sun', 18) : icon('moon', 18)}</button>${state.page==='schedule'?`<button class="btn btn-primary btn-sm" id="addSchedBtn">${icon('plus', 16)} Add Schedule</button>`:''}${state.page==='curriculum'&&state.currentUser?.role==='admin'?`<button type="button" class="btn btn-primary btn-sm" id="addCurriculumBtn">${icon('plus', 16)} Add Subject</button>`:''}${state.page==='requests'&&state.currentUser?.role==='chairperson'?`<button class="btn btn-primary btn-sm" id="requestRoomTopBtn">${icon('plus', 16)} Request a Room</button>`:''}</div></div>
+        <div class="topbar"><span class="hamburger" id="hamburger" role="button" tabindex="0" aria-label="Open menu">${icon('menu', 22)}</span><div class="page-title">${getPageTitle()}</div><div class="topbar-actions"><button type="button" class="btn btn-outline btn-sm theme-toggle" id="themeToggleBtn" aria-label="${document.documentElement.dataset.theme === 'dark' ? 'Switch to light mode' : 'Switch to dark mode'}">${document.documentElement.dataset.theme === 'dark' ? icon('sun', 18) : icon('moon', 18)}</button>${state.page==='schedule'?`<button class="btn btn-primary btn-sm" id="addSchedBtn">${icon('plus', 16)} Add Schedule</button>`:''}${state.page==='curriculum'&&(state.currentUser?.role==='admin'||state.currentUser?.role==='chairperson')?`<button type="button" class="btn btn-primary btn-sm" id="addCurriculumBtn">${icon('plus', 16)} Add Subject</button>`:''}${state.page==='requests'&&state.currentUser?.role==='chairperson'?`<button class="btn btn-primary btn-sm" id="requestRoomTopBtn">${icon('plus', 16)} Request a Room</button>`:''}</div></div>
         <div class="content">${renderPage()}</div>
       </div>
     </div>
@@ -891,7 +891,7 @@ function renderSidebar() {
       ${nav('schedule','calendar','Schedule')}
       ${nav('requests','refresh','Requests', requestsExtra)}
       <div class="nav-section-label" style="margin-top:8px">Manage</div>
-      ${u.role==='admin'?nav('curriculum','book','Curriculum'):''}
+      ${(u.role==='admin'||u.role==='chairperson')?nav('curriculum','book','Curriculum'):''}
       ${u.role==='admin'?nav('faculty','users','Faculty'):''}
       ${u.role==='admin'?nav('accounts','settings','Accounts'):''}
       ${u.role==='chairperson'?nav('account','user','My Account'):''}
@@ -1344,13 +1344,17 @@ function renderCurriculumForm(d) {
   if (!Number.isFinite(lecV)) lecV = 0;
   if (!Number.isFinite(labV)) labV = 0;
   let totV = lecV + labV;
-  let deptOpts = DEPARTMENTS.map(dept => `<option value="${escapeHtml(dept.id)}" ${(d.dept || '') === dept.id ? 'selected' : ''}>${escapeHtml(dept.code)} — ${escapeHtml(dept.name)}</option>`).join('');
+  let isAdminCurr = state.currentUser?.role === 'admin';
+  let currDeptId = isAdminCurr ? (d.dept || '') : (state.currentUser?.dept || d.dept || '');
+  let deptOpts = isAdminCurr
+    ? DEPARTMENTS.map(dept => `<option value="${escapeHtml(dept.id)}" ${currDeptId === dept.id ? 'selected' : ''}>${escapeHtml(dept.code)} — ${escapeHtml(dept.name)}</option>`).join('')
+    : `<option value="${escapeHtml(currDeptId)}" selected>${escapeHtml(getDept(currDeptId)?.code || '')} — ${escapeHtml(getDept(currDeptId)?.name || '')}</option>`;
   let ySel = d.year && !SCHEDULE_FORM_YEARS.includes(d.year) ? `<option value="${escapeHtml(d.year)}" selected>${escapeHtml(d.year)}</option>` : '';
   let sSel = d.semester && !CURRICULUM_PAGE_SEMS.includes(d.semester) ? `<option value="${escapeHtml(d.semester)}" selected>${escapeHtml(d.semester)}</option>` : '';
   let yearOpts = SCHEDULE_FORM_YEARS.map(y => `<option value="${escapeHtml(y)}" ${d.year === y ? 'selected' : ''}>${escapeHtml(y)}</option>`).join('');
   let semOpts = CURRICULUM_PAGE_SEMS.map(s => `<option value="${escapeHtml(s)}" ${d.semester === s ? 'selected' : ''}>${escapeHtml(s)}</option>`).join('');
   return `<div class="form-grid form-grid-stacked curriculum-modal-form">
-    <div class="form-group full"><label class="form-label" for="cc_dept">Department</label><select class="form-select" id="cc_dept">${deptOpts}</select></div>
+    <div class="form-group full"><label class="form-label" for="cc_dept">Department</label><select class="form-select" id="cc_dept" ${isAdminCurr ? '' : 'disabled'}>${deptOpts}</select></div>
     <div class="form-grid curriculum-form-year-sem"><div class="form-group"><label class="form-label" for="cc_year">Year</label><select class="form-select" id="cc_year"><option value="">Select year...</option>${yearOpts}${ySel}</select></div><div class="form-group"><label class="form-label" for="cc_semester">Semester</label><select class="form-select" id="cc_semester"><option value="">Select semester...</option>${semOpts}${sSel}</select></div></div>
     <div class="form-grid curriculum-form-code-subject"><div class="form-group"><label class="form-label" for="cc_courseCode">Course code</label><input class="form-input" id="cc_courseCode" placeholder="e.g. IE 100" value="${escapeHtml(d.courseCode || '')}"></div><div class="form-group"><label class="form-label" for="cc_subject">Subject</label><input class="form-input" id="cc_subject" placeholder="Subject title" value="${escapeHtml(d.subjectName || '')}"></div></div>
     <div class="form-grid curriculum-form-units"><div class="form-group"><label class="form-label" for="cc_lecUnits">Lec (units)</label><input class="form-input" id="cc_lecUnits" type="number" min="0" max="12" step="1" value="${escapeHtml(String(lecV))}"></div><div class="form-group"><label class="form-label" for="cc_labUnits">Lab (units)</label><input class="form-input" id="cc_labUnits" type="number" min="0" max="12" step="1" value="${escapeHtml(String(labV))}"></div><div class="form-group"><label class="form-label" for="cc_units_total">Total unit/s</label><input class="form-input" id="cc_units_total" type="text" readonly tabindex="-1" value="${escapeHtml(String(totV))}" aria-live="polite"></div></div>
@@ -1359,13 +1363,18 @@ function renderCurriculumForm(d) {
 
 function renderCurriculum() {
   mergeMissingCurriculumRowsInto(state.curriculum);
+  let u = state.currentUser;
+  let chairDept = u?.role === 'chairperson' ? u.dept : '';
+  if (chairDept) state.curriculumDeptFilter = chairDept;
   let rows = state.curriculum.filter(c => {
     if (state.curriculumDeptFilter !== 'all' && curriculumFilterDept(c) !== state.curriculumDeptFilter) return false;
     if (state.curriculumYearFilter !== 'all' && curriculumFilterYear(c) !== state.curriculumYearFilter) return false;
     if (state.curriculumSemFilter !== 'all' && curriculumFilterSemester(c) !== state.curriculumSemFilter) return false;
     return true;
   });
-  let deptFilter = `<select class="filter-select curriculum-filter-select" id="curriculumDeptFilter" aria-label="Department"><option value="all" ${state.curriculumDeptFilter === 'all' ? 'selected' : ''}>All departments</option>${DEPARTMENTS.map(d => `<option value="${d.id}" ${state.curriculumDeptFilter === d.id ? 'selected' : ''}>${escapeHtml(d.name)}</option>`).join('')}</select>`;
+  let deptFilter = chairDept
+    ? `<select class="filter-select curriculum-filter-select" id="curriculumDeptFilter" aria-label="Department" disabled><option value="${escapeHtml(chairDept)}" selected>${escapeHtml(getDept(chairDept)?.name || '')}</option></select>`
+    : `<select class="filter-select curriculum-filter-select" id="curriculumDeptFilter" aria-label="Department"><option value="all" ${state.curriculumDeptFilter === 'all' ? 'selected' : ''}>All departments</option>${DEPARTMENTS.map(d => `<option value="${d.id}" ${state.curriculumDeptFilter === d.id ? 'selected' : ''}>${escapeHtml(d.name)}</option>`).join('')}</select>`;
   let yearFilter = `<select class="filter-select curriculum-filter-select" id="curriculumYearFilter" aria-label="Year"><option value="all" ${state.curriculumYearFilter === 'all' ? 'selected' : ''}>Year</option>${SCHEDULE_FORM_YEARS.map(y => `<option value="${escapeHtml(y)}" ${state.curriculumYearFilter === y ? 'selected' : ''}>${escapeHtml(y)}</option>`).join('')}</select>`;
   let semFilter = `<select class="filter-select curriculum-filter-select" id="curriculumSemFilter" aria-label="Semester"><option value="all" ${state.curriculumSemFilter === 'all' ? 'selected' : ''}>Semester</option>${CURRICULUM_PAGE_SEMS.map(s => `<option value="${escapeHtml(s)}" ${state.curriculumSemFilter === s ? 'selected' : ''}>${escapeHtml(s)}</option>`).join('')}</select>`;
   return `
