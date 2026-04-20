@@ -2129,9 +2129,10 @@ function showFormValidationBanner(containerId, message) {
 // Init
 initAppTheme();
 state.page = resolveInitialPage();
-render();
-if (sessionStorage.getItem('cen_user')) {
-  syncRequestsFromSupabase().then((ok) => {
-    if (ok) render();
+if (sessionStorage.getItem('cen_user') && hasSupabaseClient()) {
+  syncRequestsFromSupabase().finally(() => {
+    render();
   });
+} else {
+  render();
 }
