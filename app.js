@@ -235,6 +235,119 @@ function hasSupabaseClient() {
   return !!(window.cenSupabaseReady && window.cenSupabase);
 }
 
+function normalizeSubjectFromDb(row) {
+  if (!row) return null;
+  return {
+    id: row.id,
+    code: row.code,
+    name: row.name,
+    dept: row.dept_id || row.dept,
+    units: row.units,
+    active: row.active !== false,
+  };
+}
+function normalizeSubjectToDb(sub) {
+  return {
+    id: sub.id,
+    code: sub.code,
+    name: sub.name,
+    dept_id: sub.dept,
+    units: sub.units ?? null,
+    active: sub.active !== false,
+  };
+}
+function normalizeProfessorFromDb(row) {
+  if (!row) return null;
+  return {
+    id: row.id,
+    name: row.name,
+    short: row.short || '',
+    dept: row.dept_id || row.dept,
+    active: row.active !== false,
+  };
+}
+function normalizeProfessorToDb(prof) {
+  return {
+    id: prof.id,
+    name: prof.name,
+    short: prof.short || '',
+    dept_id: prof.dept,
+    active: prof.active !== false,
+  };
+}
+function normalizeCurriculumFromDb(row) {
+  if (!row) return null;
+  return {
+    id: row.id,
+    dept: row.dept_id || row.dept,
+    year: row.year || '',
+    semester: row.semester || '',
+    courseCode: row.course_code || row.courseCode || '',
+    subjectName: row.subject_name || row.subjectName || '',
+    lecUnits: Number.isFinite(Number(row.lec_units)) ? Number(row.lec_units) : 0,
+    labUnits: Number.isFinite(Number(row.lab_units)) ? Number(row.lab_units) : 0,
+    units: Number.isFinite(Number(row.units)) ? Number(row.units) : 0,
+    courseName: row.course_name || row.courseName || row.subject_name || row.subjectName || '',
+    subjectCode: row.subject_code || row.subjectCode || '',
+    section: row.section || '',
+  };
+}
+function normalizeCurriculumToDb(row) {
+  return {
+    id: row.id,
+    dept_id: row.dept,
+    year: row.year || '',
+    semester: row.semester || '',
+    course_code: row.courseCode || '',
+    subject_name: row.subjectName || '',
+    lec_units: Number.isFinite(Number(row.lecUnits)) ? Number(row.lecUnits) : 0,
+    lab_units: Number.isFinite(Number(row.labUnits)) ? Number(row.labUnits) : 0,
+    units: Number.isFinite(Number(row.units)) ? Number(row.units) : 0,
+    course_name: row.courseName || row.subjectName || '',
+    subject_code: row.subjectCode || '',
+    section: row.section || '',
+  };
+}
+function normalizeScheduleFromDb(row) {
+  if (!row) return null;
+  return {
+    id: row.id,
+    subjectId: row.subject_id,
+    professorId: row.professor_id,
+    professorOtherName: row.professor_other_name || null,
+    roomId: row.room_id,
+    dept: row.dept_id || row.dept,
+    section: row.section || '',
+    days: Array.isArray(row.days) ? row.days : [],
+    timeStart: row.time_start,
+    timeEnd: row.time_end,
+    color: row.color || 'blue',
+    setLabel: row.set_label || null,
+    labLabel: row.lab_label || null,
+    schYear: row.sch_year || '',
+    schSem: row.sch_sem || '',
+  };
+}
+function normalizeScheduleToDb(s) {
+  return {
+    id: s.id,
+    subject_id: s.subjectId,
+    professor_id: s.professorId || null,
+    professor_other_name: s.professorOtherName || null,
+    room_id: s.roomId,
+    dept_id: s.dept,
+    section: s.section,
+    days: Array.isArray(s.days) ? s.days : [],
+    time_start: s.timeStart,
+    time_end: s.timeEnd,
+    color: s.color || 'blue',
+    set_label: s.setLabel || null,
+    lab_label: s.labLabel || null,
+    sch_year: s.schYear || null,
+    sch_sem: s.schSem || null,
+  };
+}
+
 function normalizeRequestFromDb(row) {
   if (!row) return null;
   return {
@@ -299,6 +412,38 @@ async function syncRequestsFromSupabase() {
     return true;
   } catch (err) {
     console.warn('Supabase requests fetch crashed:', err);
+    return false;
+  }
+}
+
+async function syncCoreDataFromSupabase() {
+  if (!hasSupabaseClient()) return false;
+  try {
+    const [subjectsRes, professorsRes, curriculumRes, schedulesRes, requestsRes] = await Promise.all([
+      window.cenSupabase.from('subjects').select('*').order('code', { ascending: true }),
+      window.cenSupabase.from('professors').select('*').order('name', { ascending: true }),
+      window.cenSupabase.from('curriculum').select('*').order('created_at', { ascending: true }),
+      window.cenSupabase.from('schedules').select('*').order('created_at', { ascending: true }),
+      window.cenSupabase.from('requests').select('*').order('created_at', { ascending: false }),
+    ]);
+    if (subjectsRes.error || professorsRes.error || curriculumRes.error || schedulesRes.error || requestsRes.error) {
+      console.warn('Supabase core sync errors:', {
+        subjects: subjectsRes.error?.message,
+        professors: professorsRes.error?.message,
+        curriculum: curriculumRes.error?.message,
+        schedules: schedulesRes.error?.message,
+        requests: requestsRes.error?.message,
+      });
+      return false;
+    }
+    state.subjects = Array.isArray(subjectsRes.data) ? subjectsRes.data.map(normalizeSubjectFromDb).filter(Boolean) : [];
+    state.professors = Array.isArray(professorsRes.data) ? professorsRes.data.map(normalizeProfessorFromDb).filter(Boolean) : [];
+    state.curriculum = Array.isArray(curriculumRes.data) ? curriculumRes.data.map(normalizeCurriculumFromDb).filter(Boolean) : [];
+    state.schedules = Array.isArray(schedulesRes.data) ? schedulesRes.data.map(normalizeScheduleFromDb).filter(Boolean) : [];
+    state.requests = Array.isArray(requestsRes.data) ? requestsRes.data.map(normalizeRequestFromDb).filter(Boolean) : [];
+    return true;
+  } catch (err) {
+    console.warn('Supabase core sync crashed:', err);
     return false;
   }
 }
@@ -668,8 +813,10 @@ function render() {
   let app=document.getElementById('app');
   if(!ensureAuth()) return;
   if (!cenHydratedThisLoad) {
-    hydratePersistedData();
-    mergeDefaultRequestsIntoState();
+    if (!hasSupabaseClient()) {
+      hydratePersistedData();
+      mergeDefaultRequestsIntoState();
+    }
     cenHydratedThisLoad = true;
   }
   app.innerHTML=`
@@ -1753,7 +1900,7 @@ function bindPage(){
     state.modal = { ...rest, formDept: e.target.value };
     render();
   });
-  document.getElementById('modalSaveBtn')?.addEventListener('click',()=>{
+  document.getElementById('modalSaveBtn')?.addEventListener('click', async ()=>{
     if (!state.modal) return;
     let mt = state.modal.type;
     if (mt === 'viewSchedule') {
@@ -1807,6 +1954,15 @@ function bindPage(){
       if (conflicts.length) {
         showFormValidationBanner('vsConflictAlert', conflicts[0]);
         return;
+      }
+      if (hasSupabaseClient()) {
+        const { error } = await window.cenSupabase
+          .from('schedules')
+          .upsert([normalizeScheduleToDb(entry)], { onConflict: 'id' });
+        if (error) {
+          showFormValidationBanner('vsConflictAlert', `Supabase error: ${error.message}`);
+          return;
+        }
       }
       state.schedules[idx] = { ...state.schedules[idx], ...entry };
       state.modal = null;
@@ -1865,6 +2021,15 @@ function bindPage(){
         return;
       }
       entry.id = genId();
+      if (hasSupabaseClient()) {
+        const { error } = await window.cenSupabase
+          .from('schedules')
+          .upsert([normalizeScheduleToDb(entry)], { onConflict: 'id' });
+        if (error) {
+          showFormValidationBanner('conflictAlert', `Supabase error: ${error.message}`);
+          return;
+        }
+      }
       state.schedules.push(entry);
       state.modal = null;
       showToast('Schedule saved');
@@ -1873,12 +2038,36 @@ function bindPage(){
     }
     if (mt === 'addSubject') {
       let sub = { id: document.getElementById('saveSubjectBtn')?.dataset.editid || genId(), code: document.getElementById('fs_code').value, name: document.getElementById('fs_name').value, dept: document.getElementById('fs_dept').value, units: parseInt(document.getElementById('fs_units').value), active: true };
-      if (sub.code && sub.name) { if (sub.id.startsWith('id_')) state.subjects.push(sub); else { let i = state.subjects.findIndex(s => s.id === sub.id); if (i >= 0) state.subjects[i] = sub; } state.modal = null; showToast('Subject saved'); render(); }
+      if (sub.code && sub.name) {
+        if (hasSupabaseClient()) {
+          const { error } = await window.cenSupabase
+            .from('subjects')
+            .upsert([normalizeSubjectToDb(sub)], { onConflict: 'id' });
+          if (error) {
+            window.alert(`Unable to save subject in Supabase: ${error.message}`);
+            return;
+          }
+        }
+        if (sub.id.startsWith('id_')) state.subjects.push(sub); else { let i = state.subjects.findIndex(s => s.id === sub.id); if (i >= 0) state.subjects[i] = sub; }
+        state.modal = null; showToast('Subject saved'); render();
+      }
       return;
     }
     if (mt === 'addProfessor') {
       let prof = { id: document.getElementById('saveProfBtn')?.dataset.editid || genId(), name: document.getElementById('fp_name').value, short: document.getElementById('fp_short').value, dept: document.getElementById('fp_dept').value, active: true };
-      if (prof.name && prof.short) { if (prof.id.startsWith('id_')) state.professors.push(prof); else { let i = state.professors.findIndex(p => p.id === prof.id); if (i >= 0) state.professors[i] = prof; } state.modal = null; showToast('Professor saved'); render(); }
+      if (prof.name && prof.short) {
+        if (hasSupabaseClient()) {
+          const { error } = await window.cenSupabase
+            .from('professors')
+            .upsert([normalizeProfessorToDb(prof)], { onConflict: 'id' });
+          if (error) {
+            window.alert(`Unable to save professor in Supabase: ${error.message}`);
+            return;
+          }
+        }
+        if (prof.id.startsWith('id_')) state.professors.push(prof); else { let i = state.professors.findIndex(p => p.id === prof.id); if (i >= 0) state.professors[i] = prof; }
+        state.modal = null; showToast('Professor saved'); render();
+      }
       return;
     }
     if (mt === 'addCurriculum') {
@@ -1910,6 +2099,16 @@ function bindPage(){
       } else {
         row.id = genId();
         state.curriculum.push(row);
+      }
+      let savedRow = editId ? { ...row, id: editId } : row;
+      if (hasSupabaseClient()) {
+        const { error } = await window.cenSupabase
+          .from('curriculum')
+          .upsert([normalizeCurriculumToDb(savedRow)], { onConflict: 'id' });
+        if (error) {
+          window.alert(`Unable to save curriculum in Supabase: ${error.message}`);
+          return;
+        }
       }
       state.modal = null;
       showToast('Curriculum saved');
@@ -1999,7 +2198,16 @@ function bindPage(){
       render();
     }
   });
-  document.querySelectorAll('[data-delschedid]').forEach(el=>el.addEventListener('click',()=>{state.schedules=state.schedules.filter(s=>s.id!==el.dataset.delschedid);state.modal=null;showToast('Deleted');render();}));
+  document.querySelectorAll('[data-delschedid]').forEach(el=>el.addEventListener('click', async ()=>{
+    if (hasSupabaseClient()) {
+      const { error } = await window.cenSupabase.from('schedules').delete().eq('id', el.dataset.delschedid);
+      if (error) {
+        window.alert(`Unable to delete schedule in Supabase: ${error.message}`);
+        return;
+      }
+    }
+    state.schedules=state.schedules.filter(s=>s.id!==el.dataset.delschedid);state.modal=null;showToast('Deleted');render();
+  }));
   document.getElementById('requestRoomTopBtn')?.addEventListener('click', () => {
     let u = state.currentUser;
     openModal({
@@ -2029,7 +2237,17 @@ function bindPage(){
       }
     }
     r.status='approved';
-    state.schedules.push({id:genId(),subjectId:r.subjectId,professorId:r.professorId||null,professorOtherName:r.professorOtherName||null,roomId:r.roomId,dept:r.fromDept,section:r.section,days:r.days,timeStart:r.timeStart,timeEnd:r.timeEnd,color:'orange',setLabel:r.setLabel||null,labLabel:r.labLabel||null,schYear:r.schYear||'1st Year',schSem:r.schSem||'1st Semester'});
+    let approvedSched = {id:genId(),subjectId:r.subjectId,professorId:r.professorId||null,professorOtherName:r.professorOtherName||null,roomId:r.roomId,dept:r.fromDept,section:r.section,days:r.days,timeStart:r.timeStart,timeEnd:r.timeEnd,color:'orange',setLabel:r.setLabel||null,labLabel:r.labLabel||null,schYear:r.schYear||'1st Year',schSem:r.schSem||'1st Semester'};
+    if (hasSupabaseClient()) {
+      const { error } = await window.cenSupabase
+        .from('schedules')
+        .upsert([normalizeScheduleToDb(approvedSched)], { onConflict: 'id' });
+      if (error) {
+        window.alert(`Request approved but schedule insert failed in Supabase: ${error.message}`);
+        return;
+      }
+    }
+    state.schedules.push(approvedSched);
     window.alert('This request has been approved and added to the timetable.');
     render();
   }));
@@ -2053,7 +2271,16 @@ function bindPage(){
   }));
   document.getElementById('addCurriculumBtn')?.addEventListener('click',()=>{openModal({type:'addCurriculum',data:{}});});
   document.querySelectorAll('[data-editcrow]').forEach(el=>el.addEventListener('click',()=>{let c=state.curriculum.find(x=>x.id===el.dataset.editcrow);if(c)openModal({type:'addCurriculum',data:{...c}});}));
-  document.querySelectorAll('[data-delcrow]').forEach(el=>el.addEventListener('click',()=>{state.curriculum=state.curriculum.filter(c=>c.id!==el.dataset.delcrow);showToast('Row removed');render();}));
+  document.querySelectorAll('[data-delcrow]').forEach(el=>el.addEventListener('click', async ()=>{
+    if (hasSupabaseClient()) {
+      const { error } = await window.cenSupabase.from('curriculum').delete().eq('id', el.dataset.delcrow);
+      if (error) {
+        window.alert(`Unable to delete curriculum row in Supabase: ${error.message}`);
+        return;
+      }
+    }
+    state.curriculum=state.curriculum.filter(c=>c.id!==el.dataset.delcrow);showToast('Row removed');render();
+  }));
   document.getElementById('curriculumDeptFilter')?.addEventListener('change',e=>{state.curriculumDeptFilter=e.target.value;render();});
   document.getElementById('curriculumYearFilter')?.addEventListener('change',e=>{state.curriculumYearFilter=e.target.value;render();});
   document.getElementById('curriculumSemFilter')?.addEventListener('change',e=>{state.curriculumSemFilter=e.target.value;render();});
@@ -2073,7 +2300,16 @@ function bindPage(){
   syncCurriculumUnitsTotal();
   document.getElementById('addProfBtn')?.addEventListener('click',()=>{openModal({type:'addProfessor',data:{}});});
   document.querySelectorAll('[data-editprof]').forEach(el=>el.addEventListener('click',()=>{let p=state.professors.find(x=>x.id===el.dataset.editprof);if(p)openModal({type:'addProfessor',data:{...p}});}));
-  document.querySelectorAll('[data-delprof]').forEach(el=>el.addEventListener('click',()=>{state.professors=state.professors.filter(p=>p.id!==el.dataset.delprof);showToast('Professor deleted');render();}));
+  document.querySelectorAll('[data-delprof]').forEach(el=>el.addEventListener('click', async ()=>{
+    if (hasSupabaseClient()) {
+      const { error } = await window.cenSupabase.from('professors').delete().eq('id', el.dataset.delprof);
+      if (error) {
+        window.alert(`Unable to delete professor in Supabase: ${error.message}`);
+        return;
+      }
+    }
+    state.professors=state.professors.filter(p=>p.id!==el.dataset.delprof);showToast('Professor deleted');render();
+  }));
   /** When "Others:" is chosen, swap dropdown for text input in the same slot; "List" restores the dropdown. */
   function bindProfessorOtherSwap(prefix) {
     let sel = document.getElementById(prefix);
@@ -2130,7 +2366,7 @@ function showFormValidationBanner(containerId, message) {
 initAppTheme();
 state.page = resolveInitialPage();
 if (sessionStorage.getItem('cen_user') && hasSupabaseClient()) {
-  syncRequestsFromSupabase().finally(() => {
+  syncCoreDataFromSupabase().finally(() => {
     render();
   });
 } else {
