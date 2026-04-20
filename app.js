@@ -761,6 +761,13 @@ function getBorrowableRooms(u) {
 function departmentsWithRoomsList() {
   return DEPARTMENTS.filter(d => ROOMS.some(r => r.dept === d.id));
 }
+function requestTimetableDepartmentsForUser(u) {
+  let list = departmentsWithRoomsList();
+  if (u?.role === 'chairperson' && u?.dept) {
+    return list.filter(d => d.id !== u.dept);
+  }
+  return list;
+}
 /** Rooms from other departments free on every chosen day for the given time range. */
 function roomsFreeForBorrowing(u, days, timeStart, timeEnd) {
   if (!u?.dept) return [];
@@ -1171,11 +1178,11 @@ function renderTimetableGrid(scheds, gridOpts) {
 function normalizeRequestTimetableFilters() {
   let u = state.currentUser;
   if (!u || state.page !== 'requests') return;
-  let withRooms = departmentsWithRoomsList();
+  let withRooms = requestTimetableDepartmentsForUser(u);
   let ids = withRooms.map(d => d.id);
   if (!ids.length) return;
   if (!ids.includes(state.requestTimetableDept)) {
-    state.requestTimetableDept = (u.dept && ids.includes(u.dept)) ? u.dept : ids[0];
+    state.requestTimetableDept = ids[0];
   }
   if (!ROOMS.some(r => r.dept === state.requestTimetableDept)) state.requestTimetableDept = ids[0];
   let deptRoomList = roomsForRequestDeptTimetable(state.requestTimetableDept);
@@ -1201,7 +1208,7 @@ function renderRequestDeptDayTimetable(u) {
   let deptInfo = getDept(viewDept);
   let deptRoomList = roomsForRequestDeptTimetable(viewDept);
   let roomCount = deptRoomList.length;
-  let withRooms = departmentsWithRoomsList();
+  let withRooms = requestTimetableDepartmentsForUser(u);
   let canClickRequest = u.role !== 'admin';
   if (!withRooms.length) {
     return `<p class="text-muted" style="padding:12px">No departments have classrooms defined in the system.</p>`;
@@ -1709,7 +1716,18 @@ function renderRequestForm() {
   let selectedReason = (m?.requestReason || '').trim();
   if (m) m.requestToDept = selectedToDeptId;
   let roomsPickAll = roomsFreeForBorrowing(u, daysForRooms, timeS, timeE);
-  let roomsPick = selectedToDeptId ? roomsPickAll.filter(r => r.dept === selectedToDeptId) : [];
+  let isTeachingAssignmentReason = selectedReason === REQUEST_ROOM_REASON_CHOICES[1];
+  if (isTeachingAssignmentReason) {
+    // Teaching assignment rule: show complete room pools from requester's dept + selected dept.
+    let ownDeptRooms = ROOMS.filter(r => r.dept === u.dept);
+    let selectedDeptRooms = selectedToDeptId ? ROOMS.filter(r => r.dept === selectedToDeptId) : [];
+    let merged = new Map();
+    for (let r of [...ownDeptRooms, ...selectedDeptRooms]) merged.set(r.id, r);
+    roomsPickAll = [...merged.values()].sort((a, b) => a.name.localeCompare(b.name));
+  }
+  let roomsPick = selectedToDeptId
+    ? roomsPickAll.filter(r => r.dept === selectedToDeptId || (isTeachingAssignmentReason && r.dept === u.dept))
+    : [];
   let req = '<span class="label-req" aria-hidden="true">*</span>';
   let roomPlaceholder = !selectedToDeptId
     ? 'Select a department first'
@@ -1786,7 +1804,7 @@ function renderRequestForm() {
     <div class="form-group full">
       <label class="form-label" for="rq_room">Available room ${req}</label>
       <select class="form-select" id="rq_room" required><option value="">${roomPlaceholder}</option>${roomOpts}</select>
-      <p class="form-hint">Select an available room from another department</p>
+      <p class="form-hint">${isTeachingAssignmentReason ? 'Select an available room from your department or the selected department' : 'Select an available room from another department'}</p>
     </div>
     <div class="schedule-form-inline-row request-room-form-inline-pair">
       <div class="form-group">
@@ -2155,16 +2173,20 @@ function bindPage(){
       let subId = document.getElementById('rq_subject')?.value || '';
       let schYear = (document.getElementById('rq_year')?.value || '').trim();
       let schSem = (document.getElementById('rq_sem')?.value || '').trim();
-      let reasonRq = (document.getElementById('rq_reason')?.value || '').trim();
       let profReq = document.getElementById('rq_professor')?.value || '';
       let profOtherRq = (document.getElementById('rq_professor_other')?.value || '').trim();
       let toDeptPick = document.getElementById('rq_to_dept')?.value || '';
+      let reasonRq = (document.getElementById('rq_reason')?.value || '').trim();
+      let isTeachingAssignmentReason = reasonRq === REQUEST_ROOM_REASON_CHOICES[1];
       if (!toDeptPick || !roomId || !subId || !profReq || !section || !days.length || !timeStart || !timeEnd || !schYear || !schSem || !reasonRq) {
         showFormValidationBanner('rqFormAlert', MSG_FORM_INCOMPLETE);
         return;
       }
-      if (room?.dept !== toDeptPick) {
-        showFormValidationBanner('rqFormAlert', 'Selected room must belong to the department you are requesting.');
+      let roomAllowed = room?.dept === toDeptPick || (isTeachingAssignmentReason && room?.dept === state.currentUser.dept);
+      if (!roomAllowed) {
+        showFormValidationBanner('rqFormAlert', isTeachingAssignmentReason
+          ? 'Selected room must belong to your department or the selected department.'
+          : 'Selected room must belong to the department you are requesting.');
         return;
       }
       if (profReq === PROFESSOR_OTHER_ID && !profOtherRq) {
