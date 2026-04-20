@@ -321,31 +321,6 @@ body { font-family: var(--font); background: var(--page-bg); color: var(--text-p
   .nav-item .nav-requests-badge { animation: none; }
 }
 
-.account-requests-notice {
-  display: flex;
-  gap: 12px;
-  align-items: flex-start;
-  padding: 14px 16px;
-  margin-bottom: 20px;
-  border-radius: 10px;
-  border: 1px solid rgba(127, 25, 25, 0.25);
-  background: var(--red-light);
-  color: var(--text-primary);
-  font-size: 14px;
-  line-height: 1.45;
-}
-.account-requests-notice-icon {
-  flex-shrink: 0;
-  color: var(--red);
-  margin-top: 2px;
-}
-.account-requests-notice-text a {
-  color: var(--red);
-  font-weight: 600;
-}
-.account-requests-notice-text a:hover {
-  text-decoration: underline;
-}
 .nav-icon { width: 22px; display: inline-flex; align-items: center; justify-content: center; flex-shrink: 0; color: inherit; }
 .sidebar-user { padding: 14px 18px; border-top: 1px solid var(--sidebar-border); display: flex; align-items: center; gap: 10px; }
 .user-avatar { width: 32px; height: 32px; border-radius: 50%; background: rgba(255,255,255,.2); border: 1px solid rgba(255,255,255,.35); display: flex; align-items: center; justify-content: center; font-size: 12px; font-weight: 700; color: #fff; }
@@ -440,7 +415,11 @@ html[data-theme="dark"] .btn-secondary { background: #2a2a38; color: var(--text-
   width: min(720px, calc(100vw - 32px));
 }
 .modal.modal-request {
-  width: min(640px, calc(100vw - 32px));
+  width: min(720px, calc(100vw - 32px));
+  box-shadow: 0 24px 64px rgba(0, 0, 0, 0.12), 0 8px 24px rgba(0, 0, 0, 0.06);
+}
+.modal.modal-request .modal-body {
+  padding: 26px 28px 28px;
 }
 .modal.modal-view-schedule {
   width: min(560px, calc(100vw - 32px));
@@ -558,20 +537,74 @@ html[data-theme="dark"] .request-modal-alert {
   font-weight: 700;
   line-height: 1.2;
 }
+.request-room-form {
+  display: flex;
+  flex-direction: column;
+  gap: 22px;
+}
+/* Same outer pattern as Create Schedule (`schedule-form-wrapper` + inline rows) */
+.request-room-form.schedule-form-wrapper {
+  gap: 22px;
+}
 .request-room-form .form-label {
+  font-size: 13px;
   font-weight: 600;
+  color: var(--text-primary);
+  letter-spacing: 0.01em;
+}
+.request-room-form-reason {
+  border-top: 1px solid var(--border-ui);
+  padding-top: 22px;
+  margin-top: 2px;
+}
+.request-room-form .schedule-form-inline-row .professor-field-slot,
+.request-room-form .schedule-form-inline-row .professor-other-row {
+  min-width: 0;
 }
 .request-form-readrow {
   display: grid;
   grid-template-columns: 1fr 1fr;
   gap: 16px;
-  margin-bottom: 14px;
+  margin-bottom: 0;
+}
+.request-room-form .request-form-readrow {
+  grid-template-columns: minmax(0, 1fr) minmax(0, 1fr);
+  column-gap: 40px;
+  row-gap: 16px;
 }
 .request-room-form > .form-group.full {
-  margin-bottom: 14px;
+  margin-bottom: 0;
 }
 .request-room-form > .form-group.full:last-child {
   margin-bottom: 0;
+}
+.modal.modal-request .form-input,
+.modal.modal-request .form-select {
+  border-radius: 8px;
+  padding: 10px 12px;
+}
+.modal.modal-request .form-input[readonly] {
+  background: var(--surface-elevated, var(--bg-secondary));
+  color: var(--text-primary);
+  cursor: default;
+}
+.request-room-form .rq-days-check {
+  display: grid;
+  grid-template-columns: repeat(5, minmax(0, 1fr));
+  gap: 8px;
+  width: 100%;
+  min-width: 0;
+}
+.request-room-form .rq-days-check .day-label {
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  min-width: 0;
+  padding: 9px 6px;
+  border-radius: 8px;
+  font-size: 12px;
+  font-weight: 600;
+  text-align: center;
 }
 @media (max-width: 520px) {
   .request-form-readrow {
@@ -647,7 +680,14 @@ html[data-theme="dark"] #requestRoomTimetableArea .timetable-slot-empty:hover {
   box-shadow: none !important;
 }
 .request-room-form .request-form-days-set-row {
-  margin-bottom: 14px;
+  margin-bottom: 0;
+}
+.request-room-form .schedule-form-inline-row {
+  margin-bottom: 0;
+}
+.request-room-form .request-room-form-inline-pair {
+  column-gap: 40px;
+  row-gap: 20px;
 }
 .schedule-form-wrapper { display: flex; flex-direction: column; gap: 16px; }
 .schedule-form-wrapper > .form-group > .form-select {
@@ -677,13 +717,16 @@ html[data-theme="dark"] #requestRoomTimetableArea .timetable-slot-empty:hover {
 }
 /* Equal columns: native selects use min-content width from longest <option> unless constrained */
 .schedule-form-wrapper .schedule-form-inline-row > .form-group,
-.view-schedule-form .schedule-form-inline-row > .form-group {
+.view-schedule-form .schedule-form-inline-row > .form-group,
+.request-room-form .schedule-form-inline-row > .form-group {
   min-width: 0;
 }
 .schedule-form-wrapper .form-group > .form-select,
 .schedule-form-wrapper .form-group > select.form-select,
 .view-schedule-form .schedule-form-inline-row .form-group > .form-select,
-.view-schedule-form .schedule-form-inline-row .form-group > select.form-select {
+.view-schedule-form .schedule-form-inline-row .form-group > select.form-select,
+.request-room-form .schedule-form-inline-row .form-group > .form-select,
+.request-room-form .schedule-form-inline-row .form-group > select.form-select {
   width: 100%;
   max-width: 100%;
   min-width: 0;

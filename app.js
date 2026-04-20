@@ -231,6 +231,78 @@ let state = {
 let nextId = 100;
 const genId = () => `id_${++nextId}`;
 
+function hasSupabaseClient() {
+  return !!(window.cenSupabaseReady && window.cenSupabase);
+}
+
+function normalizeRequestFromDb(row) {
+  if (!row) return null;
+  return {
+    id: row.id,
+    fromDept: row.from_dept,
+    toDept: row.to_dept,
+    roomId: row.room_id,
+    subjectId: row.subject_id,
+    section: row.section,
+    professorId: row.professor_id,
+    professorOtherName: row.professor_other_name || null,
+    days: Array.isArray(row.days) ? row.days : [],
+    timeStart: row.time_start,
+    timeEnd: row.time_end,
+    schYear: row.sch_year || '',
+    schSem: row.sch_sem || '',
+    setLabel: row.set_label || null,
+    labLabel: row.lab_label || null,
+    reason: row.reason || '',
+    status: row.status || 'pending',
+    created: row.created || null,
+  };
+}
+
+function normalizeRequestToDb(req) {
+  return {
+    id: req.id,
+    from_dept: req.fromDept,
+    to_dept: req.toDept,
+    room_id: req.roomId,
+    subject_id: req.subjectId,
+    section: req.section,
+    professor_id: req.professorId,
+    professor_other_name: req.professorOtherName || null,
+    days: Array.isArray(req.days) ? req.days : [],
+    time_start: req.timeStart,
+    time_end: req.timeEnd,
+    sch_year: req.schYear || null,
+    sch_sem: req.schSem || null,
+    set_label: req.setLabel || null,
+    lab_label: req.labLabel || null,
+    reason: req.reason || '',
+    status: req.status || 'pending',
+    created: req.created || null,
+  };
+}
+
+async function syncRequestsFromSupabase() {
+  if (!hasSupabaseClient()) return false;
+  try {
+    const { data, error } = await window.cenSupabase
+      .from('requests')
+      .select('*')
+      .order('created_at', { ascending: false });
+    if (error) {
+      console.warn('Supabase requests fetch failed:', error.message);
+      return false;
+    }
+    state.requests = Array.isArray(data)
+      ? data.map(normalizeRequestFromDb).filter(Boolean)
+      : [];
+    return true;
+  } catch (err) {
+    console.warn('Supabase requests fetch crashed:', err);
+    return false;
+  }
+}
+
 // Helpers
 function getSubject(id) { return state.subjects.find(s=>s.id===id); }
 function getProfessor(id) { return state.professors.find(p=>p.id===id); }
@@ -340,19 +412,21 @@ function setABSelectHtml(id, current) {
     ${legacyOpt}
   </select>`;
 }
-function scheduleYearSelectHtml(id, selected) {
+function scheduleYearSelectHtml(id, selected, extraAttrs = '') {
   const legacy = selected && !SCHEDULE_FORM_YEARS.includes(selected)
     ? `<option value="${escapeHtml(selected)}" selected>${escapeHtml(selected)}</option>`
     : '';
   const opts = SCHEDULE_FORM_YEARS.map(y => `<option value="${escapeHtml(y)}" ${selected === y ? 'selected' : ''}>${escapeHtml(y)}</option>`).join('');
-  return `<select class="form-select" id="${id}"><option value="">Select year...</option>${opts}${legacy}</select>`;
+  const attrs = extraAttrs ? ` ${extraAttrs}` : '';
+  return `<select class="form-select" id="${id}"${attrs}><option value="">Select year...</option>${opts}${legacy}</select>`;
 }
-function scheduleSemSelectHtml(id, selected) {
+function scheduleSemSelectHtml(id, selected, extraAttrs = '') {
   const legacy = selected && !SCHEDULE_FORM_SEMS.includes(selected)
     ? `<option value="${escapeHtml(selected)}" selected>${escapeHtml(selected)}</option>`
     : '';
   const opts = SCHEDULE_FORM_SEMS.map(s => `<option value="${escapeHtml(s)}" ${selected === s ? 'selected' : ''}>${escapeHtml(s)}</option>`).join('');
-  return `<select class="form-select" id="${id}"><option value="">Select semester...</option>${opts}${legacy}</select>`;
+  const attrs = extraAttrs ? ` ${extraAttrs}` : '';
+  return `<select class="form-select" id="${id}"${attrs}><option value="">Select semester...</option>${opts}${legacy}</select>`;
 }
 
 function normalizeSubjectCode(s) {
@@ -1169,11 +1243,7 @@ function renderAccounts() {
 
 function renderMyAccount() {
   let u = state.currentUser;
-  let pendingIn = u.role === 'chairperson' ? pendingRequestsForUser() : 0;
-  let requestsNotice = pendingIn > 0
-    ? `<div class="account-requests-notice" role="status"><span class="account-requests-notice-icon">${icon('inbox', 20)}</span><div class="account-requests-notice-text"><strong>${pendingIn} pending incoming room request${pendingIn === 1 ? '' : 's'}</strong> need your review. Open <a href="${pageHref('requests')}">Requests</a> — the sidebar shows the same count.</div></div>`
-    : '';
-  return `<div class="card"><div class="card-body">${requestsNotice}<div style="display:flex;gap:16px;margin-bottom:24px"><div style="width:64px;height:64px;border-radius:50%;background:var(--red);display:flex;align-items:center;justify-content:center;font-size:22px;font-weight:700;color:#fff">${u.initials}</div><div><div style="font-size:18px;font-weight:700">${u.name}</div><div style="color:var(--gray-600)">${u.email}</div></div></div><div class="form-grid"><div class="form-group full"><label>Full Name</label><input class="form-input" value="${u.name}"></div><div class="form-group full"><label>Email</label><input class="form-input" value="${u.email}"></div></div><button class="btn btn-primary" onclick="showToast('Profile updated')">Save Changes</button></div></div>`;
+  return `<div class="card"><div class="card-body"><div style="display:flex;gap:16px;margin-bottom:24px"><div style="width:64px;height:64px;border-radius:50%;background:var(--red);display:flex;align-items:center;justify-content:center;font-size:22px;font-weight:700;color:#fff">${u.initials}</div><div><div style="font-size:18px;font-weight:700">${u.name}</div><div style="color:var(--gray-600)">${u.email}</div></div></div><div class="form-grid"><div class="form-group full"><label>Full Name</label><input class="form-input" value="${u.name}"></div><div class="form-group full"><label>Email</label><input class="form-input" value="${u.email}"></div></div><button class="btn btn-primary" onclick="showToast('Profile updated')">Save Changes</button></div></div>`;
 }
 
 function renderModal() {
@@ -1225,6 +1295,32 @@ function requestFormBorrowRoomPrefill() {
   let rid = state.requestTimetableRoom;
   if (rid && rid !== 'all') return { prefillBorrowRoomId: rid };
   return {};
+}
+
+/** Departments (with rooms) the user may borrow from — excludes their own (“Requesting from”) dept. */
+function requestFormToDepartmentChoices(u) {
+  if (!u?.dept) return [];
+  return departmentsWithRoomsList()
+    .filter(d => d.id !== u.dept)
+    .slice()
+    .sort((a, b) => a.code.localeCompare(b.code));
+}
+
+/** Picks a valid target dept for the request form (timetable filter when possible, else first choice). */
+function resolveRequestFormToDeptId(u, preferredDeptId) {
+  let choices = requestFormToDepartmentChoices(u);
+  let ids = new Set(choices.map(d => d.id));
+  if (preferredDeptId && ids.has(preferredDeptId)) return preferredDeptId;
+  return choices[0]?.id || '';
+}
+
+/** Defaults for Request form section (year/sem stay empty until user picks, per UI). */
+function requestFormDefaultSection(u) {
+  if (!u?.dept) return '';
+  let secChoices = mergeSectionOptions([u.dept]);
+  let fromSched = state.schedules.find(s => s.dept === u.dept && secChoices.includes(String(s.section || '')));
+  if (fromSched?.section) return String(fromSched.section);
+  return secChoices[0] || '';
 }
 
 function modalWrap(title, body, footer = `<button class="btn btn-secondary" id="modalClose2">Cancel</button><button class="btn btn-primary" id="modalSaveBtn">Save</button>`, panelClass = '', subtitle = '') {
@@ -1438,12 +1534,26 @@ function renderRequestForm() {
   let daysForRooms = slot && slot.day ? [slot.day] : [];
   let timeS = slot?.timeStart || '';
   let timeE = slot?.timeEnd || '';
-  let roomsPick = roomsFreeForBorrowing(u, daysForRooms, timeS, timeE);
+  let toDeptChoices = requestFormToDepartmentChoices(u);
+  let selectedToDeptId = resolveRequestFormToDeptId(u, m?.requestToDept);
+  if (m) m.requestToDept = selectedToDeptId;
+  let roomsPickAll = roomsFreeForBorrowing(u, daysForRooms, timeS, timeE);
+  let roomsPick = selectedToDeptId ? roomsPickAll.filter(r => r.dept === selectedToDeptId) : [];
   let req = '<span class="label-req" aria-hidden="true">*</span>';
-  let roomPlaceholder = roomsPick.length ? 'Select available room' : 'No rooms free for this slot — adjust days or times';
-  let roomOpts = roomsPick.map(r => `<option value="${escapeHtml(r.id)}" ${prefillBorrowRoomId && prefillBorrowRoomId === r.id ? 'selected' : ''}>${escapeHtml(r.name)} (${escapeHtml(getDept(r.dept)?.code || '')})</option>`).join('');
+  let roomPlaceholder = !selectedToDeptId
+    ? 'Select a department first'
+    : roomsPick.length
+      ? 'Select available room'
+      : 'No rooms free for this slot — adjust days or times';
+  let prefillOk = !!(prefillBorrowRoomId && roomsPick.some(r => r.id === prefillBorrowRoomId));
+  let roomOpts = roomsPick.map(r => `<option value="${escapeHtml(r.id)}" ${prefillOk && prefillBorrowRoomId === r.id ? 'selected' : ''}>${escapeHtml(r.name)}</option>`).join('');
   let myDept = getDept(u.dept);
-  let rqSecOpts = mergeSectionOptions([u.dept]).map(s => `<option value="${escapeHtml(s)}">${escapeHtml(s)}</option>`).join('');
+  let toDeptOpts = toDeptChoices.map(d => `<option value="${escapeHtml(d.id)}" ${d.id === selectedToDeptId ? 'selected' : ''}>${escapeHtml(d.code)} — ${escapeHtml(d.name)}</option>`).join('');
+  let toDeptSelect = toDeptChoices.length
+    ? `<select class="form-select" id="rq_to_dept" required aria-label="Requesting to department">${toDeptOpts}</select>`
+    : `<select class="form-select" id="rq_to_dept" disabled aria-label="Requesting to department"><option value="">No other departments with rooms</option></select>`;
+  let defSection = requestFormDefaultSection(u);
+  let rqSecOpts = mergeSectionOptions([u.dept]).map(s => `<option value="${escapeHtml(s)}" ${defSection && String(defSection) === s ? 'selected' : ''}>${escapeHtml(s)}</option>`).join('');
   let mySubs = [...state.subjects.filter(s => s.dept === u.dept)].sort((a, b) => a.code.localeCompare(b.code));
   let myProfs = [...state.professors.filter(p => p.dept === u.dept)].sort((a, b) => a.name.localeCompare(b.name));
   let subOpts = mySubs.map(s => `<option value="${escapeHtml(s.id)}">${escapeHtml(s.code)} — ${escapeHtml(s.name)}</option>`).join('');
@@ -1455,69 +1565,89 @@ function renderRequestForm() {
   let rqReasonOpts = REQUEST_ROOM_REASON_CHOICES.map(
     t => `<option value="${escapeHtml(t)}">${escapeHtml(t)}</option>`
   ).join('');
-  return `<div class="request-room-form">
+  let yearHtml = scheduleYearSelectHtml('rq_year', '', 'required');
+  let semHtml = scheduleSemSelectHtml('rq_sem', '', 'required');
+  return `<div class="request-room-form schedule-form-wrapper">
     <div id="rqFormAlert"></div>
-    <div class="request-form-readrow">
+    <div class="schedule-form-inline-row request-room-form-inline-pair" role="group" aria-label="Requesting department and requester">
       <div class="form-group">
-        <label class="form-label" for="rq_from_dept_read">Requesting department</label>
+        <label class="form-label" for="rq_from_dept_read">Requesting from:</label>
         <input class="form-input" id="rq_from_dept_read" readonly tabindex="-1" value="${escapeHtml(myDept?.code || '')} — ${escapeHtml(myDept?.name || '')}">
       </div>
       <div class="form-group">
-        <label class="form-label" for="rq_requester_read">Requested by</label>
+        <label class="form-label" for="rq_requester_read">Requested by:</label>
         <input class="form-input" id="rq_requester_read" readonly tabindex="-1" value="${escapeHtml(u.name || '')}">
       </div>
     </div>
-    <div class="form-group full">
-      <label class="form-label" for="rq_room">Available room ${req}</label>
-      <select class="form-select" id="rq_room"><option value="">${roomPlaceholder}</option>${roomOpts}</select>
-      <p class="form-hint">Select an available room from another department</p>
-    </div>
-    <div class="form-group full">
-      <label class="form-label" for="rq_subject">Subject ${req}</label>
-      <select class="form-select" id="rq_subject"><option value="">Select subject</option>${subOpts}</select>
-    </div>
-    <div class="form-group full">
-      <label class="form-label" id="rq_professor_lb">Professor / instructor ${req}</label>
-      <div class="professor-field-slot">
-        <div id="rq_professor_select_wrap">
-          <select class="form-select" id="rq_professor" aria-labelledby="rq_professor_lb"><option value="">Select professor</option>${profOpts}</select>
-        </div>
-        <div id="rq_professor_other_wrap" hidden>
-          <div class="professor-other-row">
-            <input type="text" class="form-input" id="rq_professor_other" autocomplete="off" aria-labelledby="rq_professor_lb">
-            <button type="button" class="btn btn-outline btn-sm professor-pick-list-btn" id="rq_professor_list_btn" aria-label="Choose from faculty list">List</button>
+    <div class="schedule-form-inline-row request-room-form-inline-pair" role="group" aria-label="Target department and instructor">
+      <div class="form-group">
+        <label class="form-label" for="rq_to_dept">Requesting to: ${req}</label>
+        ${toDeptSelect}
+      </div>
+      <div class="form-group professor-select-group">
+        <label class="form-label" id="rq_professor_lb">Faculty / Instructor ${req}</label>
+        <div class="professor-field-slot">
+          <div id="rq_professor_select_wrap">
+            <select class="form-select" id="rq_professor" aria-labelledby="rq_professor_lb" required><option value="">Select professor...</option>${profOpts}</select>
+          </div>
+          <div id="rq_professor_other_wrap" hidden>
+            <div class="professor-other-row">
+              <input type="text" class="form-input" id="rq_professor_other" autocomplete="off" aria-labelledby="rq_professor_lb">
+              <button type="button" class="btn btn-outline btn-sm professor-pick-list-btn" id="rq_professor_list_btn" aria-label="Choose from faculty list">List</button>
+            </div>
           </div>
         </div>
       </div>
     </div>
     <div class="form-group full">
-      <label class="form-label" for="rq_section">Section ${req}</label>
-      <select class="form-select" id="rq_section"><option value="">Select section...</option>${rqSecOpts}</select>
+      <label class="form-label" for="rq_room">Available room ${req}</label>
+      <select class="form-select" id="rq_room" required><option value="">${roomPlaceholder}</option>${roomOpts}</select>
+      <p class="form-hint">Select an available room from another department</p>
     </div>
-    <div class="schedule-form-inline-row request-form-days-set-row">
+    <div class="schedule-form-inline-row request-room-form-inline-pair">
       <div class="form-group">
-        <span class="form-label">Days ${req}</span>
-        <div class="days-check">${DAYS.map(d => `<input type="checkbox" class="day-checkbox" id="rqday_${d}" value="${d}" ${slot && slot.day === d ? 'checked' : ''}><label class="day-label" for="rqday_${d}">${d.slice(0, 3)}</label>`).join('')}</div>
+        <label class="form-label" for="rq_year">Year ${req}</label>
+        ${yearHtml}
+      </div>
+      <div class="form-group">
+        <label class="form-label" for="rq_section">Section ${req}</label>
+        <select class="form-select" id="rq_section" required><option value="">Select section...</option>${rqSecOpts}</select>
+      </div>
+    </div>
+    <div class="schedule-form-inline-row request-room-form-inline-pair">
+      <div class="form-group">
+        <label class="form-label" for="rq_sem">Semester ${req}</label>
+        ${semHtml}
+      </div>
+      <div class="form-group">
+        <label class="form-label" for="rq_subject">Subject ${req}</label>
+        <select class="form-select" id="rq_subject" required><option value="">Select subject...</option>${subOpts}</select>
+      </div>
+    </div>
+    <div class="schedule-form-inline-row request-form-days-set-row request-room-form-inline-pair">
+      <div class="form-group">
+        <span class="form-label">Day(s) ${req}</span>
+        <div class="days-check rq-days-check">${DAYS.map(d => `<input type="checkbox" class="day-checkbox" id="rqday_${d}" value="${d}" ${slot && slot.day === d ? 'checked' : ''}><label class="day-label" for="rqday_${d}">${d.slice(0, 3)}</label>`).join('')}</div>
       </div>
       <div class="form-group">
         <label class="form-label" for="rq_set">Set (optional)</label>
         ${setSelect}
       </div>
     </div>
-    <div class="request-form-readrow">
+    <div class="schedule-form-inline-row request-room-form-inline-pair">
       <div class="form-group">
-        <label class="form-label" for="rq_timeStart">Start time ${req}</label>
-        <select class="form-select" id="rq_timeStart">${ts}</select>
+        <label class="form-label" for="rq_timeStart">Time start ${req}</label>
+        <select class="form-select" id="rq_timeStart" required>${ts}</select>
       </div>
       <div class="form-group">
-        <label class="form-label" for="rq_timeEnd">End time ${req}</label>
-        <select class="form-select" id="rq_timeEnd">${te}</select>
+        <label class="form-label" for="rq_timeEnd">Time end ${req}</label>
+        <select class="form-select" id="rq_timeEnd" required>${te}</select>
       </div>
     </div>
-    <div class="form-group full">
-      <label class="form-label" for="rq_reason">Reason (optional)</label>
-      <select class="form-select" id="rq_reason" aria-label="Reason for room request">
-        <option value="">Select reason </option>
+    <div class="form-group full request-room-form-reason">
+      <label class="form-label" for="rq_reason">Reason ${req}</label>
+      <select class="form-select" id="rq_reason" aria-label="Reason for room request" required>
+        <option value="">Select reason</option>
         ${rqReasonOpts}
       </select>
       <p class="form-hint">Helps the receiving department understand why you need to borrow a room.</p>
@@ -1600,11 +1730,13 @@ function bindPage(){
     render();
   });
   document.getElementById('requestTtRoom')?.addEventListener('change', e => { state.requestTimetableRoom = e.target.value; render(); });
-  if (state.currentUser?.role !== 'admin') {
+    if (state.currentUser?.role !== 'admin') {
     document.querySelectorAll('#requestRoomTimetableArea .timetable-slot-empty').forEach(el => el.addEventListener('click', e => {
       e.stopPropagation();
+      let u = state.currentUser;
       openModal({
         type: 'newRequest',
+        requestToDept: resolveRequestFormToDeptId(u, state.requestTimetableDept),
         requestSlot: {
           day: el.dataset.slotDay,
           timeStart: el.dataset.slotStart,
@@ -1793,10 +1925,18 @@ function bindPage(){
       let timeEnd = document.getElementById('rq_timeEnd')?.value || '';
       let setV = (document.getElementById('rq_set')?.value || '').trim();
       let subId = document.getElementById('rq_subject')?.value || '';
+      let schYear = (document.getElementById('rq_year')?.value || '').trim();
+      let schSem = (document.getElementById('rq_sem')?.value || '').trim();
+      let reasonRq = (document.getElementById('rq_reason')?.value || '').trim();
       let profReq = document.getElementById('rq_professor')?.value || '';
       let profOtherRq = (document.getElementById('rq_professor_other')?.value || '').trim();
-      if (!roomId || !subId || !profReq || !section || !days.length || !timeStart || !timeEnd) {
+      let toDeptPick = document.getElementById('rq_to_dept')?.value || '';
+      if (!toDeptPick || !roomId || !subId || !profReq || !section || !days.length || !timeStart || !timeEnd || !schYear || !schSem || !reasonRq) {
         showFormValidationBanner('rqFormAlert', MSG_FORM_INCOMPLETE);
+        return;
+      }
+      if (room?.dept !== toDeptPick) {
+        showFormValidationBanner('rqFormAlert', 'Selected room must belong to the department you are requesting.');
         return;
       }
       if (profReq === PROFESSOR_OTHER_ID && !profOtherRq) {
@@ -1817,7 +1957,7 @@ function bindPage(){
       let req = {
         id: genId(),
         fromDept: state.currentUser.dept,
-        toDept: room?.dept,
+        toDept: toDeptPick,
         roomId,
         subjectId: subId,
         section,
@@ -1826,12 +1966,33 @@ function bindPage(){
         days,
         timeStart,
         timeEnd,
+        schYear,
+        schSem,
         setLabel: setV || null,
         labLabel: null,
-        reason: (document.getElementById('rq_reason')?.value || '').trim(),
+        reason: reasonRq,
         status: 'pending',
         created: new Date().toISOString().slice(0, 10),
       };
+      if (hasSupabaseClient()) {
+        window.cenSupabase
+          .from('requests')
+          .insert([normalizeRequestToDb(req)])
+          .then(({ error }) => {
+            if (error) {
+              showFormValidationBanner('rqFormAlert', `Supabase error: ${error.message}`);
+              return;
+            }
+            state.requests.push(req);
+            state.modal = null;
+            showToast('Request submitted');
+            render();
+          })
+          .catch((err) => {
+            showFormValidationBanner('rqFormAlert', `Supabase error: ${err?.message || 'Unable to save request.'}`);
+          });
+        return;
+      }
       state.requests.push(req);
       state.modal = null;
       showToast('Request submitted');
@@ -1840,21 +2001,52 @@ function bindPage(){
   });
   document.querySelectorAll('[data-delschedid]').forEach(el=>el.addEventListener('click',()=>{state.schedules=state.schedules.filter(s=>s.id!==el.dataset.delschedid);state.modal=null;showToast('Deleted');render();}));
   document.getElementById('requestRoomTopBtn')?.addEventListener('click', () => {
-    openModal({ type: 'newRequest', ...requestFormBorrowRoomPrefill() });
+    let u = state.currentUser;
+    openModal({
+      type: 'newRequest',
+      requestToDept: resolveRequestFormToDeptId(u, state.requestTimetableDept),
+      ...requestFormBorrowRoomPrefill(),
+    });
   });
-  document.querySelectorAll('[data-approve]').forEach(el=>el.addEventListener('click',()=>{
+  document.getElementById('rq_to_dept')?.addEventListener('change', e => {
+    if (state.modal?.type !== 'newRequest') return;
+    state.modal.requestToDept = e.target.value;
+    state.modal.prefillBorrowRoomId = '';
+    render();
+  });
+  document.querySelectorAll('[data-approve]').forEach(el=>el.addEventListener('click', async ()=>{
     let r=state.requests.find(x=>x.id===el.dataset.approve);
     if (!r) return;
     if (!window.confirm('Are you sure you want to approve this request?')) return;
+    if (hasSupabaseClient()) {
+      const { error } = await window.cenSupabase
+        .from('requests')
+        .update({ status: 'approved' })
+        .eq('id', r.id);
+      if (error) {
+        window.alert(`Unable to approve request in Supabase: ${error.message}`);
+        return;
+      }
+    }
     r.status='approved';
-    state.schedules.push({id:genId(),subjectId:r.subjectId,professorId:r.professorId||null,professorOtherName:r.professorOtherName||null,roomId:r.roomId,dept:r.fromDept,section:r.section,days:r.days,timeStart:r.timeStart,timeEnd:r.timeEnd,color:'orange',setLabel:r.setLabel||null,labLabel:r.labLabel||null,schYear:'1st Year',schSem:'1st Semester'});
+    state.schedules.push({id:genId(),subjectId:r.subjectId,professorId:r.professorId||null,professorOtherName:r.professorOtherName||null,roomId:r.roomId,dept:r.fromDept,section:r.section,days:r.days,timeStart:r.timeStart,timeEnd:r.timeEnd,color:'orange',setLabel:r.setLabel||null,labLabel:r.labLabel||null,schYear:r.schYear||'1st Year',schSem:r.schSem||'1st Semester'});
     window.alert('This request has been approved and added to the timetable.');
     render();
   }));
-  document.querySelectorAll('[data-decline]').forEach(el=>el.addEventListener('click',()=>{
+  document.querySelectorAll('[data-decline]').forEach(el=>el.addEventListener('click', async ()=>{
     let r=state.requests.find(x=>x.id===el.dataset.decline);
     if (!r) return;
     if (!window.confirm('Are you sure you want to decline this request?')) return;
+    if (hasSupabaseClient()) {
+      const { error } = await window.cenSupabase
+        .from('requests')
+        .update({ status: 'declined' })
+        .eq('id', r.id);
+      if (error) {
+        window.alert(`Unable to decline request in Supabase: ${error.message}`);
+        return;
+      }
+    }
     r.status='declined';
     window.alert('This request has been declined.');
     render();
@@ -1938,3 +2130,8 @@ function showFormValidationBanner(containerId, message) {
 initAppTheme();
 state.page = resolveInitialPage();
 render();
+if (sessionStorage.getItem('cen_user')) {
+  syncRequestsFromSupabase().then((ok) => {
+    if (ok) render();
+  });
+}
