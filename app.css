@@ -553,9 +553,9 @@ html[data-theme="dark"] .request-modal-alert {
   letter-spacing: 0.01em;
 }
 .request-room-form-reason {
-  border-top: 1px solid var(--border-ui);
-  padding-top: 22px;
-  margin-top: 2px;
+  border-top: none;
+  padding-top: 0;
+  margin-top: 0;
 }
 .request-room-form .schedule-form-inline-row .professor-field-slot,
 .request-room-form .schedule-form-inline-row .professor-other-row {

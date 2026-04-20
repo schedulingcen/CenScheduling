@@ -1706,6 +1706,7 @@ function renderRequestForm() {
   let timeE = slot?.timeEnd || '';
   let toDeptChoices = requestFormToDepartmentChoices(u);
   let selectedToDeptId = resolveRequestFormToDeptId(u, m?.requestToDept);
+  let selectedReason = (m?.requestReason || '').trim();
   if (m) m.requestToDept = selectedToDeptId;
   let roomsPickAll = roomsFreeForBorrowing(u, daysForRooms, timeS, timeE);
   let roomsPick = selectedToDeptId ? roomsPickAll.filter(r => r.dept === selectedToDeptId) : [];
@@ -1725,7 +1726,12 @@ function renderRequestForm() {
   let defSection = requestFormDefaultSection(u);
   let rqSecOpts = mergeSectionOptions([u.dept]).map(s => `<option value="${escapeHtml(s)}" ${defSection && String(defSection) === s ? 'selected' : ''}>${escapeHtml(s)}</option>`).join('');
   let mySubs = [...state.subjects.filter(s => s.dept === u.dept)].sort((a, b) => a.code.localeCompare(b.code));
-  let myProfs = [...state.professors.filter(p => p.dept === u.dept)].sort((a, b) => a.name.localeCompare(b.name));
+  // Reason logic: "Room Shortage" keeps faculty scoped to requester's department.
+  // Other reasons may scope faculty to the selected receiving department.
+  let facultyDept = selectedReason === REQUEST_ROOM_REASON_CHOICES[0]
+    ? u.dept
+    : (selectedToDeptId || u.dept);
+  let myProfs = [...state.professors.filter(p => p.dept === facultyDept)].sort((a, b) => a.name.localeCompare(b.name));
   let subOpts = mySubs.map(s => `<option value="${escapeHtml(s.id)}">${escapeHtml(s.code)} — ${escapeHtml(s.name)}</option>`).join('');
   let profOpts = myProfs.map(p => `<option value="${escapeHtml(p.id)}">${escapeHtml(p.name)} (${escapeHtml(p.short)})</option>`).join('')
     + `<option value="${PROFESSOR_OTHER_ID}">Others:</option>`;
@@ -1733,12 +1739,20 @@ function renderRequestForm() {
   let te = timeSlots.slice(1).map(t => `<option value="${t}" ${slot && slot.timeEnd === t ? 'selected' : ''}>${fmt12(t)}</option>`).join('');
   let setSelect = `<select class="form-select" id="rq_set"><option value="">— None —</option><option value="Set A">Set A</option><option value="Set B">Set B</option></select>`;
   let rqReasonOpts = REQUEST_ROOM_REASON_CHOICES.map(
-    t => `<option value="${escapeHtml(t)}">${escapeHtml(t)}</option>`
+    t => `<option value="${escapeHtml(t)}" ${selectedReason === t ? 'selected' : ''}>${escapeHtml(t)}</option>`
   ).join('');
   let yearHtml = scheduleYearSelectHtml('rq_year', '', 'required');
   let semHtml = scheduleSemSelectHtml('rq_sem', '', 'required');
   return `<div class="request-room-form schedule-form-wrapper">
     <div id="rqFormAlert"></div>
+    <div class="form-group full request-room-form-reason">
+      <label class="form-label" for="rq_reason">Reason ${req}</label>
+      <select class="form-select" id="rq_reason" aria-label="Reason for room request" required>
+        <option value="">Select reason</option>
+        ${rqReasonOpts}
+      </select>
+      <p class="form-hint">Helps the receiving department understand why you need to borrow a room.</p>
+    </div>
     <div class="schedule-form-inline-row request-room-form-inline-pair" role="group" aria-label="Requesting department and requester">
       <div class="form-group">
         <label class="form-label" for="rq_from_dept_read">Requesting from:</label>
@@ -1813,14 +1827,6 @@ function renderRequestForm() {
         <label class="form-label" for="rq_timeEnd">Time end ${req}</label>
         <select class="form-select" id="rq_timeEnd" required>${te}</select>
       </div>
-    </div>
-    <div class="form-group full request-room-form-reason">
-      <label class="form-label" for="rq_reason">Reason ${req}</label>
-      <select class="form-select" id="rq_reason" aria-label="Reason for room request" required>
-        <option value="">Select reason</option>
-        ${rqReasonOpts}
-      </select>
-      <p class="form-hint">Helps the receiving department understand why you need to borrow a room.</p>
     </div>
   </div>`;
 }
@@ -2243,6 +2249,11 @@ function bindPage(){
     if (state.modal?.type !== 'newRequest') return;
     state.modal.requestToDept = e.target.value;
     state.modal.prefillBorrowRoomId = '';
+    render();
+  });
+  document.getElementById('rq_reason')?.addEventListener('change', e => {
+    if (state.modal?.type !== 'newRequest') return;
+    state.modal.requestReason = e.target.value;
     render();
   });
   document.querySelectorAll('[data-approve]').forEach(el=>el.addEventListener('click', async ()=>{
