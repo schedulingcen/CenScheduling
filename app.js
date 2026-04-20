@@ -303,7 +303,6 @@ function normalizeCurriculumToDb(row) {
     lec_units: Number.isFinite(Number(row.lecUnits)) ? Number(row.lecUnits) : 0,
     lab_units: Number.isFinite(Number(row.labUnits)) ? Number(row.labUnits) : 0,
     units: Number.isFinite(Number(row.units)) ? Number(row.units) : 0,
-    course_name: row.courseName || row.subjectName || '',
     subject_code: row.subjectCode || '',
     section: row.section || '',
   };
