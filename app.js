@@ -449,7 +449,15 @@ async function syncCoreDataFromSupabase() {
 }
 
 // Helpers
-function getSubject(id) { return state.subjects.find(s=>s.id===id); }
+function getSubject(id) {
+  let fromState = state.subjects.find(s=>s.id===id);
+  if (fromState) return fromState;
+  let fromMerged = subjectsSourceForCreateSchedule().find(s => s.id === id);
+  if (fromMerged) return fromMerged;
+  return (typeof SUBJECTS_DATA !== 'undefined' && Array.isArray(SUBJECTS_DATA))
+    ? SUBJECTS_DATA.find(s => s.id === id)
+    : null;
+}
 function getProfessor(id) { return state.professors.find(p=>p.id===id); }
 
 /** Schedule/request uses this id when the user picks "Other" and types a name. */
@@ -636,7 +644,8 @@ function subjectCodesFromRowsForYearSem(rows, year, sem) {
 function subjectsMatchingCurriculumCodes(dept, codeSet) {
   if (!codeSet.size) return [];
   let out = [];
-  for (let s of state.subjects) {
+  let source = subjectsSourceForCreateSchedule();
+  for (let s of source) {
     if (s.dept !== dept) continue;
     let nc = normalizeSubjectCode(s.code);
     for (let cc of codeSet) {
@@ -648,11 +657,26 @@ function subjectsMatchingCurriculumCodes(dept, codeSet) {
   }
   return out.sort((a, b) => a.code.localeCompare(b.code));
 }
+function subjectsSourceForCreateSchedule() {
+  let local = (typeof SUBJECTS_DATA !== 'undefined' && Array.isArray(SUBJECTS_DATA)) ? SUBJECTS_DATA : [];
+  let merged = new Map();
+  for (let s of local) {
+    if (s?.id) merged.set(s.id, s);
+  }
+  for (let s of state.subjects) {
+    if (s?.id) merged.set(s.id, s);
+  }
+  return [...merged.values()];
+}
 function subjectsForCreateScheduleSlot(dept, year, sem) {
+  let source = subjectsSourceForCreateSchedule();
   let rows = curriculumRowsForDept(dept);
   let codes = subjectCodesFromRowsForYearSem(rows, year, sem);
-  if (codes.size) return subjectsMatchingCurriculumCodes(dept, codes);
-  return [...state.subjects.filter(s => s.dept === dept)].sort((a, b) => a.code.localeCompare(b.code));
+  if (codes.size) {
+    let matched = subjectsMatchingCurriculumCodes(dept, codes);
+    if (matched.length) return matched;
+  }
+  return [...source.filter(s => s.dept === dept)].sort((a, b) => a.code.localeCompare(b.code));
 }
 function getCreateScheduleDeptForCascade() {
   let u = state.currentUser;
