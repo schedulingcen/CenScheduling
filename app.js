@@ -94,6 +94,11 @@ function mergeMissingCurriculumRowsInto(arr) {
   }
 }
 
+/** Only department chairs may add, edit, or delete curriculum rows (CEN Dean is view-only on Curriculum). */
+function canUserMutateCurriculum(u) {
+  return !!(u && u.role === 'chairperson');
+}
+
 function curriculumFilterDept(c) {
   let d = c.dept;
   if (d) return d;
@@ -319,12 +324,34 @@ function normalizeCurriculumToDb(row) {
 }
 function normalizeScheduleFromDb(row) {
   if (!row) return null;
+  let pid = row.professor_id;
+  let other = (row.professor_other_name || '').trim();
+  let legacyOther = pid === PROFESSOR_OTHER_ID || pid === '__other__';
+  let appProfId = legacyOther
+    ? PROFESSOR_OTHER_ID
+    : pid != null && pid !== ''
+      ? pid
+      : other
+        ? PROFESSOR_OTHER_ID
+        : null;
+  let rid = row.room_id;
+  let rOther = (row.room_other_name || '').trim();
+  let legacyROther = rid === ROOM_OTHER_ID || rid === '__room_other__';
+  let appRoomId = legacyROther
+    ? ROOM_OTHER_ID
+    : rid != null && rid !== ''
+      ? rid
+      : rOther
+        ? ROOM_OTHER_ID
+        : null;
+  let roomOtherName = appRoomId === ROOM_OTHER_ID ? (rOther || null) : null;
   return {
     id: row.id,
     subjectId: row.subject_id,
-    professorId: row.professor_id,
-    professorOtherName: row.professor_other_name || null,
-    roomId: row.room_id,
+    professorId: appProfId,
+    professorOtherName: appProfId === PROFESSOR_OTHER_ID ? (other || null) : null,
+    roomId: appRoomId,
+    roomOtherName,
     dept: row.dept_id || row.dept,
     section: row.section || '',
     days: Array.isArray(row.days) ? row.days : [],
@@ -338,12 +365,15 @@ function normalizeScheduleFromDb(row) {
   };
 }
 function normalizeScheduleToDb(s) {
+  let useOtherProf = s.professorId === PROFESSOR_OTHER_ID;
+  let useOtherRoom = s.roomId === ROOM_OTHER_ID;
   return {
     id: s.id,
     subject_id: s.subjectId,
-    professor_id: s.professorId || null,
-    professor_other_name: s.professorOtherName || null,
-    room_id: s.roomId,
+    professor_id: useOtherProf ? null : s.professorId || null,
+    professor_other_name: useOtherProf ? (s.professorOtherName && String(s.professorOtherName).trim()) || null : null,
+    room_id: useOtherRoom ? null : s.roomId || null,
+    room_other_name: useOtherRoom ? (s.roomOtherName && String(s.roomOtherName).trim()) || null : null,
     dept_id: s.dept,
     section: s.section,
     days: Array.isArray(s.days) ? s.days : [],
@@ -359,6 +389,16 @@ function normalizeScheduleToDb(s) {
 
 function normalizeRequestFromDb(row) {
   if (!row) return null;
+  let pid = row.professor_id;
+  let other = (row.professor_other_name || '').trim();
+  let legacyOther = pid === PROFESSOR_OTHER_ID || pid === '__other__';
+  let appProfId = legacyOther
+    ? PROFESSOR_OTHER_ID
+    : pid != null && pid !== ''
+      ? pid
+      : other
+        ? PROFESSOR_OTHER_ID
+        : null;
   return {
     id: row.id,
     fromDept: row.from_dept,
@@ -366,8 +406,8 @@ function normalizeRequestFromDb(row) {
     roomId: row.room_id,
     subjectId: row.subject_id,
     section: row.section,
-    professorId: row.professor_id,
-    professorOtherName: row.professor_other_name || null,
+    professorId: appProfId,
+    professorOtherName: appProfId === PROFESSOR_OTHER_ID ? (other || null) : null,
     days: Array.isArray(row.days) ? row.days : [],
     timeStart: row.time_start,
     timeEnd: row.time_end,
@@ -382,6 +422,7 @@ function normalizeRequestFromDb(row) {
 }
 
 function normalizeRequestToDb(req) {
+  let useOther = req.professorId === PROFESSOR_OTHER_ID;
   return {
     id: req.id,
     from_dept: req.fromDept,
@@ -389,8 +430,8 @@ function normalizeRequestToDb(req) {
     room_id: req.roomId,
     subject_id: req.subjectId,
     section: req.section,
-    professor_id: req.professorId,
-    professor_other_name: req.professorOtherName || null,
+    professor_id: useOther ? null : req.professorId || null,
+    professor_other_name: useOther ? (req.professorOtherName && String(req.professorOtherName).trim()) || null : null,
     days: Array.isArray(req.days) ? req.days : [],
     time_start: req.timeStart,
     time_end: req.timeEnd,
@@ -471,6 +512,27 @@ async function syncCoreDataFromSupabase() {
     state.subjects = Array.isArray(subjectsRes.data) ? subjectsRes.data.map(normalizeSubjectFromDb).filter(Boolean) : [];
     state.professors = Array.isArray(professorsRes.data) ? professorsRes.data.map(normalizeProfessorFromDb).filter(Boolean) : [];
     state.curriculum = Array.isArray(curriculumRes.data) ? curriculumRes.data.map(normalizeCurriculumFromDb).filter(Boolean) : [];
+    // Re-upsert bundled `CURRICULUM_DATA` rows missing from DB (accidental deletes).
+    let curriculumIdsFromDb = new Set(state.curriculum.map(c => c.id).filter(Boolean));
+    mergeMissingCurriculumRowsInto(state.curriculum);
+    let bundleBackedIds = new Set();
+    if (typeof CURRICULUM_DATA !== 'undefined' && Array.isArray(CURRICULUM_DATA)) {
+      for (let b of CURRICULUM_DATA) {
+        if (b && b.id) bundleBackedIds.add(b.id);
+      }
+    }
+    let curriculumRepairRows = state.curriculum.filter(c => c && c.id && bundleBackedIds.has(c.id) && !curriculumIdsFromDb.has(c.id));
+    if (curriculumRepairRows.length > 0) {
+      const chunkSize = 150;
+      for (let i = 0; i < curriculumRepairRows.length; i += chunkSize) {
+        let chunk = curriculumRepairRows.slice(i, i + chunkSize).map(normalizeCurriculumToDb);
+        const { error: repairErr } = await window.cenSupabase.from('curriculum').upsert(chunk, { onConflict: 'id' });
+        if (repairErr) {
+          console.warn('Curriculum repair upsert failed (bundle rows missing in DB):', repairErr.message);
+          break;
+        }
+      }
+    }
     state.schedules = Array.isArray(schedulesRes.data) ? schedulesRes.data.map(normalizeScheduleFromDb).filter(Boolean) : [];
     state.requests = Array.isArray(requestsRes.data) ? requestsRes.data.map(normalizeRequestFromDb).filter(Boolean) : [];
     state.rooms = Array.isArray(roomsRes.data) ? roomsRes.data.map(normalizeRoomFromDb).filter(Boolean) : [];
@@ -501,6 +563,48 @@ function roomsSourceForApp() {
 
 /** Schedule/request uses this id when the user picks "Other" and types a name. */
 const PROFESSOR_OTHER_ID = '__other__';
+/** Schedule-only: custom room label; Supabase uses null room_id + room_other_name (not used on room requests). */
+const ROOM_OTHER_ID = '__room_other__';
+
+/** Supabase FK is to `professors.id`; "Others" uses null professor_id + professor_other_name. */
+function isProfessorSelectIdValidForSave(professorIdFromSelect) {
+  if (!professorIdFromSelect) return false;
+  if (professorIdFromSelect === PROFESSOR_OTHER_ID) return true;
+  return !!getProfessor(professorIdFromSelect);
+}
+
+/** Supabase FK is to `rooms.id`; "Others" uses null room_id + room_other_name (schedule forms only). */
+function isRoomSelectIdValidForSave(roomIdFromSelect) {
+  if (!roomIdFromSelect) return false;
+  if (roomIdFromSelect === ROOM_OTHER_ID) return true;
+  return !!getRoom(roomIdFromSelect);
+}
+
+/** When "Others" is selected, map typed text to a catalog room if it matches exactly one name in the list (same dept scope as the form). */
+function resolveScheduleRoomFromForm(roomSel, roomOtherText, candidateRooms) {
+  let otherTxt = (roomOtherText || '').trim();
+  if (roomSel !== ROOM_OTHER_ID) {
+    return { roomId: roomSel || '', roomOtherName: null };
+  }
+  if (!otherTxt || !Array.isArray(candidateRooms) || candidateRooms.length === 0) {
+    return { roomId: ROOM_OTHER_ID, roomOtherName: otherTxt || null };
+  }
+  let norm = otherTxt.toLowerCase();
+  let matches = candidateRooms.filter(r => (r.name || '').trim().toLowerCase() === norm);
+  if (matches.length === 1) {
+    return { roomId: matches[0].id, roomOtherName: null };
+  }
+  return { roomId: ROOM_OTHER_ID, roomOtherName: otherTxt };
+}
+
+function roomDisplayLineFromPick(roomId, roomOtherName) {
+  if (roomId === ROOM_OTHER_ID) {
+    let t = (roomOtherName || '').trim();
+    return t || '—';
+  }
+  let r = getRoom(roomId);
+  return r?.name || '—';
+}
 
 function professorDisplayLineFromPick(professorId, professorOtherName) {
   if (!professorId) return '—';
@@ -569,6 +673,21 @@ function slotEndFromRow(row) {
   return `${Math.floor(total / 60)}:${String(total % 60).padStart(2, '0')}`;
 }
 function timeRangesOverlap(aStart, aEnd, bStart, bEnd) { return aStart < bEnd && aEnd > bStart; }
+function scheduleRoomOccupancyKey(s) {
+  if (!s) return '';
+  if (s.roomId === ROOM_OTHER_ID) {
+    let t = (s.roomOtherName || '').trim().toLowerCase();
+    return t ? `other:${t}` : '';
+  }
+  if (s.roomId != null && s.roomId !== '') return `id:${s.roomId}`;
+  let t = (s.roomOtherName || '').trim().toLowerCase();
+  return t ? `other:${t}` : '';
+}
+function roomsBookSameSpace(a, b) {
+  let ka = scheduleRoomOccupancyKey(a);
+  let kb = scheduleRoomOccupancyKey(b);
+  return ka !== '' && ka === kb;
+}
 function roomSlotOccupied(roomId, day, slotStart, slotEnd) {
   return state.schedules.some(s =>
     s.roomId === roomId &&
@@ -854,10 +973,10 @@ function roomsFreeForBorrowing(u, days, timeStart, timeEnd) {
 function timeToRow(t) { let [h,m]=t.split(':').map(Number); return Math.floor(((h*60+m)-(7*60+30))/30); }
 function timeDuration(s,e) { let [sh,sm]=s.split(':').map(Number), [eh,em]=e.split(':').map(Number); return ((eh*60+em)-(sh*60+sm))/30; }
 function pendingRequestsForUser() {
-  let u=state.currentUser;
-  if(!u) return 0;
-  if(u.role==='admin') return 0;
-  return state.requests.filter(r=>r.toDept===u.dept && r.status==='pending').length;
+  let u = state.currentUser;
+  if (!u) return 0;
+  if (u.role === 'admin') return 0;
+  return state.requests.filter(r => r.toDept === u.dept && r.status === 'pending').length;
 }
 
 function checkConflicts(entry, excludeId=null) {
@@ -871,9 +990,9 @@ function checkConflicts(entry, excludeId=null) {
       let label = professorDisplayLineFromPick(entry.professorId, entry.professorOtherName);
       conflicts.push(`Professor ${label} has class on ${s.days.join('/')} ${fmt12(s.timeStart)}–${fmt12(s.timeEnd)}`);
     }
-    if(s.roomId===entry.roomId){
-      let r=getRoom(entry.roomId);
-      conflicts.push(`Room ${r?.name} booked on ${s.days.join('/')} ${fmt12(s.timeStart)}–${fmt12(s.timeEnd)}`);
+    if (roomsBookSameSpace(s, entry)) {
+      let rn = roomDisplayLineFromPick(entry.roomId, entry.roomOtherName);
+      conflicts.push(`Room ${rn} booked on ${s.days.join('/')} ${fmt12(s.timeStart)}–${fmt12(s.timeEnd)}`);
     }
     if(s.section===entry.section && s.dept===entry.dept){
       conflicts.push(`Section ${entry.section} has class on ${s.days.join('/')}`);
@@ -890,6 +1009,7 @@ function countSchedulesWithConflicts(schedulesToCheck) {
       professorId: s.professorId,
       professorOtherName: s.professorOtherName,
       roomId: s.roomId,
+      roomOtherName: s.roomOtherName,
       dept: s.dept,
       section: s.section,
       days: s.days,
@@ -929,7 +1049,7 @@ function render() {
       <div class="sidebar ${state.sidebarOpen?'open':''}" id="sidebar">${renderSidebar()}</div>
       <div class="overlay ${state.sidebarOpen?'show':''}" id="overlay"></div>
       <div class="main">
-        <div class="topbar"><span class="hamburger" id="hamburger" role="button" tabindex="0" aria-label="Open menu">${icon('menu', 22)}</span><div class="page-title">${getPageTitle()}</div><div class="topbar-actions"><button type="button" class="btn btn-outline btn-sm theme-toggle" id="themeToggleBtn" aria-label="${document.documentElement.dataset.theme === 'dark' ? 'Switch to light mode' : 'Switch to dark mode'}">${document.documentElement.dataset.theme === 'dark' ? icon('sun', 18) : icon('moon', 18)}</button>${state.page==='schedule'&&state.currentUser?.role!=='admin'?`<button class="btn btn-primary btn-sm" id="addSchedBtn">${icon('plus', 16)} Add Schedule</button>`:''}${state.page==='curriculum'&&(state.currentUser?.role==='admin'||state.currentUser?.role==='chairperson')?`<button type="button" class="btn btn-primary btn-sm" id="addCurriculumBtn">${icon('plus', 16)} Add Subject</button>`:''}${state.page==='requests'&&state.currentUser?.role==='chairperson'?`<button class="btn btn-primary btn-sm" id="requestRoomTopBtn">${icon('plus', 16)} Request a Room</button>`:''}</div></div>
+        <div class="topbar"><span class="hamburger" id="hamburger" role="button" tabindex="0" aria-label="Open menu">${icon('menu', 22)}</span><div class="page-title">${getPageTitle()}</div><div class="topbar-actions"><button type="button" class="btn btn-outline btn-sm theme-toggle" id="themeToggleBtn" aria-label="${document.documentElement.dataset.theme === 'dark' ? 'Switch to light mode' : 'Switch to dark mode'}">${document.documentElement.dataset.theme === 'dark' ? icon('sun', 18) : icon('moon', 18)}</button>${state.page==='schedule'&&state.currentUser?.role!=='admin'?`<button class="btn btn-primary btn-sm" id="addSchedBtn">${icon('plus', 16)} Add Schedule</button>`:''}${state.page==='curriculum'&&state.currentUser?.role==='chairperson'?`<button type="button" class="btn btn-primary btn-sm" id="addCurriculumBtn">${icon('plus', 16)} Add Subject</button>`:''}${state.page==='requests'&&state.currentUser?.role==='chairperson'?`<button class="btn btn-primary btn-sm" id="requestRoomTopBtn">${icon('plus', 16)} Request a Room</button>`:''}</div></div>
         <div class="content">${renderPage()}</div>
       </div>
     </div>
@@ -950,10 +1070,10 @@ function renderSidebar() {
   let u = state.currentUser;
   let pendingIn = pendingRequestsForUser();
   let nav = (id, icn, label, extra = '') =>
-    `<a href="${pageHref(id)}" class="nav-item ${state.page === id ? 'active' : ''}" ${id === 'requests' && u?.role === 'chairperson' && pendingIn ? `title="${pendingIn} pending incoming room request(s)"` : ''}><span class="nav-icon">${icon(icn, 18)}</span>${label}${extra}</a>`;
+    `<a href="${pageHref(id)}" class="nav-item ${state.page === id ? 'active' : ''}" ${id === 'requests' && pendingIn && (u?.role === 'chairperson' || u?.role === 'admin') ? `title="${pendingIn} pending room request(s)"` : ''}><span class="nav-icon">${icon(icn, 18)}</span>${label}${extra}</a>`;
   let requestsExtra = '';
-  if (u?.role === 'chairperson' && pendingIn > 0) {
-    requestsExtra = `<span class="badge nav-requests-badge" aria-label="${pendingIn} pending incoming room requests">${pendingIn}</span>`;
+  if ((u?.role === 'chairperson' || u?.role === 'admin') && pendingIn > 0) {
+    requestsExtra = `<span class="badge nav-requests-badge" aria-label="${pendingIn} pending room requests">${pendingIn}</span>`;
   }
   return `
     <a href="${pageHref('dashboard')}" class="sidebar-logo" aria-label="CEN Timetable — Home">
@@ -964,7 +1084,7 @@ function renderSidebar() {
       <div class="nav-section-label">Navigation</div>
       ${nav('dashboard','home','Dashboard')}
       ${nav('schedule','calendar','Schedule')}
-      ${u.role==='chairperson'?nav('requests','refresh','Requests', requestsExtra):''}
+      ${u.role === 'chairperson' || u.role === 'admin' ? nav('requests', 'refresh', 'Requests', requestsExtra) : ''}
       <div class="nav-section-label" style="margin-top:8px">Manage</div>
       ${(u.role==='admin'||u.role==='chairperson')?nav('curriculum','book','Curriculum'):''}
       ${u.role==='admin'?nav('faculty','users','Faculty'):''}
@@ -1004,7 +1124,7 @@ function renderDashboard() {
       <div class="stat-card"><div class="${statIc}">${icon('building', 24)}</div><div><div class="stat-num">${roomCount}</div><div class="stat-label">Available Rooms</div></div></div>
       <div class="stat-card"><div class="${statIc}">${icon('inbox', 24)}</div><div><div class="stat-num">${pendingCount}</div><div class="stat-label">Pending Requests</div></div></div>
     </div>
-    <div class="card"><div class="card-header"><div class="card-title card-title-with-icon">${icon('calendar', 18)} Recent Schedules</div><a href="${pageHref('schedule')}" class="btn btn-outline btn-sm">View All →</a></div><div class="table-wrap"><table><thead><tr><th>Subject</th><th>Section</th><th>Professor</th><th>Room</th><th>Days</th><th>Time</th></tr></thead><tbody>${myScheds.slice(0,5).map(s=>{let sub=getSubject(s.subjectId),room=getRoom(s.roomId);return `<tr><td><strong>${sub?.code}</strong><br><span style="font-size:11px">${sub?.name}</span></td><td>${s.section}</td><td>${escapeHtml(professorDisplayLine(s))}</td><td>${room?.name||'—'}</td><td>${s.days.map(d=>d.slice(0,3)).join(',')}</td><td>${fmt12(s.timeStart)}–${fmt12(s.timeEnd)}</td></tr>`;}).join('')}</tbody></table>${myScheds.length===0?'<div class="empty-state">No schedules yet</div>':''}</div></div>
+    <div class="card"><div class="card-header"><div class="card-title card-title-with-icon">${icon('calendar', 18)} Recent Schedules</div><a href="${pageHref('schedule')}" class="btn btn-outline btn-sm">View All →</a></div><div class="table-wrap"><table><thead><tr><th>Subject</th><th>Section</th><th>Professor</th><th>Room</th><th>Days</th><th>Time</th></tr></thead><tbody>${myScheds.slice(0,5).map(s=>{let sub=getSubject(s.subjectId);return `<tr><td><strong>${sub?.code}</strong><br><span style="font-size:11px">${sub?.name}</span></td><td>${s.section}</td><td>${escapeHtml(professorDisplayLine(s))}</td><td>${escapeHtml(roomDisplayLineFromPick(s.roomId, s.roomOtherName))}</td><td>${s.days.map(d=>d.slice(0,3)).join(',')}</td><td>${fmt12(s.timeStart)}–${fmt12(s.timeEnd)}</td></tr>`;}).join('')}</tbody></table>${myScheds.length===0?'<div class="empty-state">No schedules yet</div>':''}</div></div>
   `;
 }
 
@@ -1086,8 +1206,7 @@ function scheduleGridCellLayout() {
 }
 
 function buildScheduleCellInnerHtml(s, sub, cellLayout) {
-  let room = getRoom(s.roomId);
-  let roomLine = escapeHtml(room?.name || '—');
+  let roomLine = escapeHtml(roomDisplayLineFromPick(s.roomId, s.roomOtherName));
   let subLine = escapeHtml(sub?.code || '—');
   let profLine = escapeHtml(professorDisplayLine(s));
   let sectionLine = escapeHtml(s.section || '—');
@@ -1405,8 +1524,10 @@ function renderRequests() {
   `;
 }
 
-function renderCurriculumForm(d) {
+function renderCurriculumForm(d, opts) {
   d = d || {};
+  opts = opts || {};
+  let readOnly = !!opts.readOnly;
   let lecV = 3;
   let labV = 0;
   if (d.lecUnits != null || d.labUnits != null) {
@@ -1428,17 +1549,21 @@ function renderCurriculumForm(d) {
   let sSel = d.semester && !CURRICULUM_PAGE_SEMS.includes(d.semester) ? `<option value="${escapeHtml(d.semester)}" selected>${escapeHtml(d.semester)}</option>` : '';
   let yearOpts = SCHEDULE_FORM_YEARS.map(y => `<option value="${escapeHtml(y)}" ${d.year === y ? 'selected' : ''}>${escapeHtml(y)}</option>`).join('');
   let semOpts = CURRICULUM_PAGE_SEMS.map(s => `<option value="${escapeHtml(s)}" ${d.semester === s ? 'selected' : ''}>${escapeHtml(s)}</option>`).join('');
+  let dis = readOnly ? 'disabled' : '';
+  let deptDis = readOnly || !isAdminCurr ? 'disabled' : '';
+  let roInp = readOnly ? 'readonly disabled' : '';
   return `<div class="form-grid form-grid-stacked curriculum-modal-form">
-    <div class="form-group full"><label class="form-label" for="cc_dept">Department</label><select class="form-select" id="cc_dept" ${isAdminCurr ? '' : 'disabled'}>${deptOpts}</select></div>
-    <div class="form-grid curriculum-form-year-sem"><div class="form-group"><label class="form-label" for="cc_year">Year</label><select class="form-select" id="cc_year"><option value="">Select year...</option>${yearOpts}${ySel}</select></div><div class="form-group"><label class="form-label" for="cc_semester">Semester</label><select class="form-select" id="cc_semester"><option value="">Select semester...</option>${semOpts}${sSel}</select></div></div>
-    <div class="form-grid curriculum-form-code-subject"><div class="form-group"><label class="form-label" for="cc_courseCode">Course code</label><input class="form-input" id="cc_courseCode" placeholder="e.g. IE 100" value="${escapeHtml(d.courseCode || '')}"></div><div class="form-group"><label class="form-label" for="cc_subject">Subject</label><input class="form-input" id="cc_subject" placeholder="Subject title" value="${escapeHtml(d.subjectName || '')}"></div></div>
-    <div class="form-grid curriculum-form-units"><div class="form-group"><label class="form-label" for="cc_lecUnits">Lec (units)</label><input class="form-input" id="cc_lecUnits" type="number" min="0" max="12" step="1" value="${escapeHtml(String(lecV))}"></div><div class="form-group"><label class="form-label" for="cc_labUnits">Lab (units)</label><input class="form-input" id="cc_labUnits" type="number" min="0" max="12" step="1" value="${escapeHtml(String(labV))}"></div><div class="form-group"><label class="form-label" for="cc_units_total">Total unit/s</label><input class="form-input" id="cc_units_total" type="text" readonly tabindex="-1" value="${escapeHtml(String(totV))}" aria-live="polite"></div></div>
+    <div class="form-group full"><label class="form-label" for="cc_dept">Department</label><select class="form-select" id="cc_dept" ${deptDis}>${deptOpts}</select></div>
+    <div class="form-grid curriculum-form-year-sem"><div class="form-group"><label class="form-label" for="cc_year">Year</label><select class="form-select" id="cc_year" ${dis}><option value="">Select year...</option>${yearOpts}${ySel}</select></div><div class="form-group"><label class="form-label" for="cc_semester">Semester</label><select class="form-select" id="cc_semester" ${dis}><option value="">Select semester...</option>${semOpts}${sSel}</select></div></div>
+    <div class="form-grid curriculum-form-code-subject"><div class="form-group"><label class="form-label" for="cc_courseCode">Course code</label><input class="form-input" id="cc_courseCode" placeholder="e.g. IE 100" value="${escapeHtml(d.courseCode || '')}" ${roInp}></div><div class="form-group"><label class="form-label" for="cc_subject">Subject</label><input class="form-input" id="cc_subject" placeholder="Subject title" value="${escapeHtml(d.subjectName || '')}" ${roInp}></div></div>
+    <div class="form-grid curriculum-form-units"><div class="form-group"><label class="form-label" for="cc_lecUnits">Lec (units)</label><input class="form-input" id="cc_lecUnits" type="number" min="0" max="12" step="1" value="${escapeHtml(String(lecV))}" ${roInp}></div><div class="form-group"><label class="form-label" for="cc_labUnits">Lab (units)</label><input class="form-input" id="cc_labUnits" type="number" min="0" max="12" step="1" value="${escapeHtml(String(labV))}" ${roInp}></div><div class="form-group"><label class="form-label" for="cc_units_total">Total unit/s</label><input class="form-input" id="cc_units_total" type="text" readonly tabindex="-1" value="${escapeHtml(String(totV))}" aria-live="polite"></div></div>
   </div><input type="hidden" id="cc_edit_id" value="${escapeHtml(d.id || '')}">`;
 }
 
 function renderCurriculum() {
   mergeMissingCurriculumRowsInto(state.curriculum);
   let u = state.currentUser;
+  let canMutateCurriculum = canUserMutateCurriculum(u);
   let chairDept = u?.role === 'chairperson' ? u.dept : '';
   if (chairDept) state.curriculumDeptFilter = chairDept;
   let rows = state.curriculum.filter(c => {
@@ -1452,11 +1577,26 @@ function renderCurriculum() {
     : `<select class="filter-select curriculum-filter-select" id="curriculumDeptFilter" aria-label="Department"><option value="all" ${state.curriculumDeptFilter === 'all' ? 'selected' : ''}>All departments</option>${DEPARTMENTS.map(d => `<option value="${d.id}" ${state.curriculumDeptFilter === d.id ? 'selected' : ''}>${escapeHtml(d.name)}</option>`).join('')}</select>`;
   let yearFilter = `<select class="filter-select curriculum-filter-select" id="curriculumYearFilter" aria-label="Year"><option value="all" ${state.curriculumYearFilter === 'all' ? 'selected' : ''}>Year</option>${SCHEDULE_FORM_YEARS.map(y => `<option value="${escapeHtml(y)}" ${state.curriculumYearFilter === y ? 'selected' : ''}>${escapeHtml(y)}</option>`).join('')}</select>`;
   let semFilter = `<select class="filter-select curriculum-filter-select" id="curriculumSemFilter" aria-label="Semester"><option value="all" ${state.curriculumSemFilter === 'all' ? 'selected' : ''}>Semester</option>${CURRICULUM_PAGE_SEMS.map(s => `<option value="${escapeHtml(s)}" ${state.curriculumSemFilter === s ? 'selected' : ''}>${escapeHtml(s)}</option>`).join('')}</select>`;
+  let curriculumSubhead = canMutateCurriculum
+    ? 'Add course and subject entries by department, year, and semester. Filter the list below.'
+    : 'View-only: browse entries by department, year, and semester. Department chairs add and update curriculum rows.';
+  let actionsCol = canMutateCurriculum || u?.role === 'admin' ? '<col class="curriculum-col-actions" />' : '';
+  let actionsTh = canMutateCurriculum
+    ? '<th scope="col" class="curriculum-th-actions" aria-label="Actions"></th>'
+    : u?.role === 'admin'
+      ? '<th scope="col" class="curriculum-th-actions" aria-label="View"></th>'
+      : '';
+  let rowCells = c =>
+    canMutateCurriculum
+      ? `<td class="curriculum-td-actions"><button type="button" class="btn btn-outline btn-sm" data-editcrow="${escapeHtml(c.id)}">Edit</button><button type="button" class="btn btn-danger btn-sm" data-delcrow="${escapeHtml(c.id)}">Delete</button></td>`
+      : u?.role === 'admin'
+        ? `<td class="curriculum-td-actions"><button type="button" class="btn btn-outline btn-sm" data-viewcrow="${escapeHtml(c.id)}">View</button></td>`
+        : '';
   return `
     <div class="page-header curriculum-header">
       <div>
         <h2>Curriculum</h2>
-        <p class="curriculum-subhead">Add course and subject entries by department, year, and semester. Filter the list below.</p>
+        <p class="curriculum-subhead">${curriculumSubhead}</p>
       </div>
     </div>
     <div class="curriculum-panel">
@@ -1474,11 +1614,11 @@ function renderCurriculum() {
             <col class="curriculum-col-lec" />
             <col class="curriculum-col-lab" />
             <col class="curriculum-col-unit-total" />
-            <col class="curriculum-col-actions" />
+            ${actionsCol}
           </colgroup>
-          <thead><tr><th scope="col">Course code</th><th scope="col">Subject</th><th scope="col" class="curriculum-th-num">Lec</th><th scope="col" class="curriculum-th-num">Lab</th><th scope="col" class="curriculum-th-num">Unit/s</th><th scope="col" class="curriculum-th-actions" aria-label="Actions"></th></tr></thead>
+          <thead><tr><th scope="col">Course code</th><th scope="col">Subject</th><th scope="col" class="curriculum-th-num">Lec</th><th scope="col" class="curriculum-th-num">Lab</th><th scope="col" class="curriculum-th-num">Unit/s</th>${actionsTh}</tr></thead>
           <tbody>
-        ${rows.map(c => `<tr><td>${escapeHtml(c.courseCode)}</td><td class="curriculum-td-subj">${escapeHtml(c.subjectName)}</td><td class="curriculum-td-num">${curriculumColLec(c)}</td><td class="curriculum-td-num">${curriculumColLab(c)}</td><td class="curriculum-td-num">${curriculumColTotal(c)}</td><td class="curriculum-td-actions"><button type="button" class="btn btn-outline btn-sm" data-editcrow="${escapeHtml(c.id)}">Edit</button><button type="button" class="btn btn-danger btn-sm" data-delcrow="${escapeHtml(c.id)}">Delete</button></td></tr>`).join('')}
+        ${rows.map(c => `<tr><td>${escapeHtml(c.courseCode)}</td><td class="curriculum-td-subj">${escapeHtml(c.subjectName)}</td><td class="curriculum-td-num">${curriculumColLec(c)}</td><td class="curriculum-td-num">${curriculumColLab(c)}</td><td class="curriculum-td-num">${curriculumColTotal(c)}</td>${rowCells(c)}</tr>`).join('')}
           </tbody>
         </table>
         ${rows.length === 0 ? '<div class="curriculum-empty">No curriculum rows for this filter.</div>' : ''}
@@ -1524,7 +1664,15 @@ function renderModal() {
   }
   if(type==='addSubject') return modalWrap(data?.id?'Edit Subject':'Add Subject',renderSubjectForm(data));
   if(type==='addProfessor') return modalWrap(data?.id?'Edit Professor':'Add Professor',renderProfessorForm(data));
-  if(type==='addCurriculum') return modalWrap(data?.id ? 'Edit Subject' : 'Add Subject', renderCurriculumForm(data));
+  if (type === 'addCurriculum') {
+    let d = data || {};
+    let viewOnly = !canUserMutateCurriculum(state.currentUser);
+    let title = viewOnly ? (d.id ? 'Subject (view only)' : 'Curriculum') : (d.id ? 'Edit Subject' : 'Add Subject');
+    let footer = viewOnly
+      ? `<button type="button" class="btn btn-secondary" id="modalClose2">Close</button>`
+      : `<button type="button" class="btn btn-secondary" id="modalClose2">Cancel</button><button type="button" class="btn btn-primary" id="modalSaveBtn">Save</button>`;
+    return modalWrap(title, renderCurriculumForm(d, { readOnly: viewOnly }), footer, 'modal-curriculum');
+  }
   if (type === 'newRequest') {
     const reqFooter = `<button class="btn btn-secondary" id="modalClose2">Cancel</button><button class="btn btn-primary" id="modalSaveBtn">Submit Request</button>`;
     return modalWrap('Request a room', renderRequestForm(), reqFooter, 'modal-request', 'Borrow a room from another department');
@@ -1634,6 +1782,7 @@ function renderScheduleForm() {
           return rx ? `<option value="${escapeHtml(defRoom)}" selected>${escapeHtml(rx.name)}</option>` : '';
         })()
       : '';
+  roomOpts += `<option value="${ROOM_OTHER_ID}">Others:</option>`;
   let timeStartOpts = timeSlots.slice(0, -1).map(t => `<option value="${t}" ${slot && slot.timeStart === t ? 'selected' : ''}>${fmt12(t)}</option>`).join('');
   let timeEndOpts = timeSlots.slice(1).map(t => `<option value="${t}" ${slot && slot.timeEnd === t ? 'selected' : ''}>${fmt12(t)}</option>`).join('');
   let secChoices = mergeSectionOptions(secDeptIds);
@@ -1685,7 +1834,20 @@ function renderScheduleForm() {
     </div>
     <div class="schedule-form-inline-row">
       <div class="form-group"><span class="form-label">Day(s) ${req}</span><div class="days-check">${DAYS.map(d => `<input type="checkbox" class="day-checkbox" id="day_${d}" value="${d}" ${slot && slot.day === d ? 'checked' : ''}><label class="day-label" for="day_${d}">${d.slice(0, 3)}</label>`).join('')}</div></div>
-      <div class="form-group"><label class="form-label" for="f_room">Room ${req}</label><select class="form-select" id="f_room"><option value="">Select room...</option>${roomOpts}${roomLegacyOpt}</select></div>
+      <div class="form-group room-select-group">
+        <label class="form-label" id="f_room_lb">Room ${req}</label>
+        <div class="professor-field-slot">
+          <div id="f_room_select_wrap">
+            <select class="form-select" id="f_room" aria-labelledby="f_room_lb"><option value="">Select room...</option>${roomOpts}${roomLegacyOpt}</select>
+          </div>
+          <div id="f_room_other_wrap" hidden>
+            <div class="professor-other-row">
+              <input type="text" class="form-input" id="f_room_other" placeholder="Room name or location" autocomplete="off" aria-labelledby="f_room_lb">
+              <button type="button" class="btn btn-outline btn-sm professor-pick-list-btn" id="f_room_list_btn" aria-label="Choose from room list">List</button>
+            </div>
+          </div>
+        </div>
+      </div>
     </div>
     <div class="schedule-form-inline-row">
       <div class="form-group"><label class="form-label" for="f_timeStart">Time start ${req}</label><select class="form-select" id="f_timeStart">${timeStartOpts}</select></div>
@@ -1707,7 +1869,7 @@ function viewScheduleFieldRow(label, controlHtml) {
 function renderViewSchedule(d) {
   let mode = state.modal?.viewScheduleMode || 'view';
   let reqStar = '<span class="label-req" aria-hidden="true">*</span>';
-  let sub = getSubject(d.subjectId), room = getRoom(d.roomId), dept = getDept(d.dept);
+  let sub = getSubject(d.subjectId), dept = getDept(d.dept);
   if (mode === 'view') {
     let daysStr = Array.isArray(d.days) && d.days.length ? d.days.join(', ') : '—';
     let timeStr = `${fmtSlot24(d.timeStart)} – ${fmtSlot24(d.timeEnd)} (${fmt12(d.timeStart)} – ${fmt12(d.timeEnd)})`;
@@ -1728,7 +1890,7 @@ function renderViewSchedule(d) {
       ${viewScheduleFieldRow('Set (optional)', `<div class="vs-readonly">${d.setLabel ? escapeHtml(d.setLabel) : 'None'}</div>`)}
       ${viewScheduleFieldRow('Professor', `<div class="vs-readonly">${escapeHtml(professorDisplayLine(d))}</div>`)}
       ${viewScheduleFieldRow('Day(s)', `<div class="vs-readonly">${escapeHtml(daysStr)}</div>`)}
-      ${viewScheduleFieldRow('Room', `<div class="vs-readonly">${room ? escapeHtml(room.name) : '—'}</div>`)}
+      ${viewScheduleFieldRow('Room', `<div class="vs-readonly">${escapeHtml(roomDisplayLineFromPick(d.roomId, d.roomOtherName))}</div>`)}
       ${viewScheduleFieldRow('Time start', `<div class="vs-readonly">${escapeHtml(fmtSlot24(d.timeStart))}</div>`)}
       ${viewScheduleFieldRow('Time end', `<div class="vs-readonly">${escapeHtml(fmtSlot24(d.timeEnd))}</div>`)}
     </div>`;
@@ -1748,7 +1910,8 @@ function renderViewSchedule(d) {
       : '';
   let profOpts = `<option value="" ${!d.professorId ? 'selected' : ''}>—</option>` + profList.map(p => `<option value="${escapeHtml(p.id)}" ${d.professorId === p.id ? 'selected' : ''}>${escapeHtml(p.name)}</option>`).join('')
     + `<option value="${PROFESSOR_OTHER_ID}" ${d.professorId === PROFESSOR_OTHER_ID ? 'selected' : ''}>Others:</option>`;
-  let roomOpts = roomList.map(r => `<option value="${escapeHtml(r.id)}" ${d.roomId === r.id ? 'selected' : ''}>${escapeHtml(r.name)}</option>`).join('');
+  let roomOpts = roomList.map(r => `<option value="${escapeHtml(r.id)}" ${d.roomId === r.id ? 'selected' : ''}>${escapeHtml(r.name)}</option>`).join('')
+    + `<option value="${ROOM_OTHER_ID}" ${d.roomId === ROOM_OTHER_ID ? 'selected' : ''}>Others:</option>`;
   let secChoices = mergeSectionOptions([listDept]);
   let secOpts = secChoices.map(sec => `<option value="${escapeHtml(sec)}" ${String(d.section) === sec ? 'selected' : ''}>${escapeHtml(sec)}</option>`).join('');
   let secLegacyOpt =
@@ -1780,7 +1943,7 @@ function renderViewSchedule(d) {
     ${viewScheduleFieldRow('Set (optional)', setInput)}
     ${viewScheduleFieldRow('Professor', `<div class="professor-field-slot"><div id="vs_professor_select_wrap" ${d.professorId === PROFESSOR_OTHER_ID ? 'hidden' : ''}><select class="form-select" id="vs_professor" aria-label="Professor"><option value="">Select professor</option>${profOpts}</select></div><div id="vs_professor_other_wrap" ${d.professorId === PROFESSOR_OTHER_ID ? '' : 'hidden'}><div class="professor-other-row"><input type="text" class="form-input" id="vs_professor_other" value="${escapeHtml(d.professorOtherName || '')}" autocomplete="off" aria-label="Professor name when Others is selected"><button type="button" class="btn btn-outline btn-sm professor-pick-list-btn" id="vs_professor_list_btn" aria-label="Choose from faculty list">List</button></div></div></div>`)}
     ${viewScheduleFieldRow('Day(s)', daysHtml)}
-    ${viewScheduleFieldRow('Room', `<select class="form-select" id="vs_room"><option value="">Select room</option>${roomOpts}</select>`)}
+    ${viewScheduleFieldRow('Room', `<div class="professor-field-slot"><div id="vs_room_select_wrap" ${d.roomId === ROOM_OTHER_ID ? 'hidden' : ''}><select class="form-select" id="vs_room" aria-label="Room"><option value="">Select room</option>${roomOpts}</select></div><div id="vs_room_other_wrap" ${d.roomId === ROOM_OTHER_ID ? '' : 'hidden'}><div class="professor-other-row"><input type="text" class="form-input" id="vs_room_other" value="${escapeHtml(d.roomOtherName || '')}" placeholder="Room name or location" autocomplete="off" aria-label="Room when Others is selected"><button type="button" class="btn btn-outline btn-sm professor-pick-list-btn" id="vs_room_list_btn" aria-label="Choose from room list">List</button></div></div></div>`)}
     ${viewScheduleFieldRow('Time start & time end', timeRow)}
   </div>`;
 }
@@ -1943,7 +2106,12 @@ function renderRequestForm() {
 
 // Event binding
 function bindGlobal(){
-  document.getElementById('logoutBtn')?.addEventListener('click',()=>{sessionStorage.clear();state.loggedIn=false;window.location.href='login.html';});
+  document.getElementById('logoutBtn')?.addEventListener('click',()=>{
+    if (!window.confirm(MSG_CONFIRM_LOGOUT)) return;
+    sessionStorage.clear();
+    state.loggedIn = false;
+    window.location.href = 'login.html';
+  });
   document.getElementById('themeToggleBtn')?.addEventListener('click',()=>{toggleAppTheme();render();});
   document.getElementById('hamburger')?.addEventListener('click',()=>{state.sidebarOpen=!state.sidebarOpen;render();});
   document.getElementById('overlay')?.addEventListener('click',()=>{state.sidebarOpen=false;render();});
@@ -1957,6 +2125,15 @@ function bindGlobal(){
 
 function openModal(modalState) {
   state.sidebarOpen = false;
+  if (modalState?.type === 'addCurriculum' && !canUserMutateCurriculum(state.currentUser)) {
+    if (!modalState.data?.id) {
+      showToast('Curriculum is view-only for the dean. Department chairs add or edit rows.');
+      return;
+    }
+    state.modal = { type: 'addCurriculum', data: { ...modalState.data } };
+    render();
+    return;
+  }
   state.modal = modalState;
   render();
 }
@@ -2046,6 +2223,7 @@ function bindPage(){
   document.getElementById('modalSaveBtn')?.addEventListener('click', async ()=>{
     if (!state.modal) return;
     if (isDean && (state.modal.type === 'addSchedule' || state.modal.type === 'viewSchedule')) return;
+    if (state.modal.type === 'addCurriculum' && !canUserMutateCurriculum(state.currentUser)) return;
     let mt = state.modal.type;
     if (mt === 'viewSchedule') {
       if (state.modal.viewScheduleMode !== 'edit') return;
@@ -2057,12 +2235,15 @@ function bindPage(){
       let days = [...document.querySelectorAll('#modalBackdrop [id^="vsday_"]:checked')].map(c => c.value);
       let profId = document.getElementById('vs_professor')?.value || '';
       let profOtherTxt = (document.getElementById('vs_professor_other')?.value || '').trim();
+      let roomSel = document.getElementById('vs_room')?.value || '';
+      let roomOtherTxt = (document.getElementById('vs_room_other')?.value || '').trim();
       let entry = {
         id: draft.id,
         subjectId: document.getElementById('vs_subject')?.value || '',
         professorId: profId === PROFESSOR_OTHER_ID ? PROFESSOR_OTHER_ID : (profId || null),
         professorOtherName: profId === PROFESSOR_OTHER_ID ? profOtherTxt : null,
-        roomId: document.getElementById('vs_room')?.value || '',
+        roomId: roomSel === ROOM_OTHER_ID ? ROOM_OTHER_ID : (roomSel || ''),
+        roomOtherName: roomSel === ROOM_OTHER_ID ? roomOtherTxt : null,
         section: document.getElementById('vs_section')?.value || '',
         days,
         timeStart: document.getElementById('vs_timeStart')?.value || '',
@@ -2074,12 +2255,30 @@ function bindPage(){
         labLabel: state.schedules[idx].labLabel ?? null,
         color: state.schedules[idx].color,
       };
-      if (!entry.subjectId || !profId || !entry.roomId || !entry.section || !days.length || !entry.timeStart || !entry.timeEnd || !entry.schYear || !entry.schSem) {
+      let vsRoomResolveList = [...roomsSourceForApp().filter(r => r.dept === entry.dept)].sort((a, b) =>
+        a.name.localeCompare(b.name),
+      );
+      let vsRoomResolved = resolveScheduleRoomFromForm(roomSel, roomOtherTxt, vsRoomResolveList);
+      entry.roomId = vsRoomResolved.roomId;
+      entry.roomOtherName = vsRoomResolved.roomOtherName;
+      if (!entry.subjectId || !profId || !roomSel || !entry.section || !days.length || !entry.timeStart || !entry.timeEnd || !entry.schYear || !entry.schSem) {
         showFormValidationBanner('vsConflictAlert', MSG_FORM_INCOMPLETE);
         return;
       }
       if (profId === PROFESSOR_OTHER_ID && !profOtherTxt) {
         showFormValidationBanner('vsConflictAlert', 'Enter the professor or instructor name when Others is selected.');
+        return;
+      }
+      if (roomSel === ROOM_OTHER_ID && !roomOtherTxt) {
+        showFormValidationBanner('vsConflictAlert', 'Enter the room or location when Others is selected.');
+        return;
+      }
+      if (!isProfessorSelectIdValidForSave(profId)) {
+        showFormValidationBanner('vsConflictAlert', 'Choose a professor from the list, or pick Others: and type the name.');
+        return;
+      }
+      if (!isRoomSelectIdValidForSave(entry.roomId)) {
+        showFormValidationBanner('vsConflictAlert', 'Choose a room from the list, or pick Others: and type the name.');
         return;
       }
       if (timeToRow(entry.timeEnd) <= timeToRow(entry.timeStart)) {
@@ -2095,8 +2294,8 @@ function bindPage(){
         showFormValidationBanner('vsConflictAlert', 'Choose a subject listed in Curriculum for the selected year and semester.');
         return;
       }
-      if (!window.confirm(MSG_CONFIRM_FIELDS_OK)) return;
-      if (getRoom(entry.roomId)?.type === 'laboratory') entry.color = 'purple';
+      if (!window.confirm(MSG_CONFIRM_SCHEDULE_OR_REQUEST_SAVE)) return;
+      if (entry.roomId !== ROOM_OTHER_ID && getRoom(entry.roomId)?.type === 'laboratory') entry.color = 'purple';
       else entry.color = 'blue';
       let conflicts = checkConflicts(entry, draft.id);
       if (conflicts.length) {
@@ -2135,11 +2334,14 @@ function bindPage(){
       }
       let profSel = document.getElementById('f_professor')?.value || '';
       let profOtherAdd = (document.getElementById('f_professor_other')?.value || '').trim();
+      let roomSel = document.getElementById('f_room')?.value || '';
+      let roomOtherAdd = (document.getElementById('f_room_other')?.value || '').trim();
       let entry = {
         subjectId: fSub.value,
         professorId: profSel === PROFESSOR_OTHER_ID ? PROFESSOR_OTHER_ID : profSel,
         professorOtherName: profSel === PROFESSOR_OTHER_ID ? profOtherAdd : null,
-        roomId: document.getElementById('f_room')?.value,
+        roomId: roomSel === ROOM_OTHER_ID ? ROOM_OTHER_ID : roomSel,
+        roomOtherName: roomSel === ROOM_OTHER_ID ? roomOtherAdd : null,
         section: document.getElementById('f_section')?.value,
         days,
         timeStart: document.getElementById('f_timeStart')?.value,
@@ -2151,7 +2353,13 @@ function bindPage(){
         setLabel: setV || null,
         labLabel: null,
       };
-      if (!entryDept || !entry.subjectId || !profSel || !entry.roomId || !entry.section || !days.length || !entry.timeStart || !entry.timeEnd || !entry.schYear || !entry.schSem) {
+      let roomResolveList = [...roomsSourceForApp().filter(r => r.dept === entryDept)].sort((a, b) =>
+        a.name.localeCompare(b.name),
+      );
+      let roomResolved = resolveScheduleRoomFromForm(roomSel, roomOtherAdd, roomResolveList);
+      entry.roomId = roomResolved.roomId;
+      entry.roomOtherName = roomResolved.roomOtherName;
+      if (!entryDept || !entry.subjectId || !profSel || !roomSel || !entry.section || !days.length || !entry.timeStart || !entry.timeEnd || !entry.schYear || !entry.schSem) {
         showFormValidationBanner('conflictAlert', MSG_FORM_INCOMPLETE);
         return;
       }
@@ -2163,12 +2371,24 @@ function bindPage(){
         showFormValidationBanner('conflictAlert', 'Enter the professor or instructor name when Others is selected.');
         return;
       }
+      if (roomSel === ROOM_OTHER_ID && !roomOtherAdd) {
+        showFormValidationBanner('conflictAlert', 'Enter the room or location when Others is selected.');
+        return;
+      }
+      if (!isProfessorSelectIdValidForSave(profSel)) {
+        showFormValidationBanner('conflictAlert', 'Choose a professor from the list, or pick Others: and type the name.');
+        return;
+      }
+      if (!isRoomSelectIdValidForSave(entry.roomId)) {
+        showFormValidationBanner('conflictAlert', 'Choose a room from the list, or pick Others: and type the name.');
+        return;
+      }
       if (timeToRow(entry.timeEnd) <= timeToRow(entry.timeStart)) {
         showFormValidationBanner('conflictAlert', 'End time must be after start time.');
         return;
       }
-      if (!window.confirm(MSG_CONFIRM_FIELDS_OK)) return;
-      if (getRoom(entry.roomId)?.type === 'laboratory') entry.color = 'purple';
+      if (!window.confirm(MSG_CONFIRM_SCHEDULE_OR_REQUEST_SAVE)) return;
+      if (entry.roomId !== ROOM_OTHER_ID && getRoom(entry.roomId)?.type === 'laboratory') entry.color = 'purple';
       let conflicts = checkConflicts(entry);
       if (conflicts.length) {
         showFormValidationBanner('conflictAlert', conflicts[0]);
@@ -2195,6 +2415,7 @@ function bindPage(){
     if (mt === 'addSubject') {
       let sub = { id: document.getElementById('saveSubjectBtn')?.dataset.editid || genId(), code: document.getElementById('fs_code').value, name: document.getElementById('fs_name').value, dept: document.getElementById('fs_dept').value, units: parseInt(document.getElementById('fs_units').value), active: true };
       if (sub.code && sub.name) {
+        if (!window.confirm(MSG_CONFIRM_SAVE_SUBJECT)) return;
         if (hasSupabaseClient()) {
           const { error } = await window.cenSupabase
             .from('subjects')
@@ -2212,6 +2433,7 @@ function bindPage(){
     if (mt === 'addProfessor') {
       let prof = { id: document.getElementById('saveProfBtn')?.dataset.editid || genId(), name: document.getElementById('fp_name').value, short: document.getElementById('fp_short').value, dept: document.getElementById('fp_dept').value, active: true };
       if (prof.name && prof.short) {
+        if (!window.confirm(MSG_CONFIRM_SAVE_PROFESSOR)) return;
         if (hasSupabaseClient()) {
           const { error } = await window.cenSupabase
             .from('professors')
@@ -2249,6 +2471,7 @@ function bindPage(){
         section: '',
       };
       if (!row.courseCode || !row.subjectName || !row.year || !row.semester || units < 1) return;
+      if (!window.confirm(editId ? MSG_CONFIRM_SAVE_CURRICULUM_EDIT : MSG_CONFIRM_SAVE_CURRICULUM_NEW)) return;
       if (editId) {
         let i = state.curriculum.findIndex(c => c.id === editId);
         if (i >= 0) state.curriculum[i] = { ...state.curriculum[i], ...row, id: editId };
@@ -2316,7 +2539,7 @@ function bindPage(){
           return;
         }
       }
-      if (!window.confirm(MSG_CONFIRM_FIELDS_OK)) return;
+      if (!window.confirm(MSG_CONFIRM_SCHEDULE_OR_REQUEST_SAVE)) return;
       let req = {
         id: genId(),
         fromDept: state.currentUser.dept,
@@ -2364,6 +2587,7 @@ function bindPage(){
   });
   document.querySelectorAll('[data-delschedid]').forEach(el=>el.addEventListener('click', async ()=>{
     if (isDean) return;
+    if (!window.confirm(MSG_CONFIRM_PERM_DELETE_SCHEDULE)) return;
     if (hasSupabaseClient()) {
       const { error } = await window.cenSupabase.from('schedules').delete().eq('id', el.dataset.delschedid);
       if (error) {
@@ -2410,7 +2634,7 @@ function bindPage(){
       }
     }
     r.status='approved';
-    let approvedSched = {id:genId(),subjectId:r.subjectId,professorId:r.professorId||null,professorOtherName:r.professorOtherName||null,roomId:r.roomId,dept:r.fromDept,section:r.section,days:r.days,timeStart:r.timeStart,timeEnd:r.timeEnd,color:'orange',setLabel:r.setLabel||null,labLabel:r.labLabel||null,schYear:r.schYear||'1st Year',schSem:r.schSem||'1st Semester'};
+    let approvedSched = {id:genId(),subjectId:r.subjectId,professorId:r.professorId||null,professorOtherName:r.professorOtherName||null,roomId:r.roomId,roomOtherName:r.roomOtherName||null,dept:r.fromDept,section:r.section,days:r.days,timeStart:r.timeStart,timeEnd:r.timeEnd,color:'orange',setLabel:r.setLabel||null,labLabel:r.labLabel||null,schYear:r.schYear||'1st Year',schSem:r.schSem||'1st Semester'};
     if (hasSupabaseClient()) {
       const { error } = await window.cenSupabase
         .from('schedules')
@@ -2445,8 +2669,18 @@ function bindPage(){
     render();
   }));
   document.getElementById('addCurriculumBtn')?.addEventListener('click',()=>{openModal({type:'addCurriculum',data:{}});});
-  document.querySelectorAll('[data-editcrow]').forEach(el=>el.addEventListener('click',()=>{let c=state.curriculum.find(x=>x.id===el.dataset.editcrow);if(c)openModal({type:'addCurriculum',data:{...c}});}));
+  document.querySelectorAll('[data-editcrow]').forEach(el=>el.addEventListener('click',()=>{
+    if (!canUserMutateCurriculum(state.currentUser)) return;
+    let c = state.curriculum.find(x => x.id === el.dataset.editcrow);
+    if (c) openModal({ type: 'addCurriculum', data: { ...c } });
+  }));
+  document.querySelectorAll('[data-viewcrow]').forEach(el=>el.addEventListener('click',()=>{
+    let c = state.curriculum.find(x => x.id === el.dataset.viewcrow);
+    if (c) openModal({ type: 'addCurriculum', data: { ...c } });
+  }));
   document.querySelectorAll('[data-delcrow]').forEach(el=>el.addEventListener('click', async ()=>{
+    if (!canUserMutateCurriculum(state.currentUser)) return;
+    if (!window.confirm(MSG_CONFIRM_PERM_DELETE_CURRICULUM)) return;
     if (hasSupabaseClient()) {
       const { error } = await window.cenSupabase.from('curriculum').delete().eq('id', el.dataset.delcrow);
       if (error) {
@@ -2476,6 +2710,7 @@ function bindPage(){
   document.getElementById('addProfBtn')?.addEventListener('click',()=>{openModal({type:'addProfessor',data:{}});});
   document.querySelectorAll('[data-editprof]').forEach(el=>el.addEventListener('click',()=>{let p=state.professors.find(x=>x.id===el.dataset.editprof);if(p)openModal({type:'addProfessor',data:{...p}});}));
   document.querySelectorAll('[data-delprof]').forEach(el=>el.addEventListener('click', async ()=>{
+    if (!window.confirm(MSG_CONFIRM_PERM_DELETE_PROFESSOR)) return;
     if (hasSupabaseClient()) {
       const { error } = await window.cenSupabase.from('professors').delete().eq('id', el.dataset.delprof);
       if (error) {
@@ -2520,9 +2755,46 @@ function bindPage(){
     });
     syncFromSelect();
   }
+  /** Schedule create/edit only — not used on room request form. */
+  function bindRoomOtherSwap(prefix) {
+    let sel = document.getElementById(prefix);
+    let selWrap = document.getElementById(prefix + '_select_wrap');
+    let otherWrap = document.getElementById(prefix + '_other_wrap');
+    let otherIn = document.getElementById(prefix + '_other');
+    let listBtn = document.getElementById(prefix + '_list_btn');
+    if (!sel || !selWrap || !otherWrap) return;
+    let lastSelVal = sel.value;
+    function showDropdown(show) {
+      selWrap.hidden = !show;
+      otherWrap.hidden = show;
+      if (!show && otherIn) {
+        otherIn.focus();
+      } else if (show) {
+        sel.focus();
+      }
+    }
+    function syncFromSelect() {
+      showDropdown(sel.value !== ROOM_OTHER_ID);
+    }
+    sel.addEventListener('change', () => {
+      let v = sel.value;
+      if (v === ROOM_OTHER_ID && lastSelVal !== ROOM_OTHER_ID && otherIn) otherIn.value = '';
+      lastSelVal = v;
+      syncFromSelect();
+    });
+    listBtn?.addEventListener('click', () => {
+      sel.value = '';
+      lastSelVal = '';
+      if (otherIn) otherIn.value = '';
+      showDropdown(true);
+    });
+    syncFromSelect();
+  }
   bindProfessorOtherSwap('f_professor');
   bindProfessorOtherSwap('rq_professor');
   bindProfessorOtherSwap('vs_professor');
+  bindRoomOtherSwap('f_room');
+  bindRoomOtherSwap('vs_room');
   function syncRequestFormSectionAndSubject() {
     let deptId = state.currentUser?.dept;
     let year = document.getElementById('rq_year')?.value || '';
@@ -2575,7 +2847,15 @@ function bindPage(){
 function showToast(msg){state.toast=msg;render();setTimeout(()=>{state.toast=null;render();},3000);}
 
 const MSG_FORM_INCOMPLETE = 'Complete all fields before Submitting Request';
-const MSG_CONFIRM_FIELDS_OK = 'Are you sure all fields are correct?';
+const MSG_CONFIRM_SCHEDULE_OR_REQUEST_SAVE = 'Save to the database? Confirm all fields are correct — this will create or update stored records.';
+const MSG_CONFIRM_LOGOUT = 'Log out now? Unsaved changes in open forms will be lost.';
+const MSG_CONFIRM_SAVE_SUBJECT = 'Save this subject to the database? Changes apply for scheduling and requests.';
+const MSG_CONFIRM_SAVE_PROFESSOR = 'Save this professor to the database?';
+const MSG_CONFIRM_SAVE_CURRICULUM_NEW = 'Add this new curriculum row to the database?\n\nClick OK to save, or Cancel to go back without saving.';
+const MSG_CONFIRM_SAVE_CURRICULUM_EDIT = 'Update this curriculum row in the database? Existing values will be replaced.\n\nClick OK to save, or Cancel to go back without saving.';
+const MSG_CONFIRM_PERM_DELETE_SCHEDULE = 'Permanently delete this schedule? This cannot be undone.';
+const MSG_CONFIRM_PERM_DELETE_CURRICULUM = 'Permanently delete this curriculum entry? This cannot be undone.';
+const MSG_CONFIRM_PERM_DELETE_PROFESSOR = 'Permanently delete this professor? This cannot be undone.';
 
 function showFormValidationBanner(containerId, message) {
   let box = document.getElementById(containerId);
