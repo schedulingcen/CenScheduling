@@ -750,6 +750,24 @@ function roomsBookSameSpace(a, b) {
   let kb = scheduleRoomOccupancyKey(b);
   return ka !== '' && ka === kb;
 }
+/** Timetable "By Room": include rows for this room id or any catalog room with the same name (shared physical space across programs). */
+function scheduleMatchesRoomFilter(s, filterRoomId) {
+  if (!s || filterRoomId == null || filterRoomId === '' || filterRoomId === ROOM_OTHER_ID) return false;
+  if (s.roomId === filterRoomId) return true;
+  if (s.roomId === ROOM_OTHER_ID) {
+    let rf = getRoom(filterRoomId);
+    if (!rf?.name) return false;
+    let a = (s.roomOtherName || '').trim().toUpperCase();
+    let b = (rf.name || '').trim().toUpperCase();
+    return a !== '' && a === b;
+  }
+  let rf = getRoom(filterRoomId);
+  if (!rf?.name) return false;
+  let targetName = (rf.name || '').trim().toUpperCase();
+  let sr = getRoom(s.roomId);
+  if (sr?.name && (sr.name || '').trim().toUpperCase() === targetName) return true;
+  return false;
+}
 function roomSlotOccupied(roomId, day, slotStart, slotEnd) {
   return state.schedules.some(s =>
     s.roomId === roomId &&
@@ -1248,9 +1266,12 @@ function normalizeScheduleFilters() {
 function renderSchedulePage() {
   let u = state.currentUser;
   normalizeScheduleFilters();
-  let scheds = u.role === 'admin' ? state.schedules : state.schedules.filter(s => s.dept === u.dept);
+  let scheds =
+    u.role === 'admin' || state.filterMode === 'room'
+      ? state.schedules
+      : state.schedules.filter(s => s.dept === u.dept);
   if (state.filterMode === 'faculty') scheds = scheds.filter(s => s.professorId === state.filterFaculty);
-  else if (state.filterMode === 'room') scheds = scheds.filter(s => s.roomId === state.filterRoom);
+  else if (state.filterMode === 'room') scheds = scheds.filter(s => scheduleMatchesRoomFilter(s, state.filterRoom));
   else if (state.filterMode === 'department' && u.role === 'admin') {
     scheds = scheds.filter(s => s.dept === state.filterDept && s.section === state.filterSection);
   } else if (state.filterMode === 'section' && u.role === 'chairperson') {
@@ -1292,7 +1313,7 @@ function renderSchedulePage() {
       </div>
       ${
         state.filterMode === 'room'
-          ? '<div class="timetable-filter-hint">This view shows only classes assigned to the <strong>selected room</strong>. If the grid looks empty, pick another room (for example MDHP 302) or use <strong>By Dept</strong> to see all sections for a program.</div>'
+          ? '<div class="timetable-filter-hint">Shows <strong>all classes using this room</strong> (every program), including shared spaces that use the same room name. Chairs: this is not limited to your department only. If the grid is still empty, try <strong>By Section</strong> for your own classes.</div>'
           : ''
       }
       <div class="timetable-scroll" id="printArea">${renderTimetableGrid(scheds, { cellLayout: scheduleGridCellLayout() })}</div>

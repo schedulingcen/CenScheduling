@@ -54,6 +54,19 @@
   flex-shrink: 0;
 }
 
+/* Room Requests page: scroll long incoming/outgoing lists inside each card */
+.requests-list {
+  max-height: min(52vh, 520px);
+  overflow-y: auto;
+  overflow-x: hidden;
+  -webkit-overflow-scrolling: touch;
+  scrollbar-gutter: stable;
+  padding-right: 4px;
+}
+.requests-list .request-card:last-child {
+  margin-bottom: 0;
+}
+
 /* Badge Styles */
 .badge-dept {
   display: inline-block;
