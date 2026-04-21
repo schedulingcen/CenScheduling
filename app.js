@@ -678,6 +678,15 @@ function professorDisplayLineFromPick(professorId, professorOtherName) {
   let p = getProfessor(professorId);
   return p?.short || p?.name || '—';
 }
+function professorFullNameDisplayLineFromPick(professorId, professorOtherName) {
+  if (!professorId) return '—';
+  if (professorId === PROFESSOR_OTHER_ID) {
+    let t = (professorOtherName || '').trim();
+    return t || '—';
+  }
+  let p = getProfessor(professorId);
+  return p?.name || p?.short || '—';
+}
 
 function professorDisplayLine(s) {
   return professorDisplayLineFromPick(s.professorId, s.professorOtherName);
@@ -1461,8 +1470,8 @@ function buildScheduleCellInnerHtml(s, sub, cellLayout) {
   let profLine = escapeHtml(professorDisplayLine(s));
   let sectionLine = escapeHtml(s.section || '—');
   let setLine = s.setLabel ? escapeHtml(s.setLabel) : '';
-  let subStyle = 'font-weight: 700; font-size: 11px;';
-  let lineStyle = 'font-size: 10px; color: var(--text-muted);';
+  let subStyle = 'font-weight: 700; font-size: 12px; color: var(--chip-text-primary);';
+  let lineStyle = 'font-size: 11px; color: var(--chip-text-secondary);';
   let parts = [`<div style="${subStyle}">${subLine}</div>`];
   if (cellLayout === 'faculty') {
     parts.push(`<div style="${lineStyle}">${sectionLine}</div>`);
@@ -2247,43 +2256,38 @@ function renderScheduleForm() {
   </div>`;
 }
 
-function viewScheduleFieldRow(label, controlHtml) {
-  return `<div class="vs-field">
-    <div class="vs-label">${escapeHtml(label)}</div>
-    <div class="vs-row-inner vs-row-single">
-      <div class="vs-control-wrap">${controlHtml}</div>
-    </div>
-  </div>`;
-}
-
 /** Schedule details: read-only until "Edit schedule"; draft in state.modal.data. */
 function renderViewSchedule(d) {
   let mode = state.modal?.viewScheduleMode || 'view';
-  let reqStar = '<span class="label-req" aria-hidden="true">*</span>';
   let sub = getSubject(d.subjectId), dept = getDept(d.dept);
   if (mode === 'view') {
     let daysStr = Array.isArray(d.days) && d.days.length ? d.days.join(', ') : '—';
-    let timeStr = `${fmtSlot24(d.timeStart)} – ${fmtSlot24(d.timeEnd)} (${fmt12(d.timeStart)} – ${fmt12(d.timeEnd)})`;
     let subLine = sub ? `${escapeHtml(sub.code)} — ${escapeHtml(sub.name)}` : '—';
     let deptLine = dept
       ? `<div class="vs-dept-readout"><span class="badge-dept ${dept.id}">${escapeHtml(dept.code)}</span> ${escapeHtml(dept.name)}</div>`
       : '—';
-    return `<div class="view-schedule-form view-schedule-readonly">
-      ${viewScheduleFieldRow('Department', `<div class="vs-readonly">${deptLine}</div>`)}
+    return `<div class="schedule-form-wrapper view-schedule-form view-schedule-readonly">
+      <div class="form-group full"><label class="form-label">Department</label><div class="vs-readonly">${deptLine}</div></div>
       <div class="schedule-form-inline-row">
-        <div class="form-group"><span class="form-label">Year</span><div class="vs-readonly">${escapeHtml(d.schYear || '—')}</div></div>
-        <div class="form-group"><span class="form-label">Section</span><div class="vs-readonly">${escapeHtml(d.section || '—')}</div></div>
+        <div class="form-group"><label class="form-label">Year</label><div class="vs-readonly">${escapeHtml(d.schYear || '—')}</div></div>
+        <div class="form-group"><label class="form-label">Section</label><div class="vs-readonly">${escapeHtml(d.section || '—')}</div></div>
       </div>
       <div class="schedule-form-inline-row schedule-form-row-sem-subject">
-        <div class="form-group"><span class="form-label">Semester</span><div class="vs-readonly">${escapeHtml(d.schSem || '—')}</div></div>
-        <div class="form-group"><span class="form-label">Subject</span><div class="vs-readonly">${subLine}</div></div>
+        <div class="form-group"><label class="form-label">Semester</label><div class="vs-readonly">${escapeHtml(d.schSem || '—')}</div></div>
+        <div class="form-group"><label class="form-label">Subject</label><div class="vs-readonly">${subLine}</div></div>
       </div>
-      ${viewScheduleFieldRow('Set (optional)', `<div class="vs-readonly">${d.setLabel ? escapeHtml(d.setLabel) : 'None'}</div>`)}
-      ${viewScheduleFieldRow('Professor', `<div class="vs-readonly">${escapeHtml(professorDisplayLine(d))}</div>`)}
-      ${viewScheduleFieldRow('Day(s)', `<div class="vs-readonly">${escapeHtml(daysStr)}</div>`)}
-      ${viewScheduleFieldRow('Room', `<div class="vs-readonly">${escapeHtml(roomDisplayLineFromPick(d.roomId, d.roomOtherName))}</div>`)}
-      ${viewScheduleFieldRow('Time start', `<div class="vs-readonly">${escapeHtml(fmtSlot24(d.timeStart))}</div>`)}
-      ${viewScheduleFieldRow('Time end', `<div class="vs-readonly">${escapeHtml(fmtSlot24(d.timeEnd))}</div>`)}
+      <div class="schedule-form-inline-row">
+        <div class="form-group"><label class="form-label">Set (optional)</label><div class="vs-readonly">${d.setLabel ? escapeHtml(d.setLabel) : 'None'}</div></div>
+        <div class="form-group"><label class="form-label">Professor</label><div class="vs-readonly">${escapeHtml(professorFullNameDisplayLineFromPick(d.professorId, d.professorOtherName))}</div></div>
+      </div>
+      <div class="schedule-form-inline-row">
+        <div class="form-group"><label class="form-label">Day(s)</label><div class="vs-readonly">${escapeHtml(daysStr)}</div></div>
+        <div class="form-group"><label class="form-label">Room</label><div class="vs-readonly">${escapeHtml(roomDisplayLineFromPick(d.roomId, d.roomOtherName))}</div></div>
+      </div>
+      <div class="schedule-form-inline-row">
+        <div class="form-group"><label class="form-label">Time start</label><div class="vs-readonly">${escapeHtml(fmtSlot24(d.timeStart))}</div></div>
+        <div class="form-group"><label class="form-label">Time end</label><div class="vs-readonly">${escapeHtml(fmtSlot24(d.timeEnd))}</div></div>
+      </div>
     </div>`;
   }
   let listDept = d.dept;
@@ -2314,15 +2318,14 @@ function renderViewSchedule(d) {
   let timeEndOpts = timeSlots.slice(1).map(t => `<option value="${t}" ${d.timeEnd === t ? 'selected' : ''}>${fmt12(t)}</option>`).join('');
   let setInput = setABSelectHtml('vs_set', d.setLabel || '');
   let daysHtml = `<div class="days-check vs-days-check">${DAYS.map(day => `<input type="checkbox" class="day-checkbox" id="vsday_${day}" value="${day}" ${Array.isArray(d.days) && d.days.includes(day) ? 'checked' : ''}><label class="day-label" for="vsday_${day}">${day.slice(0, 3)}</label>`).join('')}</div>`;
-  let timeRow = `<div class="vs-time-pair"><select class="form-select" id="vs_timeStart">${timeStartOpts}</select><select class="form-select" id="vs_timeEnd">${timeEndOpts}</select></div>`;
   let deptControl = isAdmin
     ? `<select class="form-select" id="vs_dept">${deptOpts}</select>`
     : `<div class="vs-dept-readout">${dept ? `<span class="badge-dept ${dept.id}">${escapeHtml(dept.code)}</span> ${escapeHtml(dept.name)}` : '—'}</div><input type="hidden" id="vs_dept" value="${escapeHtml(d.dept)}">`;
   let vsSectionSelect = `<select class="form-select" id="vs_section"><option value="">Select section...</option>${secOpts}${secLegacyOpt}</select>`;
   let vsSubjectSelect = `<select class="form-select" id="vs_subject"><option value="">Select subject</option>${subOpts}${subLegacyOpt}</select>`;
   return `<div id="vsConflictAlert"></div>
-  <div class="view-schedule-form">
-    ${viewScheduleFieldRow('Department', deptControl)}
+  <div class="schedule-form-wrapper view-schedule-form">
+    <div class="form-group full"><label class="form-label" for="vs_dept">Department</label>${deptControl}</div>
     <div class="schedule-form-inline-row">
       <div class="form-group"><label class="form-label" for="vs_year">Year</label>${scheduleYearSelectHtml('vs_year', d.schYear || '')}</div>
       <div class="form-group"><label class="form-label" for="vs_section">Section</label>${vsSectionSelect}</div>
@@ -2331,11 +2334,18 @@ function renderViewSchedule(d) {
       <div class="form-group"><label class="form-label" for="vs_sem">Semester</label>${scheduleSemSelectHtml('vs_sem', d.schSem || '')}</div>
       <div class="form-group"><label class="form-label" for="vs_subject">Subject</label>${vsSubjectSelect}</div>
     </div>
-    ${viewScheduleFieldRow('Set (optional)', setInput)}
-    ${viewScheduleFieldRow('Professor', `<div class="professor-field-slot"><div id="vs_professor_select_wrap" ${d.professorId === PROFESSOR_OTHER_ID ? 'hidden' : ''}><select class="form-select" id="vs_professor" aria-label="Professor"><option value="">Select professor</option>${profOpts}</select></div><div id="vs_professor_other_wrap" ${d.professorId === PROFESSOR_OTHER_ID ? '' : 'hidden'}><div class="professor-other-row"><input type="text" class="form-input" id="vs_professor_other" value="${escapeHtml(d.professorOtherName || '')}" autocomplete="off" aria-label="Professor name when Others is selected"><button type="button" class="btn btn-outline btn-sm professor-pick-list-btn" id="vs_professor_list_btn" aria-label="Choose from faculty list">List</button></div></div></div>`)}
-    ${viewScheduleFieldRow('Day(s)', daysHtml)}
-    ${viewScheduleFieldRow('Room', `<div class="professor-field-slot"><div id="vs_room_select_wrap" ${d.roomId === ROOM_OTHER_ID ? 'hidden' : ''}><select class="form-select" id="vs_room" aria-label="Room"><option value="">Select room</option>${roomOpts}</select></div><div id="vs_room_other_wrap" ${d.roomId === ROOM_OTHER_ID ? '' : 'hidden'}><div class="professor-other-row"><input type="text" class="form-input" id="vs_room_other" value="${escapeHtml(d.roomOtherName || '')}" placeholder="Room name or location" autocomplete="off" aria-label="Room when Others is selected"><button type="button" class="btn btn-outline btn-sm professor-pick-list-btn" id="vs_room_list_btn" aria-label="Choose from room list">List</button></div></div></div>`)}
-    ${viewScheduleFieldRow('Time start & time end', timeRow)}
+    <div class="schedule-form-inline-row">
+      <div class="form-group"><label class="form-label" for="vs_set">Set (optional)</label>${setInput}</div>
+      <div class="form-group"><label class="form-label" for="vs_professor">Professor</label><div class="professor-field-slot"><div id="vs_professor_select_wrap" ${d.professorId === PROFESSOR_OTHER_ID ? 'hidden' : ''}><select class="form-select" id="vs_professor" aria-label="Professor"><option value="">Select professor</option>${profOpts}</select></div><div id="vs_professor_other_wrap" ${d.professorId === PROFESSOR_OTHER_ID ? '' : 'hidden'}><div class="professor-other-row"><input type="text" class="form-input" id="vs_professor_other" value="${escapeHtml(d.professorOtherName || '')}" autocomplete="off" aria-label="Professor name when Others is selected"><button type="button" class="btn btn-outline btn-sm professor-pick-list-btn" id="vs_professor_list_btn" aria-label="Choose from faculty list">List</button></div></div></div></div>
+    </div>
+    <div class="schedule-form-inline-row">
+      <div class="form-group"><span class="form-label">Day(s)</span>${daysHtml}</div>
+      <div class="form-group"><label class="form-label" for="vs_room">Room</label><div class="professor-field-slot"><div id="vs_room_select_wrap" ${d.roomId === ROOM_OTHER_ID ? 'hidden' : ''}><select class="form-select" id="vs_room" aria-label="Room"><option value="">Select room</option>${roomOpts}</select></div><div id="vs_room_other_wrap" ${d.roomId === ROOM_OTHER_ID ? '' : 'hidden'}><div class="professor-other-row"><input type="text" class="form-input" id="vs_room_other" value="${escapeHtml(d.roomOtherName || '')}" placeholder="Room name or location" autocomplete="off" aria-label="Room when Others is selected"><button type="button" class="btn btn-outline btn-sm professor-pick-list-btn" id="vs_room_list_btn" aria-label="Choose from room list">List</button></div></div></div></div>
+    </div>
+    <div class="schedule-form-inline-row">
+      <div class="form-group"><label class="form-label" for="vs_timeStart">Time start</label><select class="form-select" id="vs_timeStart">${timeStartOpts}</select></div>
+      <div class="form-group"><label class="form-label" for="vs_timeEnd">Time end</label><select class="form-select" id="vs_timeEnd">${timeEndOpts}</select></div>
+    </div>
   </div>`;
 }
 
