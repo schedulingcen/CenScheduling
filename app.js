@@ -290,6 +290,21 @@ function normalizeRoomFromDb(row) {
     dept: row.dept_id || row.dept || '',
   };
 }
+function normalizeRoomToDb(room) {
+  return {
+    id: room.id,
+    name: room.name,
+    type: room.type || 'classroom',
+    dept_id: room.dept,
+  };
+}
+/** Removed from CPE program lists; omit from UI/sync even if a legacy row remains in Supabase. */
+function isRetiredCpeDrawingRoom(r) {
+  if (!r) return false;
+  if (r.id === 'cpe_draw_rm') return true;
+  if ((r.dept || '') !== 'cpe') return false;
+  return (r.name || '').trim().toUpperCase() === 'DRAWING ROOM';
+}
 function normalizeCurriculumFromDb(row) {
   if (!row) return null;
   return {
@@ -535,7 +550,33 @@ async function syncCoreDataFromSupabase() {
     }
     state.schedules = Array.isArray(schedulesRes.data) ? schedulesRes.data.map(normalizeScheduleFromDb).filter(Boolean) : [];
     state.requests = Array.isArray(requestsRes.data) ? requestsRes.data.map(normalizeRequestFromDb).filter(Boolean) : [];
-    state.rooms = Array.isArray(roomsRes.data) ? roomsRes.data.map(normalizeRoomFromDb).filter(Boolean) : [];
+    state.rooms = Array.isArray(roomsRes.data)
+      ? roomsRes.data.map(normalizeRoomFromDb).filter(Boolean).filter(r => !isRetiredCpeDrawingRoom(r))
+      : [];
+    // Re-upsert bundled `ROOMS` rows missing from DB (rooms table incomplete vs. chair dropdown list in data.js).
+    let dbRoomIds = new Set(state.rooms.map(r => r.id).filter(Boolean));
+    let bundleRooms = typeof ROOMS !== 'undefined' && Array.isArray(ROOMS) ? ROOMS : [];
+    let roomsToRepair = bundleRooms.filter(br => br && br.id && !dbRoomIds.has(br.id));
+    if (roomsToRepair.length > 0) {
+      const { error: roomRepairErr } = await window.cenSupabase
+        .from('rooms')
+        .upsert(roomsToRepair.map(normalizeRoomToDb), { onConflict: 'id' });
+      if (roomRepairErr) {
+        console.warn('Rooms repair upsert failed (bundle rooms missing in DB):', roomRepairErr.message);
+      } else {
+        state.rooms = state.rooms
+          .concat(
+            roomsToRepair.map(r => ({
+              id: r.id,
+              name: r.name,
+              type: r.type || 'classroom',
+              dept: r.dept,
+            })),
+          )
+          .filter(r => !isRetiredCpeDrawingRoom(r))
+          .sort((a, b) => (a.name || '').localeCompare(b.name || ''));
+      }
+    }
     return true;
   } catch (err) {
     console.warn('Supabase core sync crashed:', err);
@@ -554,11 +595,32 @@ function getSubject(id) {
     : null;
 }
 function getProfessor(id) { return state.professors.find(p=>p.id===id); }
+/** Rooms for dropdowns and filters: Supabase rows plus any bundled `ROOMS` ids not in the DB (stale/partial `rooms` table). */
 function roomsSourceForApp() {
-  if (hasSupabaseClient()) {
-    return Array.isArray(state.rooms) ? state.rooms : [];
+  let bundle = typeof ROOMS !== 'undefined' && Array.isArray(ROOMS) ? ROOMS : [];
+  let dropRetired = arr => (Array.isArray(arr) ? arr.filter(r => !isRetiredCpeDrawingRoom(r)) : []);
+  if (!hasSupabaseClient()) {
+    return dropRetired(bundle);
   }
-  return ROOMS;
+  let fromDb = Array.isArray(state.rooms) ? state.rooms : [];
+  if (fromDb.length === 0) {
+    return dropRetired(bundle);
+  }
+  let ids = new Set(fromDb.map(r => r.id).filter(Boolean));
+  let extra = [];
+  for (let b of bundle) {
+    if (b && b.id && !ids.has(b.id)) {
+      extra.push({
+        id: b.id,
+        name: b.name,
+        type: b.type || 'classroom',
+        dept: b.dept,
+      });
+      ids.add(b.id);
+    }
+  }
+  let merged = extra.length ? fromDb.concat(extra) : fromDb;
+  return dropRetired(merged);
 }
 
 /** Schedule/request uses this id when the user picks "Other" and types a name. */
@@ -762,6 +824,30 @@ function scheduleSemSelectHtml(id, selected, extraAttrs = '') {
 function normalizeSubjectCode(s) {
   return (s || '').toString().replace(/\s+/g, '').toUpperCase();
 }
+
+/** Same course, different naming between curriculum sheet and `subjects` table (common for CPE orientation, NST, PE). */
+const SUBJECT_CODE_EQUIV_COMMON = [
+  ['NST01', 'NSTP1', 'NST1'],
+  ['PEO01', 'PE001', 'PEO1'],
+];
+const SUBJECT_CODE_EQUIV_BY_DEPT = {
+  cpe: [['CPE01', 'COE01']],
+};
+function subjectCodeEquivalenceSetsForDept(dept) {
+  let sets = SUBJECT_CODE_EQUIV_COMMON.map(g => [...g]);
+  let extra = SUBJECT_CODE_EQUIV_BY_DEPT[dept];
+  if (extra) for (let g of extra) sets.push([...g]);
+  return sets;
+}
+/** All normalized codes that should match a curriculum or subject code within `dept`. */
+function expandNormalizedCodesForDept(dept, normCode) {
+  let expanded = new Set([normCode]);
+  for (let g of subjectCodeEquivalenceSetsForDept(dept)) {
+    let gn = g.map(normalizeSubjectCode);
+    if (gn.some(x => x === normCode)) for (let x of gn) expanded.add(x);
+  }
+  return expanded;
+}
 function curriculumCodeFromRow(r) {
   let sc = (r.subjectCode || '').toString().replace(/\s+/g, '').trim();
   if (sc) return sc;
@@ -808,38 +894,6 @@ function semsForDeptYear(deptKey, year) {
   if (forYear.length) return distinctSemsFromRows(forYear);
   return [...CURRICULUM_FORM_SEMS];
 }
-function subjectCodesFromRowsForYearSem(rows, year, sem) {
-  let codes = new Set();
-  for (let r of rows) {
-    if ((r.year || '').trim() !== year) continue;
-    if ((r.semester || '').trim() !== sem) continue;
-    let c = curriculumCodeFromRow(r);
-    if (c) codes.add(c);
-  }
-  return codes;
-}
-function subjectsMatchingCurriculumCodes(dept, codeSet) {
-  if (!codeSet.size) return [];
-  let out = [];
-  let seen = new Set();
-  let source = subjectsSourceForCreateSchedule();
-  for (let s of source) {
-    if (s.dept !== dept) continue;
-    let nc = normalizeSubjectCode(s.code);
-    for (let cc of codeSet) {
-      if (normalizeSubjectCode(cc) === nc) {
-        // Keep one option per subject code for curriculum-based picklists.
-        let dedupeKey = nc;
-        if (!seen.has(dedupeKey)) {
-          seen.add(dedupeKey);
-          out.push(s);
-        }
-        break;
-      }
-    }
-  }
-  return out.sort((a, b) => a.code.localeCompare(b.code));
-}
 function subjectsSourceForCreateSchedule() {
   // When Supabase is active, only use DB-backed subjects so FK checks pass.
   if (hasSupabaseClient()) {
@@ -850,9 +904,29 @@ function subjectsSourceForCreateSchedule() {
 }
 function subjectsForCreateScheduleSlot(dept, year, sem) {
   let rows = curriculumRowsForDept(dept);
-  let codes = subjectCodesFromRowsForYearSem(rows, year, sem);
-  if (!codes.size) return [];
-  return subjectsMatchingCurriculumCodes(dept, codes);
+  let forSlot = rows.filter(r => (r.year || '').trim() === year && (r.semester || '').trim() === sem);
+  if (!forSlot.length) return [];
+  let source = subjectsSourceForCreateSchedule();
+  function findSubjectForCurriculumCode(cc) {
+    if (!cc) return null;
+    let expanded = expandNormalizedCodesForDept(dept, normalizeSubjectCode(cc));
+    for (let s of source) {
+      if (s.dept !== dept) continue;
+      if (expanded.has(normalizeSubjectCode(s.code))) return s;
+    }
+    return null;
+  }
+  let out = [];
+  let seenId = new Set();
+  for (let r of forSlot) {
+    let c = curriculumCodeFromRow(r);
+    let sub = findSubjectForCurriculumCode(c);
+    if (sub && !seenId.has(sub.id)) {
+      seenId.add(sub.id);
+      out.push(sub);
+    }
+  }
+  return out;
 }
 function subjectAllowedByCurriculum(dept, year, sem, subjectId) {
   if (!dept || !year || !sem || !subjectId) return false;
@@ -1136,13 +1210,27 @@ function normalizeScheduleFilters() {
   if (u.role !== 'admin') state.filterDept = u.dept;
   else if (state.filterDept === 'all' || !deptIds.includes(state.filterDept)) state.filterDept = deptIds[0];
 
-  let roomsScope = u.role === 'admin' ? ROOMS : ROOMS.filter(r => r.dept === u.dept);
+  let roomsSource = roomsSourceForApp();
+
+  /** Admin By Room: rooms for selected program only. Otherwise all rooms (admin) or chair dept. */
+  let roomsScope =
+    u.role === 'admin' && state.filterMode === 'room'
+      ? roomsSource.filter(r => r.dept === state.filterDept)
+      : u.role === 'admin'
+        ? roomsSource
+        : roomsSource.filter(r => r.dept === u.dept);
   let roomScopeIds = roomsScope.map(r => r.id);
   if (state.filterRoom === 'all' || state.filterRoom === '' || !roomScopeIds.includes(state.filterRoom)) {
     state.filterRoom = roomScopeIds[0] || state.filterRoom;
   }
 
-  let profScope = u.role === 'admin' ? state.professors : state.professors.filter(p => p.dept === u.dept);
+  /** Admin By Faculty: faculty for selected program only. Otherwise all professors (admin) or chair dept. */
+  let profScope =
+    u.role === 'admin' && state.filterMode === 'faculty'
+      ? state.professors.filter(p => p.dept === state.filterDept)
+      : u.role === 'admin'
+        ? state.professors
+        : state.professors.filter(p => p.dept === u.dept);
   let profScopeIds = profScope.map(p => p.id);
   if (state.filterFaculty === 'all' || state.filterFaculty === '' || !profScopeIds.includes(state.filterFaculty)) {
     state.filterFaculty = profScopeIds[0] || state.filterFaculty;
@@ -1173,10 +1261,14 @@ function renderSchedulePage() {
     : [u.dept];
   let sections = mergeSectionOptions(sectionScope);
   let isChair = u.role === 'chairperson';
-  let deptOptions = u.role === 'admin' ? DEPARTMENTS : DEPARTMENTS.filter(d => d.id === u.dept);
-  let profOptions = (u.role === 'admin' ? state.professors : state.professors.filter(p => p.dept === u.dept)).slice().sort((a, b) => a.name.localeCompare(b.name));
-  let roomOptions = (u.role === 'admin' ? ROOMS : ROOMS.filter(r => r.dept === u.dept)).slice().sort((a, b) => a.name.localeCompare(b.name));
-  let deptSelectHtml = `<select class="filter-select" id="filterDept" aria-label="Department">${deptOptions.map(d => `<option value="${d.id}" ${state.filterDept === d.id ? 'selected' : ''}>${escapeHtml(d.code)} — ${escapeHtml(d.name)}</option>`).join('')}</select>`;
+  let isAdmin = u.role === 'admin';
+  let deptOptions = isAdmin ? DEPARTMENTS : DEPARTMENTS.filter(d => d.id === u.dept);
+  let profOptions = (isAdmin ? state.professors : state.professors.filter(p => p.dept === u.dept)).slice().sort((a, b) => a.name.localeCompare(b.name));
+  let profOptionsForToolbar = isAdmin && state.filterMode === 'faculty' ? profOptions.filter(p => p.dept === state.filterDept) : profOptions;
+  let roomsSrc = roomsSourceForApp();
+  let roomOptions = (isAdmin ? roomsSrc : roomsSrc.filter(r => r.dept === u.dept)).slice().sort((a, b) => a.name.localeCompare(b.name));
+  let roomOptionsForToolbar = isAdmin && state.filterMode === 'room' ? roomOptions.filter(r => r.dept === state.filterDept) : roomOptions;
+  let deptSelectHtml = `<select class="filter-select" id="filterDept" aria-label="Program">${deptOptions.map(d => `<option value="${d.id}" ${state.filterDept === d.id ? 'selected' : ''}>${escapeHtml(d.code)} — ${escapeHtml(d.name)}</option>`).join('')}</select>`;
   let sectionSelectHtml = `<select class="filter-select" id="filterSection" aria-label="Section">${sections.map(s => `<option value="${escapeHtml(s)}" ${state.filterSection === s ? 'selected' : ''}>${escapeHtml(s)}</option>`).join('')}</select>`;
   let filterTabs = isChair
     ? `<div class="filter-tabs"><div class="filter-tab ${state.filterMode === 'section' ? 'active' : ''}" data-filter="section">By Section</div><div class="filter-tab ${state.filterMode === 'faculty' ? 'active' : ''}" data-filter="faculty">By Faculty</div><div class="filter-tab ${state.filterMode === 'room' ? 'active' : ''}" data-filter="room">By Room</div></div>`
@@ -1184,8 +1276,13 @@ function renderSchedulePage() {
   let filtersRow = '';
   if (!isChair && state.filterMode === 'department') filtersRow = `${deptSelectHtml}${sectionSelectHtml}`;
   else if (isChair && state.filterMode === 'section') filtersRow = sectionSelectHtml;
-  else if (state.filterMode === 'faculty') filtersRow = `<select class="filter-select" id="filterFaculty" aria-label="Faculty">${profOptions.map(p => `<option value="${escapeHtml(p.id)}" ${state.filterFaculty === p.id ? 'selected' : ''}>${escapeHtml(p.name)} (${escapeHtml(getDept(p.dept)?.code || '')})</option>`).join('')}</select>`;
-  else if (state.filterMode === 'room') filtersRow = `<select class="filter-select" id="filterRoom" aria-label="Room">${roomOptions.map(r => `<option value="${escapeHtml(r.id)}" ${state.filterRoom === r.id ? 'selected' : ''}>${escapeHtml(r.name)} (${escapeHtml(getDept(r.dept)?.code || '')})</option>`).join('')}</select>`;
+  else if (state.filterMode === 'faculty') {
+    let facSelect = `<select class="filter-select" id="filterFaculty" aria-label="Faculty">${profOptionsForToolbar.map(p => `<option value="${escapeHtml(p.id)}" ${state.filterFaculty === p.id ? 'selected' : ''}>${escapeHtml(p.name)}${isAdmin ? '' : ` (${escapeHtml(getDept(p.dept)?.code || '')})`}</option>`).join('')}</select>`;
+    filtersRow = isAdmin ? `${deptSelectHtml}${facSelect}` : facSelect;
+  } else if (state.filterMode === 'room') {
+    let roomSelect = `<select class="filter-select" id="filterRoom" aria-label="Room">${roomOptionsForToolbar.map(r => `<option value="${escapeHtml(r.id)}" ${state.filterRoom === r.id ? 'selected' : ''}>${escapeHtml(r.name)}${isAdmin ? '' : ` (${escapeHtml(getDept(r.dept)?.code || '')})`}</option>`).join('')}</select>`;
+    filtersRow = isAdmin ? `${deptSelectHtml}${roomSelect}` : roomSelect;
+  }
   return `
     <div class="timetable-wrap">
       <div class="timetable-toolbar">
@@ -1193,6 +1290,11 @@ function renderSchedulePage() {
         ${filtersRow}
         <div style="margin-left:auto"><button class="btn btn-outline btn-sm" id="printBtn">${icon('printer', 16)} Print</button></div>
       </div>
+      ${
+        state.filterMode === 'room'
+          ? '<div class="timetable-filter-hint">This view shows only classes assigned to the <strong>selected room</strong>. If the grid looks empty, pick another room (for example MDHP 302) or use <strong>By Dept</strong> to see all sections for a program.</div>'
+          : ''
+      }
       <div class="timetable-scroll" id="printArea">${renderTimetableGrid(scheds, { cellLayout: scheduleGridCellLayout() })}</div>
     </div>
   `;

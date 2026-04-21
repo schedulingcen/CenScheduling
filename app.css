@@ -360,6 +360,14 @@ html[data-theme="dark"] .btn-secondary { background: #2a2a38; color: var(--text-
 /* overflow:visible so toolbar <select> OS dropdowns are not clipped (was overflow:hidden). */
 .timetable-wrap { background: var(--surface); border-radius: 12px; border: 1px solid var(--border-ui); overflow: visible; }
 .timetable-toolbar { position: relative; z-index: 5; padding: 16px 20px; border-bottom: 1px solid var(--border-ui); display: flex; align-items: center; gap: 10px; flex-wrap: wrap; background: var(--surface); border-radius: 12px 12px 0 0; }
+.timetable-filter-hint {
+  padding: 10px 20px 12px;
+  font-size: 12px;
+  line-height: 1.45;
+  color: var(--text-muted);
+  border-bottom: 1px solid var(--border-ui);
+  background: var(--surface);
+}
 .filter-tabs { display: flex; gap: 4px; }
 .filter-tab { padding: 6px 14px; border-radius: 6px; font-size: 12px; font-weight: 600; cursor: pointer; border: 1px solid var(--border-ui); color: var(--text-muted); }
 .filter-tab.active { background: var(--red); color: #fff; border-color: var(--red); }
@@ -974,7 +982,7 @@ html[data-theme="dark"] .borrow-tag { background: #2a2a38; }
   .stats-grid { grid-template-columns: 1fr 1fr; }
 }
 @media print {
-  .sidebar, .topbar, .timetable-toolbar, .btn, .filter-tabs, .filter-select { display: none !important; }
+  .sidebar, .topbar, .timetable-toolbar, .timetable-filter-hint, .btn, .filter-tabs, .filter-select { display: none !important; }
   .main { margin-left: 0 !important; }
   .timetable-wrap { border: none; }
 }
