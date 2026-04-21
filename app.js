@@ -298,11 +298,12 @@ function normalizeRoomToDb(room) {
     dept_id: room.dept,
   };
 }
-/** Removed from CPE program lists; omit from UI/sync even if a legacy row remains in Supabase. */
+/** Retired drawing-room rows for CPE/ME; omit from UI/sync if still in Supabase. CE `ce_draw_rm` is unchanged. */
 function isRetiredCpeDrawingRoom(r) {
   if (!r) return false;
-  if (r.id === 'cpe_draw_rm') return true;
-  if ((r.dept || '') !== 'cpe') return false;
+  if (r.id === 'cpe_draw_rm' || r.id === 'me_draw_rm') return true;
+  let d = r.dept || '';
+  if (d !== 'cpe' && d !== 'me') return false;
   return (r.name || '').trim().toUpperCase() === 'DRAWING ROOM';
 }
 function normalizeCurriculumFromDb(row) {
@@ -1045,7 +1046,8 @@ function getBorrowableRooms(u) {
 }
 /** Departments that own at least one room (for Requests page filter). */
 function departmentsWithRoomsList() {
-  return DEPARTMENTS.filter(d => ROOMS.some(r => r.dept === d.id));
+  let ids = new Set(roomsSourceForApp().map(r => r.dept).filter(Boolean));
+  return DEPARTMENTS.filter(d => ids.has(d.id));
 }
 function requestTimetableDepartmentsForUser(u) {
   let list = departmentsWithRoomsList();
@@ -1501,7 +1503,7 @@ function normalizeRequestTimetableFilters() {
   if (!ids.includes(state.requestTimetableDept)) {
     state.requestTimetableDept = ids[0];
   }
-  if (!ROOMS.some(r => r.dept === state.requestTimetableDept)) state.requestTimetableDept = ids[0];
+  if (!roomsSourceForApp().some(r => r.dept === state.requestTimetableDept)) state.requestTimetableDept = ids[0];
   let deptRoomList = roomsForRequestDeptTimetable(state.requestTimetableDept);
   let roomIds = deptRoomList.map(r => r.id);
   if (!roomIds.length) return;
@@ -1511,7 +1513,12 @@ function normalizeRequestTimetableFilters() {
 }
 
 function roomsForRequestDeptTimetable(deptId) {
-  return ROOMS.filter(r => r.dept === deptId).slice().sort((a, b) => {
+  let src = roomsSourceForApp();
+  let list = src.filter(r => r.dept === deptId);
+  if (!list.length && typeof ROOMS !== 'undefined' && Array.isArray(ROOMS)) {
+    list = ROOMS.filter(r => r.dept === deptId);
+  }
+  return list.slice().sort((a, b) => {
     let la = a.type === 'laboratory', lb = b.type === 'laboratory';
     if (la !== lb) return la ? 1 : -1;
     return a.name.localeCompare(b.name, undefined, { numeric: true, sensitivity: 'base' });
@@ -1534,11 +1541,8 @@ function renderRequestDeptDayTimetable(u) {
     return `<p class="text-muted" style="padding:12px">No classrooms are registered for <strong>${escapeHtml(deptInfo?.code || viewDept)}</strong>.</p>`;
   }
   let roomFilter = state.requestTimetableRoom;
-  let deptScheds = state.schedules.filter(s => {
-    let room = getRoom(s.roomId);
-    if (!room || room.dept !== viewDept) return false;
-    return s.roomId === roomFilter;
-  });
+  /** Same as main Schedule "By Room": match id or shared room name; include other depts using this space (e.g. approved borrows). */
+  let deptScheds = state.schedules.filter(s => scheduleMatchesRoomFilter(s, roomFilter));
   let deptSelect = `<select class="filter-select request-dept-filter" id="requestTtDept" aria-label="Department (classrooms)">${withRooms.map(d => {
     return `<option value="${d.id}" ${viewDept === d.id ? 'selected' : ''}>${escapeHtml(d.code)} — ${escapeHtml(d.name)}</option>`;
   }).join('')}</select>`;
@@ -1551,9 +1555,9 @@ function renderRequestDeptDayTimetable(u) {
   let metaRoom = escapeHtml(getRoom(roomFilter)?.name || '');
   let intro;
   if (canClickRequest) {
-    intro = `Pick a <strong>department</strong> and <strong>room</strong> below. The grid shows when that classroom is in use (Monday–Friday). <strong>Empty cells</strong> are free — click to request a borrow for that day and time.`;
+    intro = `Pick another program’s <strong>department</strong> and <strong>room</strong>. The grid shows <strong>all classes using that room</strong> (including your approved borrows in orange). Empty cells are free — click to start a borrow request.`;
   } else {
-    intro = `Pick a <strong>department</strong> and <strong>room</strong> below. Colored cells show scheduled classes. <strong>Empty cells</strong> have no class for that room.`;
+    intro = `Pick a <strong>department</strong> and <strong>room</strong>. The grid shows every class using that room, including sections from other programs sharing the same space.`;
   }
   return `
     <p class="request-tt-intro">${intro}</p>
@@ -1574,19 +1578,22 @@ function renderRequests() {
   }
 
   let requestListsBlock = u.role === 'chairperson' ? `
-    <div style="display: grid; grid-template-columns: 1fr 1fr; gap: 20px; margin-bottom: 20px;">
-      <div class="card">
+    <div class="requests-queue-grid">
+      <div class="card requests-queue-card">
         <div class="card-header">
           <div class="card-title card-title-with-icon">${icon('inbox', 18)} Incoming Requests ${pending.length ? `<span style="background: var(--red); color: #fff; font-size: 10px; padding: 2px 6px; border-radius: 10px; margin-left: 6px;">${pending.length}</span>` : ''}</div>
         </div>
-        <div class="card-body">
-          ${pending.length === 0 ? `<div class="empty-state"><div class="empty-icon">${icon('checkCircle', 40)}</div><p>No pending requests.</p></div>` : ''}
-          <div class="requests-list">
-            ${pending.map(r => {
-              const room = getRoom(r.roomId);
-              const from = getDept(r.fromDept);
-              const sub = getSubject(r.subjectId);
-              return `
+        <div class="card-body requests-queue-card-body">
+          <div class="requests-list ${pending.length === 0 ? 'requests-list--empty' : ''}">
+            ${
+              pending.length === 0
+                ? `<div class="requests-list-empty-state"><div class="requests-list-empty-icon">${icon('checkCircle', 40)}</div><p>No pending requests.</p></div>`
+                : pending
+                    .map(r => {
+                      const room = getRoom(r.roomId);
+                      const from = getDept(r.fromDept);
+                      const sub = getSubject(r.subjectId);
+                      return `
                 <div class="request-card">
                   <div class="request-icon">${icon('building', 20)}</div>
                   <div class="request-info">
@@ -1601,23 +1608,28 @@ function renderRequests() {
                   </div>
                 </div>
               `;
-            }).join('')}
+                    })
+                    .join('')
+            }
           </div>
         </div>
       </div>
 
-      <div class="card">
+      <div class="card requests-queue-card">
         <div class="card-header">
           <div class="card-title card-title-with-icon">${icon('send', 18)} My Outgoing Requests</div>
         </div>
-        <div class="card-body">
-          ${outgoing.length === 0 ? `<div class="empty-state"><div class="empty-icon">${icon('clipboard', 40)}</div><p>No outgoing requests yet.</p></div>` : ''}
-          <div class="requests-list">
-            ${outgoing.map(r => {
-              const room = getRoom(r.roomId);
-              const to = getDept(r.toDept);
-              const sub = getSubject(r.subjectId);
-              return `
+        <div class="card-body requests-queue-card-body">
+          <div class="requests-list ${outgoing.length === 0 ? 'requests-list--empty' : ''}">
+            ${
+              outgoing.length === 0
+                ? `<div class="requests-list-empty-state"><div class="requests-list-empty-icon">${icon('clipboard', 40)}</div><p>No outgoing requests yet.</p></div>`
+                : outgoing
+                    .map(r => {
+                      const room = getRoom(r.roomId);
+                      const to = getDept(r.toDept);
+                      const sub = getSubject(r.subjectId);
+                      return `
                 <div class="request-card">
                   <div class="request-icon">${icon('refresh', 20)}</div>
                   <div class="request-info">
@@ -1627,7 +1639,9 @@ function renderRequests() {
                   </div>
                 </div>
               `;
-            }).join('')}
+                    })
+                    .join('')
+            }
           </div>
         </div>
       </div>

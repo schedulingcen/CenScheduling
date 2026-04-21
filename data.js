@@ -48,7 +48,6 @@ const ROOMS = [
   { id:'me_mdhp114', name:'MDHP 114', type:'classroom', dept:'me' },
   { id:'me_mdhp_melab', name:'MDHP ME LAB', type:'laboratory', dept:'me' },
   { id:'me_new_melab', name:'NEW ME LAB', type:'laboratory', dept:'me' },
-  { id:'me_draw_rm', name:'DRAWING ROOM', type:'classroom', dept:'me' },
 ];
 
 // Faculty — finalized rosters per program
