@@ -1113,6 +1113,100 @@ function countSchedulesWithConflicts(schedulesToCheck) {
   return n;
 }
 
+function scheduleEntryForConflictCheck(s) {
+  return {
+    professorId: s.professorId,
+    professorOtherName: s.professorOtherName,
+    roomId: s.roomId,
+    roomOtherName: s.roomOtherName,
+    dept: s.dept,
+    section: s.section,
+    days: s.days,
+    timeStart: s.timeStart,
+    timeEnd: s.timeEnd,
+  };
+}
+
+/** Overlapping schedule rows for `scheduleRow`, each with human-readable reasons (same rules as checkConflicts). */
+function getConflictPairsForSchedule(scheduleRow) {
+  let entry = scheduleEntryForConflictCheck(scheduleRow);
+  let excludeId = scheduleRow.id;
+  let pairs = [];
+  for (let other of state.schedules) {
+    if (other.id === excludeId) continue;
+    if (!other.days.some(d => entry.days.includes(d))) continue;
+    if (!(entry.timeStart < other.timeEnd && entry.timeEnd > other.timeStart)) continue;
+    let msgs = [];
+    if (scheduleProfessorsOverlap(other, entry)) {
+      let label = professorDisplayLineFromPick(entry.professorId, entry.professorOtherName);
+      msgs.push(`Professor ${label} has class on ${other.days.join('/')} ${fmt12(other.timeStart)}–${fmt12(other.timeEnd)}`);
+    }
+    if (roomsBookSameSpace(other, entry)) {
+      let rn = roomDisplayLineFromPick(entry.roomId, entry.roomOtherName);
+      msgs.push(`Room ${rn} booked on ${other.days.join('/')} ${fmt12(other.timeStart)}–${fmt12(other.timeEnd)}`);
+    }
+    if (other.section === entry.section && other.dept === entry.dept) {
+      msgs.push(`Section ${entry.section} has class on ${other.days.join('/')}`);
+    }
+    msgs = [...new Set(msgs)];
+    if (msgs.length) pairs.push({ other, messages: msgs });
+  }
+  return pairs;
+}
+
+function dashboardSchedulesForConflictScope() {
+  let u = state.currentUser;
+  if (!u) return [];
+  return u.role === 'admin' ? state.schedules : state.schedules.filter(s => s.dept === u.dept);
+}
+
+function getDashboardConflictList(schedulesToCheck) {
+  return schedulesToCheck
+    .map(s => ({ schedule: s, pairs: getConflictPairsForSchedule(s) }))
+    .filter(x => x.pairs.length > 0);
+}
+
+function renderScheduleConflictSummaryLine(s) {
+  let sub = getSubject(s.subjectId);
+  let code = sub?.code || '—';
+  let days = Array.isArray(s.days) ? s.days.map(d => d.slice(0, 3)).join('/') : '';
+  return `${escapeHtml(code)} · ${escapeHtml(s.section || '')} · ${escapeHtml(days)} · ${fmt12(s.timeStart)}–${fmt12(s.timeEnd)}`;
+}
+
+function renderDashboardConflictListBody(schedulesToCheck) {
+  let list = getDashboardConflictList(schedulesToCheck);
+  if (!list.length) {
+    return `<p class="conflict-modal-empty">No schedule conflicts detected for ${state.currentUser?.role === 'admin' ? 'any department' : 'your department'}.</p>`;
+  }
+  return `<p class="form-hint conflict-modal-hint">These entries overlap in time with another class (same professor, room, or section). Select one to see details.</p>
+    <ul class="conflict-list" role="list">
+      ${list
+        .map(
+          ({ schedule: s, pairs }) =>
+            `<li><button type="button" class="conflict-list-item" data-conflict-detail-id="${escapeHtml(s.id)}"><span class="conflict-list-item-title">${renderScheduleConflictSummaryLine(s)}</span><span class="conflict-list-item-meta">${pairs.length} overlapping class(es)</span></button></li>`,
+        )
+        .join('')}
+    </ul>`;
+}
+
+function renderDashboardConflictDetailBody(scheduleId) {
+  let s = state.schedules.find(x => x.id === scheduleId);
+  if (!s) return `<p class="conflict-modal-empty">Schedule not found.</p>`;
+  let pairs = getConflictPairsForSchedule(s);
+  if (!pairs.length) {
+    return `<p class="conflict-modal-empty">This schedule no longer has conflicts.</p>`;
+  }
+  let sub = getSubject(s.subjectId);
+  let primary = `<div class="conflict-detail-primary"><div class="conflict-detail-section-title">This schedule</div><div class="conflict-detail-card"><strong>${escapeHtml(sub?.code || '—')}</strong> — ${escapeHtml(sub?.name || '')}<div class="conflict-detail-meta">${escapeHtml(s.section || '')} · ${escapeHtml(professorDisplayLine(s))} · ${escapeHtml(roomDisplayLineFromPick(s.roomId, s.roomOtherName))}</div><div class="conflict-detail-meta">${(s.days || []).map(d => d.slice(0, 3)).join(', ')} · ${fmt12(s.timeStart)}–${fmt12(s.timeEnd)}</div><button type="button" class="btn btn-outline btn-sm conflict-view-sched-btn" data-conflict-view-sched="${escapeHtml(s.id)}">Open in schedule viewer</button></div></div>`;
+  let blocks = pairs
+    .map(({ other, messages }) => {
+      let os = getSubject(other.subjectId);
+      return `<div class="conflict-detail-block"><div class="conflict-detail-section-title">Overlapping class</div><div class="conflict-detail-card"><strong>${escapeHtml(os?.code || '—')}</strong> — ${escapeHtml(os?.name || '')}<div class="conflict-detail-meta">${escapeHtml(other.section || '')} · ${escapeHtml(professorDisplayLine(other))} · ${escapeHtml(roomDisplayLineFromPick(other.roomId, other.roomOtherName))}</div><div class="conflict-detail-meta">${(other.days || []).map(d => d.slice(0, 3)).join(', ')} · ${fmt12(other.timeStart)}–${fmt12(other.timeEnd)}</div><ul class="conflict-reason-list">${messages.map(m => `<li>${escapeHtml(m)}</li>`).join('')}</ul><button type="button" class="btn btn-outline btn-sm conflict-view-sched-btn" data-conflict-view-sched="${escapeHtml(other.id)}">Open in schedule viewer</button></div></div>`;
+    })
+    .join('');
+  return primary + blocks;
+}
+
 // Render
 function ensureAuth() {
   if (state.loggedIn) return true;
@@ -1151,6 +1245,22 @@ function render() {
   bindGlobal();
   bindPage();
   persistAppData();
+  scrollToHashFragmentIfAny();
+}
+
+/** After SPA render, scroll to element matching location.hash (e.g. dashboard links to #incoming-requests). */
+function scrollToHashFragmentIfAny() {
+  try {
+    let raw = typeof location !== 'undefined' && location.hash ? location.hash.slice(1) : '';
+    if (!raw) return;
+    let id = decodeURIComponent(raw);
+    requestAnimationFrame(() => {
+      let el = document.getElementById(id);
+      if (el) el.scrollIntoView({ behavior: 'smooth', block: 'start' });
+    });
+  } catch (e) {
+    /* ignore */
+  }
 }
 
 function getPageTitle() {
@@ -1212,9 +1322,15 @@ function renderDashboard() {
   let statIc = 'stat-icon dashboard-stat-icon';
   return `
     <div class="stats-grid">
-      <div class="stat-card"><div class="${statIc}">${icon('alertTriangle', 24)}</div><div><div class="stat-num">${conflictCount}</div><div class="stat-label">Conflicts</div></div></div>
-      <div class="stat-card"><div class="${statIc}">${icon('building', 24)}</div><div><div class="stat-num">${roomCount}</div><div class="stat-label">Available Rooms</div></div></div>
-      <div class="stat-card"><div class="${statIc}">${icon('inbox', 24)}</div><div><div class="stat-num">${pendingCount}</div><div class="stat-label">Pending Requests</div></div></div>
+      <button type="button" class="stat-card stat-card--clickable" id="dashboardConflictsBtn" aria-label="View list of schedule conflicts">
+        <div class="${statIc}">${icon('alertTriangle', 24)}</div><div><div class="stat-num">${conflictCount}</div><div class="stat-label">Conflicts</div></div>
+      </button>
+      <a href="${pageHref('schedule')}#schedule-timetable" class="stat-card stat-card--clickable" aria-label="Open program timetable (schedule)">
+        <div class="${statIc}">${icon('building', 24)}</div><div><div class="stat-num">${roomCount}</div><div class="stat-label">Available Rooms</div></div>
+      </a>
+      <a href="${pageHref('requests')}#incoming-requests" class="stat-card stat-card--clickable" aria-label="Open room requests — pending incoming">
+        <div class="${statIc}">${icon('inbox', 24)}</div><div><div class="stat-num">${pendingCount}</div><div class="stat-label">Pending Requests</div></div>
+      </a>
     </div>
     <div class="card"><div class="card-header"><div class="card-title card-title-with-icon">${icon('calendar', 18)} Recent Schedules</div><a href="${pageHref('schedule')}" class="btn btn-outline btn-sm">View All →</a></div><div class="table-wrap"><table><thead><tr><th>Subject</th><th>Section</th><th>Professor</th><th>Room</th><th>Days</th><th>Time</th></tr></thead><tbody>${myScheds.slice(0,5).map(s=>{let sub=getSubject(s.subjectId);return `<tr><td><strong>${sub?.code}</strong><br><span style="font-size:11px">${sub?.name}</span></td><td>${s.section}</td><td>${escapeHtml(professorDisplayLine(s))}</td><td>${escapeHtml(roomDisplayLineFromPick(s.roomId, s.roomOtherName))}</td><td>${s.days.map(d=>d.slice(0,3)).join(',')}</td><td>${fmt12(s.timeStart)}–${fmt12(s.timeEnd)}</td></tr>`;}).join('')}</tbody></table>${myScheds.length===0?'<div class="empty-state">No schedules yet</div>':''}</div></div>
   `;
@@ -1305,7 +1421,7 @@ function renderSchedulePage() {
     filtersRow = isAdmin ? `${deptSelectHtml}${roomSelect}` : roomSelect;
   }
   return `
-    <div class="timetable-wrap">
+    <div class="timetable-wrap" id="schedule-timetable">
       <div class="timetable-toolbar">
         ${filterTabs}
         ${filtersRow}
@@ -1577,7 +1693,7 @@ function renderRequests() {
 
   let requestListsBlock = u.role === 'chairperson' ? `
     <div class="requests-queue-grid">
-      <div class="card requests-queue-card">
+      <div class="card requests-queue-card" id="incoming-requests">
         <div class="card-header">
           <div class="card-title card-title-with-icon">${icon('inbox', 18)} Incoming Requests ${pending.length ? `<span style="background: var(--red); color: #fff; font-size: 10px; padding: 2px 6px; border-radius: 10px; margin-left: 6px;">${pending.length}</span>` : ''}</div>
         </div>
@@ -1648,7 +1764,7 @@ function renderRequests() {
 
   return `
     ${requestListsBlock}
-    <div class="card request-timetable-card" style="margin-bottom:20px">
+    <div class="card request-timetable-card" id="available-rooms-timetable" style="margin-bottom:20px">
       <div class="card-header">
         <div class="card-title card-title-with-icon">${icon('calendar', 18)} Timetable · Available Rooms</div>
       </div>
@@ -1811,6 +1927,16 @@ function renderModal() {
   if (type === 'newRequest') {
     const reqFooter = `<button class="btn btn-secondary" id="modalClose2">Cancel</button><button class="btn btn-primary" id="modalSaveBtn">Submit Request</button>`;
     return modalWrap('Request a room', renderRequestForm(), reqFooter, 'modal-request', 'Borrow a room from another department');
+  }
+  if (type === 'dashboardConflicts') {
+    let step = state.modal.step || 'list';
+    let schedulesToCheck = dashboardSchedulesForConflictScope();
+    if (step === 'detail' && state.modal.scheduleId) {
+      let detailFoot = `<button type="button" class="btn btn-secondary" id="conflictDetailBackBtn">Back to list</button><button type="button" class="btn btn-secondary" id="modalClose2">Close</button>`;
+      return modalWrap('Conflict detail', renderDashboardConflictDetailBody(state.modal.scheduleId), detailFoot, 'modal-conflicts', 'This entry overlaps another class in time');
+    }
+    let listFoot = `<button type="button" class="btn btn-secondary" id="modalClose2">Close</button>`;
+    return modalWrap('Schedule conflicts', renderDashboardConflictListBody(schedulesToCheck), listFoot, 'modal-conflicts', 'Select an entry to see what it overlaps with');
   }
   return '';
 }
@@ -2271,6 +2397,28 @@ function openModal(modalState) {
 
 function bindPage(){
   let isDean = state.currentUser?.role === 'admin';
+  document.getElementById('dashboardConflictsBtn')?.addEventListener('click', () => {
+    openModal({ type: 'dashboardConflicts', step: 'list' });
+  });
+  document.querySelectorAll('[data-conflict-detail-id]').forEach(btn => {
+    btn.addEventListener('click', () => {
+      let id = btn.getAttribute('data-conflict-detail-id');
+      state.modal = { type: 'dashboardConflicts', step: 'detail', scheduleId: id };
+      render();
+    });
+  });
+  document.getElementById('conflictDetailBackBtn')?.addEventListener('click', () => {
+    state.modal = { type: 'dashboardConflicts', step: 'list' };
+    render();
+  });
+  document.querySelectorAll('[data-conflict-view-sched]').forEach(btn => {
+    btn.addEventListener('click', () => {
+      let id = btn.getAttribute('data-conflict-view-sched');
+      let s = state.schedules.find(x => x.id === id);
+      if (!s) return;
+      openModal({ type: 'viewSchedule', viewScheduleMode: 'view', data: { ...s, days: Array.isArray(s.days) ? [...s.days] : [] } });
+    });
+  });
   document.getElementById('addSchedBtn')?.addEventListener('click', () => {
     if (isDean) return;
     openModal({
