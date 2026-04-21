@@ -1420,19 +1420,30 @@ function renderSchedulePage() {
     let roomSelect = `<select class="filter-select" id="filterRoom" aria-label="Room">${roomOptionsForToolbar.map(r => `<option value="${escapeHtml(r.id)}" ${state.filterRoom === r.id ? 'selected' : ''}>${escapeHtml(r.name)}${isAdmin ? '' : ` (${escapeHtml(getDept(r.dept)?.code || '')})`}</option>`).join('')}</select>`;
     filtersRow = isAdmin ? `${deptSelectHtml}${roomSelect}` : roomSelect;
   }
+  let printRoomTitleAttr = '';
+  if (state.filterMode === 'room') {
+    let selectedRoom = getRoom(state.filterRoom);
+    let label = selectedRoom?.name || roomDisplayLineFromPick(state.filterRoom, '');
+    if (label) printRoomTitleAttr = ` data-print-title="${escapeHtml(label)}"`;
+  }
   return `
     <div class="timetable-wrap" id="schedule-timetable">
       <div class="timetable-toolbar">
         ${filterTabs}
         ${filtersRow}
-        <div style="margin-left:auto"><button class="btn btn-outline btn-sm" id="printBtn">${icon('printer', 16)} Print</button></div>
+        <div class="timetable-toolbar-actions">
+          <div class="export-menu-wrap">
+            <button class="btn btn-outline btn-sm" id="exportBtn" aria-haspopup="true" aria-expanded="false">${icon('fileText', 16)} Export</button>
+            <div class="export-menu" id="exportMenu" hidden>
+              <button type="button" class="export-menu-item" data-export-format="excel">Excel (.xls)</button>
+              <button type="button" class="export-menu-item" data-export-format="csv">CSV (.csv)</button>
+              <button type="button" class="export-menu-item" data-export-format="pdf">PDF</button>
+            </div>
+          </div>
+          <button class="btn btn-outline btn-sm" id="printBtn">${icon('printer', 16)} Print</button>
+        </div>
       </div>
-      ${
-        state.filterMode === 'room'
-          ? '<div class="timetable-filter-hint">Shows <strong>all classes using this room</strong> (every program), including shared spaces that use the same room name. Chairs: this is not limited to your department only. If the grid is still empty, try <strong>By Section</strong> for your own classes.</div>'
-          : ''
-      }
-      <div class="timetable-scroll" id="printArea">${renderTimetableGrid(scheds, { cellLayout: scheduleGridCellLayout() })}</div>
+      <div class="timetable-scroll" id="printArea"${printRoomTitleAttr}>${renderTimetableGrid(scheds, { cellLayout: scheduleGridCellLayout() })}</div>
     </div>
   `;
 }
@@ -1606,6 +1617,129 @@ function renderTimetableGrid(scheds, gridOpts) {
   }
   
   return html;
+}
+
+function exportFileStem() {
+  let d = new Date();
+  let yyyy = d.getFullYear();
+  let mm = String(d.getMonth() + 1).padStart(2, '0');
+  let dd = String(d.getDate()).padStart(2, '0');
+  let mode = state.filterMode || 'view';
+  let pick = '';
+  if (mode === 'section' || mode === 'department') pick = state.filterSection || '';
+  else if (mode === 'faculty') pick = state.filterFaculty || '';
+  else if (mode === 'room') pick = state.filterRoom || '';
+  pick = String(pick || '').toLowerCase().replace(/[^a-z0-9]+/g, '-').replace(/^-+|-+$/g, '');
+  return `timetable-${mode}${pick ? '-' + pick : ''}-${yyyy}${mm}${dd}`;
+}
+function csvEscape(v) {
+  let s = String(v ?? '');
+  if (s.includes('"') || s.includes(',') || s.includes('\n')) return `"${s.replace(/"/g, '""')}"`;
+  return s;
+}
+function downloadTextFile(filename, content, mimeType) {
+  let blob = new Blob([content], { type: mimeType });
+  let a = document.createElement('a');
+  a.href = URL.createObjectURL(blob);
+  a.download = filename;
+  document.body.appendChild(a);
+  a.click();
+  a.remove();
+  setTimeout(() => URL.revokeObjectURL(a.href), 0);
+}
+function tableToGridMatrix(tableEl, lineSep = ' | ') {
+  let matrix = [];
+  let rows = [...tableEl.querySelectorAll('tr')];
+  rows.forEach((rowEl, rowIdx) => {
+    if (!matrix[rowIdx]) matrix[rowIdx] = [];
+    let col = 0;
+    [...rowEl.children].forEach(cell => {
+      while (matrix[rowIdx][col] != null) col += 1;
+      let rowspan = Number(cell.getAttribute('rowspan') || '1');
+      let colspan = Number(cell.getAttribute('colspan') || '1');
+      let txt = (cell.innerText || '')
+        .split('\n')
+        .map(t => t.trim())
+        .filter(Boolean)
+        .join(lineSep);
+      for (let r = 0; r < rowspan; r++) {
+        if (!matrix[rowIdx + r]) matrix[rowIdx + r] = [];
+        for (let c = 0; c < colspan; c++) matrix[rowIdx + r][col + c] = txt;
+      }
+      col += colspan;
+    });
+  });
+  let maxCols = matrix.reduce((m, r) => Math.max(m, r.length), 0);
+  matrix.forEach(r => { for (let i = 0; i < maxCols; i++) if (r[i] == null) r[i] = ''; });
+  return matrix;
+}
+function exportVisibleTimetable(format) {
+  // Export exactly what is currently shown by active filters.
+  let table = document.querySelector('#printArea .timetable-schedule');
+  if (!table) { showToast('No timetable to export.'); return; }
+  if (format === 'pdf') { window.print(); return; }
+  let matrix = tableToGridMatrix(table, format === 'excel' ? '\n' : ' | ');
+  if (!matrix.length) { showToast('No timetable data to export.'); return; }
+  let roomExportLabel = '';
+  if (state.filterMode === 'room') {
+    roomExportLabel = getRoom(state.filterRoom)?.name || roomDisplayLineFromPick(state.filterRoom, '');
+    if (roomExportLabel) {
+      let width = matrix[0]?.length || 1;
+      let titleRow = Array(width).fill('');
+      titleRow[0] = roomExportLabel;
+      matrix.unshift(titleRow);
+    }
+  }
+  let stem = exportFileStem();
+  if (format === 'csv') {
+    let csv = matrix.map(row => row.map(csvEscape).join(',')).join('\r\n');
+    downloadTextFile(`${stem}.csv`, csv, 'text/csv;charset=utf-8;');
+    showToast('CSV exported.');
+    return;
+  }
+  if (format === 'excel') {
+    let headerCells = [...table.querySelectorAll('thead tr:first-child th')];
+    let colCount = headerCells.length || (matrix[0]?.length || 1);
+    // Fixed Excel-friendly widths (narrower) so layout fits portrait better.
+    let colW = Array(colCount).fill('86pt');
+    if (colCount > 0) colW[0] = '58pt'; // Time column
+    let colGroup = `<colgroup>${colW.map(w => `<col style="width:${w};mso-width-source:userset;">`).join('')}</colgroup>`;
+    let titleRow = roomExportLabel ? `<tr><th class="xls-room-title" colspan="${colCount}">${escapeHtml(roomExportLabel)}</th></tr>` : '';
+    let tableRows = [...table.querySelectorAll('tr')].map((tr, idx) => {
+      let isHead = idx === 0;
+      let cells = [...tr.children].map(cell => {
+        let tag = isHead ? 'th' : 'td';
+        let rs = Number(cell.getAttribute('rowspan') || '1');
+        let cs = Number(cell.getAttribute('colspan') || '1');
+        let span = `${rs > 1 ? ` rowspan="${rs}"` : ''}${cs > 1 ? ` colspan="${cs}"` : ''}`;
+        let txt = (cell.innerText || '')
+          .split('\n')
+          .map(t => t.trim())
+          .filter(Boolean)
+          .join('\n');
+        let cls = '';
+        if (!isHead && cell.dataset?.schedid) cls = ' class="xls-busy"';
+        return `<${tag}${span}${cls}>${escapeHtml(txt)}</${tag}>`;
+      }).join('');
+      return `<tr>${cells}</tr>`;
+    }).join('');
+    let html = `<!DOCTYPE html><html><head><meta charset="utf-8"><style>
+      @page { size: A4 portrait; margin: 0.45in; }
+      body{
+        font-family:Arial,sans-serif;margin:0;padding:20px;background:#fff;color:#111;
+        mso-page-orientation: portrait;
+      }
+      .sheet{max-width:560pt;margin:0 auto}
+      table{border-collapse:collapse;width:auto;table-layout:fixed;margin:0 auto}
+      th,td{border:1px solid #b7b7b7;padding:4px 5px;font-size:11px;line-height:1.2;vertical-align:middle}
+      th{font-weight:700;text-align:center}
+      td{text-align:center;white-space:pre-line}
+      .xls-busy{background:#f8f8f8}
+      .xls-room-title{border:none !important;font-size:20px;letter-spacing:.03em;padding:8px 0 12px;text-align:center}
+    </style></head><body><div class="sheet"><table>${colGroup}${titleRow}${tableRows}</table></div></body></html>`;
+    downloadTextFile(`${stem}.xls`, html, 'application/vnd.ms-excel;charset=utf-8;');
+    showToast('Excel exported.');
+  }
 }
 
 function normalizeRequestTimetableFilters() {
@@ -2491,6 +2625,39 @@ function bindPage(){
         ...requestFormBorrowRoomPrefill(),
       });
     }));
+  }
+  function closeExportMenu() {
+    let menu = document.getElementById('exportMenu');
+    let btn = document.getElementById('exportBtn');
+    if (menu) menu.hidden = true;
+    if (btn) btn.setAttribute('aria-expanded', 'false');
+  }
+  document.getElementById('exportBtn')?.addEventListener('click', e => {
+    e.stopPropagation();
+    let menu = document.getElementById('exportMenu');
+    let btn = document.getElementById('exportBtn');
+    if (!menu || !btn) return;
+    let willOpen = menu.hidden;
+    menu.hidden = !willOpen;
+    btn.setAttribute('aria-expanded', willOpen ? 'true' : 'false');
+  });
+  document.querySelectorAll('#exportMenu [data-export-format]').forEach(el => {
+    el.addEventListener('click', e => {
+      let fmt = e.currentTarget?.dataset?.exportFormat;
+      closeExportMenu();
+      if (fmt) exportVisibleTimetable(fmt);
+    });
+  });
+  if (!document.body.dataset.exportOutsideClickBound) {
+    document.body.dataset.exportOutsideClickBound = '1';
+    document.addEventListener('click', e => {
+      let wrap = document.querySelector('.export-menu-wrap');
+      if (!wrap || wrap.contains(e.target)) return;
+      let menu = document.getElementById('exportMenu');
+      let btn = document.getElementById('exportBtn');
+      if (menu) menu.hidden = true;
+      if (btn) btn.setAttribute('aria-expanded', 'false');
+    });
   }
   document.getElementById('printBtn')?.addEventListener('click',()=>window.print());
   document.getElementById('f_schedule_dept')?.addEventListener('change', e => {
