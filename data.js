@@ -559,11 +559,11 @@ const SCHEDULES = [
   { id:'sch1', subjectId:'s_ee_CHM01', professorId:'p_ee_1', roomId:'ee_mdhp209', dept:'ee', section:'BSEE IGI', days:['Monday','Wednesday'], timeStart:'07:30', timeEnd:'09:00', color:'blue', setLabel:null, labLabel:null, schYear:'1st Year', schSem:'1st Semester' },
   { id:'sch2', subjectId:'s_cpe_MAT04', professorId:'p_cpe_3', roomId:'cpe_302', dept:'cpe', section:'BSCPE IGE', days:['Tuesday','Thursday'], timeStart:'09:00', timeEnd:'10:30', color:'blue', setLabel:null, labLabel:null, schYear:'1st Year', schSem:'1st Semester' },
   { id:'sch3', subjectId:'s_cpe_GEC05', professorId:'p_cpe_2', roomId:'cpe_101', dept:'cpe', section:'BSCPE IGE', days:['Monday','Wednesday'], timeStart:'10:30', timeEnd:'12:00', color:'blue', setLabel:null, labLabel:null, schYear:'1st Year', schSem:'1st Semester' },
-  { id:'sch4', subjectId:'s_ie_MAT04', professorId:'p_ie_2', roomId:'ie_mdhp303', dept:'ie', section:'BSIE IGK', days:['Monday','Wednesday','Friday'], timeStart:'07:30', timeEnd:'08:30', color:'green', setLabel:null, labLabel:null, schYear:'1st Year', schSem:'1st Semester' },
+  { id:'sch4', subjectId:'s_ie_MAT04', professorId:'p_ie_2', roomId:'ie_mdhp303', dept:'ie', section:'BSIE IGL', days:['Monday','Wednesday','Friday'], timeStart:'07:30', timeEnd:'08:30', color:'green', setLabel:null, labLabel:null, schYear:'1st Year', schSem:'1st Semester' },
   { id:'sch5', subjectId:'s_ce_CVE01', professorId:'p_ce_3', roomId:'ce_mdhp103', dept:'ce', section:'BSCE IGA', days:['Tuesday','Thursday'], timeStart:'07:30', timeEnd:'09:00', color:'blue', setLabel:null, labLabel:null, schYear:'1st Year', schSem:'1st Semester' },
   { id:'sch6', subjectId:'s_me_COE01', professorId:'p_me_2', roomId:'me_mhdp102', dept:'me', section:'BSME IGM', days:['Monday','Wednesday'], timeStart:'13:00', timeEnd:'14:30', color:'blue', setLabel:null, labLabel:null, schYear:'1st Year', schSem:'1st Semester' },
   { id:'sch7', subjectId:'s_ece_MAT04', professorId:'p_ece_1', roomId:'ece_mhdp201', dept:'ece', section:'BSECE IGG', days:['Tuesday','Thursday'], timeStart:'14:30', timeEnd:'16:00', color:'blue', setLabel:null, labLabel:null, schYear:'1st Year', schSem:'1st Semester' },
-  { id:'sch8', subjectId:'s_ie_CHM01aL', professorId:'p_ie_1', roomId:'lab_ie_a', dept:'ie', section:'BSIE IGK', days:['Friday'], timeStart:'09:00', timeEnd:'12:00', color:'purple', setLabel:null, labLabel:null, schYear:'1st Year', schSem:'1st Semester' },
+  { id:'sch8', subjectId:'s_ie_CHM01aL', professorId:'p_ie_1', roomId:'lab_ie_a', dept:'ie', section:'BSIE IGL', days:['Friday'], timeStart:'09:00', timeEnd:'12:00', color:'purple', setLabel:null, labLabel:null, schYear:'1st Year', schSem:'1st Semester' },
 ];
 
 /** Sample borrow requests: scoped by dept so each chairperson sees Incoming (toDept) / Outgoing (fromDept) on the Requests page. */
@@ -572,7 +572,7 @@ const REQUESTS = [
   { id:'req2', fromDept:'ee', toDept:'ie', roomId:'ie_mdhp305', subjectId:'s3', section:'BSEE IGI', professorId:'p_ee_2', days:['Monday'], timeStart:'10:30', timeEnd:'12:00', reason:'Exam block — need larger room', status:'pending', created:'2026-01-12' },
   { id:'req3', fromDept:'me', toDept:'ce', roomId:'ce_mdhp107', subjectId:'s6', section:'BSME IGM', professorId:'p_me_2', days:['Tuesday','Thursday'], timeStart:'13:00', timeEnd:'14:30', reason:'Dept workshop', status:'pending', created:'2026-01-10' },
   { id:'req4', fromDept:'cpe', toDept:'ece', roomId:'ece_mhdp203', subjectId:'s8', section:'BSCPE IGE', professorId:'p_cpe_3', days:['Friday'], timeStart:'09:00', timeEnd:'10:30', reason:'', status:'approved', created:'2026-01-08' },
-  { id:'req5', fromDept:'ie', toDept:'me', roomId:'me_mdhp108', subjectId:'s1', section:'BSIE IGK', professorId:'p_ie_2', days:['Wednesday'], timeStart:'07:30', timeEnd:'09:00', reason:'Joint lecture', status:'pending', created:'2026-01-14' },
+  { id:'req5', fromDept:'ie', toDept:'me', roomId:'me_mdhp108', subjectId:'s1', section:'BSIE IGL', professorId:'p_ie_2', days:['Wednesday'], timeStart:'07:30', timeEnd:'09:00', reason:'Joint lecture', status:'pending', created:'2026-01-14' },
   { id:'req6', fromDept:'ce', toDept:'ece', roomId:'ece_mhdp205', subjectId:'s5', section:'BSCE IGA', professorId:'p_ce_3', days:['Monday'], timeStart:'14:30', timeEnd:'16:00', reason:'', status:'pending', created:'2026-01-11' },
   { id:'req7', fromDept:'cpe', toDept:'ee', roomId:'ee_mdhp211', subjectId:'s_cpe_MAT04', section:'BSCPE IGE', professorId:'p_cpe_3', days:['Thursday'], timeStart:'16:00', timeEnd:'17:30', reason:'Make-up class', status:'pending', created:'2026-01-16' },
   { id:'req8', fromDept:'ece', toDept:'ie', roomId:'lab_ie_a', subjectId:'s7', section:'BSECE IGG', professorId:'p_ece_2', days:['Tuesday'], timeStart:'13:30', timeEnd:'16:00', reason:'Lab equipment', status:'declined', created:'2026-01-05' },
@@ -586,7 +586,7 @@ const timeSlots = ['07:30','08:00','08:30','09:00','09:30','10:00','10:30','11:0
 
 // Sample section labels for schedule / request dropdowns (merged with sections already on timetables)
 const SECTION_SAMPLES_BY_DEPT = {
-  ie: ['BSIE IGK', 'BSIE IGL', 'BSIE IIGK', 'BSIE IIGL', 'BSIE IIIGK', 'BSIE IIIGL', 'BSIE IVGK', 'BSIE IVGL'],
+  ie: ['BSIE IGL', 'BSIE IIGK', 'BSIE IIGL', 'BSIE IIIGK', 'BSIE IIIGL', 'BSIE IVGK', 'BSIE IVGL'],
   cpe: ['BSCPE IGE', 'BSCPE IGF', 'BSCPE IIGE', 'BSCPE IIGF', 'BSCPE IIIGE', 'BSCPE IIIGF', 'BSCPE IVGE', 'BSCPE IVGF'],
   ce: ['BSCE IGA', 'BSCE IGB', 'BSCE IIGA', 'BSCE IIGB', 'BSCE IIIGA', 'BSCE IIIGB', 'BSCE IVGA', 'BSCE IVGB'],
   ee: ['BSEE IGI', 'BSEE IGJ', 'BSEE IIGI', 'BSEE IIGJ', 'BSEE IIIGI', 'BSEE IIIGJ', 'BSEE IVGI', 'BSEE IVGJ'],

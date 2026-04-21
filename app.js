@@ -805,10 +805,8 @@ function sectionOptionsForDeptYear(deptIds, yearLabel) {
   return all.filter(s => sectionYearFromLabel(s) === yearLabel);
 }
 /** Placeholder for section text fields (shown when the field is empty). */
-function sectionInputPlaceholder(deptKey) {
-  const d = deptKey && deptKey !== 'all' ? deptKey : 'ie';
-  const first = SECTION_SAMPLES_BY_DEPT[d]?.[0];
-  return first ? `e.g. ${first}` : 'e.g. BSIE IGK';
+function sectionInputPlaceholder() {
+  return 'Official section label';
 }
 /** Set A / Set B only; preserves other saved values as an extra option when editing. */
 function setABSelectHtml(id, current) {
@@ -1861,13 +1859,9 @@ function resolveRequestFormToDeptId(u, preferredDeptId) {
   return choices[0]?.id || '';
 }
 
-/** Defaults for Request form section (year/sem stay empty until user picks, per UI). */
-function requestFormDefaultSection(u) {
-  if (!u?.dept) return '';
-  let secChoices = mergeSectionOptions([u.dept]);
-  let fromSched = state.schedules.find(s => s.dept === u.dept && secChoices.includes(String(s.section || '')));
-  if (fromSched?.section) return String(fromSched.section);
-  return secChoices[0] || '';
+/** Request form: do not pre-fill section (schedules may still list legacy names like BSIE IGK from the DB). */
+function requestFormDefaultSection() {
+  return '';
 }
 
 function modalWrap(title, body, footer = `<button class="btn btn-secondary" id="modalClose2">Cancel</button><button class="btn btn-primary" id="modalSaveBtn">Save</button>`, panelClass = '', subtitle = '') {
@@ -2133,7 +2127,7 @@ function renderRequestForm() {
   let toDeptSelect = toDeptChoices.length
     ? `<select class="form-select" id="rq_to_dept" required aria-label="Requesting to department">${toDeptOpts}</select>`
     : `<select class="form-select" id="rq_to_dept" disabled aria-label="Requesting to department"><option value="">No other departments with rooms</option></select>`;
-  let defSection = requestFormDefaultSection(u);
+  let defSection = requestFormDefaultSection();
   let rqSecOpts = mergeSectionOptions([u.dept]).map(s => `<option value="${escapeHtml(s)}" ${defSection && String(defSection) === s ? 'selected' : ''}>${escapeHtml(s)}</option>`).join('');
   let mySubs = [];
   // Reason logic: "Room Shortage" keeps faculty scoped to requester's department.
@@ -2939,14 +2933,34 @@ function bindPage(){
     let secEl = document.getElementById('rq_section');
     let subEl = document.getElementById('rq_subject');
     if (secEl) {
+      let prevSec = (secEl.value || '').trim();
       let sections = sectionOptionsForDeptYear([deptId], year);
-      let secOpts = sections.map(s => `<option value="${escapeHtml(s)}">${escapeHtml(s)}</option>`).join('');
-      secEl.innerHTML = `<option value="">Select section...</option>${secOpts}`;
+      let secStillValid = sections.some(s => String(s) === prevSec);
+      let secOpts = sections
+        .map(s => `<option value="${escapeHtml(s)}" ${String(prevSec) === String(s) ? 'selected' : ''}>${escapeHtml(s)}</option>`)
+        .join('');
+      let secLegacy =
+        prevSec && !secStillValid
+          ? `<option value="${escapeHtml(prevSec)}" selected>${escapeHtml(prevSec)}</option>`
+          : '';
+      secEl.innerHTML = `<option value="">Select section...</option>${secOpts}${secLegacy}`;
     }
     if (subEl) {
+      let prevSub = (subEl.value || '').trim();
       let subjects = year && sem ? subjectsForCreateScheduleSlot(deptId, year, sem) : [];
-      let subOpts = subjects.map(s => `<option value="${escapeHtml(s.id)}">${escapeHtml(s.code)} — ${escapeHtml(s.name)}</option>`).join('');
-      subEl.innerHTML = `<option value="">Select subject...</option>${subOpts}`;
+      let subOpts = subjects
+        .map(s => `<option value="${escapeHtml(s.id)}" ${prevSub === s.id ? 'selected' : ''}>${escapeHtml(s.code)} — ${escapeHtml(s.name)}</option>`)
+        .join('');
+      let subLegacy =
+        prevSub && !subjects.some(s => s.id === prevSub)
+          ? (() => {
+              let sx = getSubject(prevSub);
+              return sx
+                ? `<option value="${escapeHtml(prevSub)}" selected>${escapeHtml(sx.code)} — ${escapeHtml(sx.name)}</option>`
+                : '';
+            })()
+          : '';
+      subEl.innerHTML = `<option value="">Select subject...</option>${subOpts}${subLegacy}`;
     }
   }
   document.getElementById('rq_year')?.addEventListener('change', syncRequestFormSectionAndSubject);
