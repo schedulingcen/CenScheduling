@@ -98,18 +98,18 @@
       <h1>College of Engineering</h1>
       <p><b>Southern Luzon State University</b></p>
     </div>
-    <div class="login-form">
+    <form class="login-form" id="loginForm" action="#" method="post" novalidate>
       <div id="loginErr"></div>
       <div class="form-group">
-        <div class="form-label">Email Address</div>
-        <input class="form-input" id="loginEmail" type="email" placeholder="Enter your email address" value="admin@slsu.edu.ph">
+        <label class="form-label" for="loginEmail">Email Address</label>
+        <input class="form-input" id="loginEmail" name="email" type="email" placeholder="Enter your email address" value="admin@slsu.edu.ph" autocomplete="username">
       </div>
       <div class="form-group">
-        <div class="form-label">Password</div>
-        <input class="form-input" id="loginPass" type="password" placeholder="Enter your password" value="password">
+        <label class="form-label" for="loginPass">Password</label>
+        <input class="form-input" id="loginPass" name="password" type="password" placeholder="Enter your password" value="password" autocomplete="current-password">
       </div>
-      <button class="btn-primary" id="loginBtn">Sign In &rarr;</button>
-    </div>
+      <button class="btn-primary" type="submit" id="loginBtn">Sign In &rarr;</button>
+    </form>
     <div class="login-footer">
       <strong>Demo accounts:</strong> admin@slsu.edu.ph &middot; ie.chair@slsu.edu.ph &middot; cpe.chair@slsu.edu.ph<br>
       (any password works)
@@ -128,8 +128,19 @@
       { id:'cpe', name:'Engr. Julie Ann Susa-Gili', email:'cpe.chair@slsu.edu.ph', role:'chairperson', dept:'cpe', initials:'JS' },
     ];
 
-    document.getElementById('loginBtn').addEventListener('click', doLogin);
-    document.getElementById('loginPass').addEventListener('keydown', e => e.key === 'Enter' && doLogin());
+    const loginForm = document.getElementById('loginForm');
+    loginForm.addEventListener('submit', e => {
+      e.preventDefault();
+      doLogin();
+    });
+    // Enter from email/password: some browsers skip implicit submit for type="email" or block it behind validation.
+    loginForm.addEventListener('keydown', e => {
+      if (e.key !== 'Enter' || e.repeat || e.isComposing) return;
+      if (e.target && e.target.tagName === 'INPUT') {
+        e.preventDefault();
+        doLogin();
+      }
+    });
 
     function doLogin() {
       const email = document.getElementById('loginEmail').value.trim();

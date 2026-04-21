@@ -2860,9 +2860,11 @@ function bindPage(){
     let listBtn = document.getElementById(prefix + '_list_btn');
     if (!sel || !selWrap || !otherWrap) return;
     let lastSelVal = sel.value;
+    let initialSync = true;
     function showDropdown(show) {
       selWrap.hidden = !show;
       otherWrap.hidden = show;
+      if (initialSync) return;
       if (!show && otherIn) {
         otherIn.focus();
       } else if (show) {
@@ -2871,6 +2873,7 @@ function bindPage(){
     }
     function syncFromSelect() {
       showDropdown(sel.value !== PROFESSOR_OTHER_ID);
+      initialSync = false;
     }
     sel.addEventListener('change', () => {
       let v = sel.value;
@@ -2895,9 +2898,11 @@ function bindPage(){
     let listBtn = document.getElementById(prefix + '_list_btn');
     if (!sel || !selWrap || !otherWrap) return;
     let lastSelVal = sel.value;
+    let initialSync = true;
     function showDropdown(show) {
       selWrap.hidden = !show;
       otherWrap.hidden = show;
+      if (initialSync) return;
       if (!show && otherIn) {
         otherIn.focus();
       } else if (show) {
@@ -2906,6 +2911,7 @@ function bindPage(){
     }
     function syncFromSelect() {
       showDropdown(sel.value !== ROOM_OTHER_ID);
+      initialSync = false;
     }
     sel.addEventListener('change', () => {
       let v = sel.value;
@@ -2926,6 +2932,9 @@ function bindPage(){
   bindProfessorOtherSwap('vs_professor');
   bindRoomOtherSwap('f_room');
   bindRoomOtherSwap('vs_room');
+  if (state.modal?.type === 'newRequest') {
+    queueMicrotask(() => document.getElementById('rq_reason')?.focus({ preventScroll: true }));
+  }
   function syncRequestFormSectionAndSubject() {
     let deptId = state.currentUser?.dept;
     let year = document.getElementById('rq_year')?.value || '';
