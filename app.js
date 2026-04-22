@@ -75,6 +75,115 @@ const SCHEDULE_FORM_SEMS = ['1st Semester', '2nd Semester'];
 const CURRICULUM_FORM_SEMS = ['1st Semester', '2nd Semester', 'Midyear'];
 /** Curriculum page semester dropdowns (filters + Add Subject modal) — 1st / 2nd only. */
 const CURRICULUM_PAGE_SEMS = ['1st Semester', '2nd Semester'];
+const DEFAULT_ACADEMIC_YEAR = '2025-2026';
+const TERM_AY_OTHER_VALUE = '__other__';
+/** Top-of-page context shown on Schedule/Curriculum and used for page-level semester filtering. */
+const TERM_HEADER_SEMS = ['1st Semester', '2nd Semester'];
+function normalizeAcademicYearInput(v) {
+  let s = String(v || '').trim();
+  if (!s) return '';
+  let m = s.match(/^(\d{4})\s*[-/]\s*(\d{4})$/);
+  if (!m) return s;
+  return `${m[1]}-${m[2]}`;
+}
+function termSemesterDisplayLabel(sem) {
+  if (sem === '1st Semester') return 'FIRST SEMESTER';
+  if (sem === '2nd Semester') return 'SECOND SEMESTER';
+  return String(sem || '').toUpperCase();
+}
+function termHeaderTitle(sem, ay) {
+  let s = termSemesterDisplayLabel(sem || '1st Semester');
+  let a = normalizeAcademicYearInput(ay) || '____-____';
+  return `${s} A.Y ${a}`;
+}
+function termAcademicYearOptions() {
+  let m = String(DEFAULT_ACADEMIC_YEAR).match(/^(\d{4})-(\d{4})$/);
+  let start = m ? Number(m[1]) : new Date().getFullYear();
+  let years = [];
+  for (let y = start; y <= start + 8; y++) years.push(`${y}-${y + 1}`);
+  years.sort((a, b) => String(a).localeCompare(String(b)));
+  return years;
+}
+function currentTermFilter() {
+  return {
+    sem: state.termSemester || '1st Semester',
+    ay: normalizeAcademicYearInput(state.termAcademicYear) || DEFAULT_ACADEMIC_YEAR,
+  };
+}
+function scheduleMatchesCurrentTerm(s, term = currentTermFilter()) {
+  return (s.schSem || '').trim() === term.sem
+    && (normalizeAcademicYearInput(s.schAy) || DEFAULT_ACADEMIC_YEAR) === term.ay;
+}
+function requestMatchesCurrentTerm(r, term = currentTermFilter()) {
+  return (r.schSem || '').trim() === term.sem
+    && (normalizeAcademicYearInput(r.schAy) || DEFAULT_ACADEMIC_YEAR) === term.ay;
+}
+function scheduleAcademicYearForFilter(s) {
+  return normalizeAcademicYearInput(s.schAy) || DEFAULT_ACADEMIC_YEAR;
+}
+function curriculumHistoryAcademicYearOptions(rows, selectedAy) {
+  let set = new Set([normalizeAcademicYearInput(selectedAy) || DEFAULT_ACADEMIC_YEAR]);
+  for (let s of rows) set.add(scheduleAcademicYearForFilter(s));
+  return [...set].filter(Boolean).sort((a, b) => String(b).localeCompare(String(a)));
+}
+function mergeAcademicYearOptions(presets, custom) {
+  let out = [];
+  let seen = new Set();
+  for (let x of [...presets, ...custom]) {
+    let ay = normalizeAcademicYearInput(x);
+    if (!ay || seen.has(ay)) continue;
+    seen.add(ay);
+    out.push(ay);
+  }
+  out.sort((a, b) => String(a).localeCompare(String(b)));
+  return out;
+}
+function rememberCustomAcademicYear(ay) {
+  ay = normalizeAcademicYearInput(ay);
+  if (!ay) return;
+  if (!Array.isArray(state.termAcademicYearCustomOptions)) state.termAcademicYearCustomOptions = [];
+  if (!state.termAcademicYearCustomOptions.includes(ay)) state.termAcademicYearCustomOptions.push(ay);
+}
+function renderTopbarCenter() {
+  if (state.page === 'curriculum') {
+    let u = state.currentUser;
+    let deptName = u?.dept ? (getDept(u.dept)?.name || '') : '';
+    let title = deptName ? `Curriculum of ${deptName}` : 'Curriculum';
+    let yearOpts = SCHEDULE_FORM_YEARS.map(y => {
+      let label = y === '1st Year' ? 'First Year' : y;
+      return `<option value="${escapeHtml(y)}" ${state.curriculumYearFilter === y ? 'selected' : ''}>${escapeHtml(label)}</option>`;
+    }).join('');
+    return `<div class="curriculum-topbar-left"><div class="page-title page-title-curriculum-left">${escapeHtml(title)}</div><select class="filter-select curriculum-topbar-year" id="topbarCurriculumYearFilter" aria-label="Year filter">${yearOpts}</select></div>`;
+  }
+  let termPages = ['schedule', 'curriculum', 'requests', 'dashboard'];
+  if (!termPages.includes(state.page)) {
+    return `<div class="page-title">${getPageTitle()}</div>`;
+  }
+  let sem = state.termSemester || '1st Semester';
+  let ay = normalizeAcademicYearInput(state.termAcademicYear) || DEFAULT_ACADEMIC_YEAR;
+  let ayCustom = normalizeAcademicYearInput(state.termAcademicYearCustom || '');
+  let ayPresets = termAcademicYearOptions();
+  let ayCustomOptions = Array.isArray(state.termAcademicYearCustomOptions) ? state.termAcademicYearCustomOptions : [];
+  let ayList = mergeAcademicYearOptions(ayPresets, ayCustomOptions);
+  if (!ayList.includes(ay)) ayList.push(ay);
+  ayList.sort((a, b) => String(a).localeCompare(String(b)));
+  let ayIsPreset = ayList.includes(ay);
+  let ayUseCustom = !!state.termAcademicYearIsCustom || !ayIsPreset;
+  let aySelectValue = ayUseCustom ? TERM_AY_OTHER_VALUE : ay;
+  let ayOptions = ayList
+    .map(x => `<option value="${escapeHtml(x)}" ${x === ay ? 'selected' : ''}>${escapeHtml(x)}</option>`)
+    .join('') + `<option value="${TERM_AY_OTHER_VALUE}" ${aySelectValue === TERM_AY_OTHER_VALUE ? 'selected' : ''}>Others:</option>`;
+  let ayPresetList = `<datalist id="topbarAcademicYearPresetList">${ayList.map(x => `<option value="${escapeHtml(x)}">`).join('')}</datalist>`;
+  let ayEditingOther = !!state.termAcademicYearEditingOther;
+  let ayControl = ayEditingOther
+    ? `<input class="form-input topbar-term-select topbar-term-select-editable" id="topbarTermAcademicYearOther" value="${escapeHtml(ayCustom || ay)}" placeholder="e.g. 2033-2034" aria-label="Academic Year (editable)" list="topbarAcademicYearPresetList">`
+    : `<select class="filter-select topbar-term-select" id="topbarTermAcademicYear" aria-label="Academic Year">${ayOptions}</select>`;
+  let semOptions = TERM_HEADER_SEMS
+    .map(s => `<option value="${escapeHtml(s)}" ${s === sem ? 'selected' : ''}>${escapeHtml(s)}</option>`)
+    .join('');
+  let dashClass = state.page === 'dashboard' ? ' topbar-term-dashboard' : '';
+  return `<div class="topbar-term-center${dashClass}"><div class="topbar-term-title">${escapeHtml(termHeaderTitle(sem, ay))}</div><div class="topbar-term-controls"><select class="filter-select topbar-term-select" id="topbarTermSemester" aria-label="Semester">${semOptions}</select>${ayControl}${ayPresetList}</div></div>`;
+}
 
 /** Request a room modal: optional reason dropdown (stored on request as `reason`). */
 const REQUEST_ROOM_REASON_CHOICES = [
@@ -156,6 +265,7 @@ function hydratePersistedData() {
           id: c.id,
           year: c.year || base.year || '1st Year',
           semester: c.semester || base.semester || '1st Semester',
+          academicYear: normalizeAcademicYearInput(c.academicYear || base.academicYear) || DEFAULT_ACADEMIC_YEAR,
         };
       });
       mergeMissingCurriculumRowsInto(merged);
@@ -165,8 +275,16 @@ function hydratePersistedData() {
     if (o.curriculumYearFilter != null) state.curriculumYearFilter = o.curriculumYearFilter;
     if (o.curriculumSemFilter != null) state.curriculumSemFilter = o.curriculumSemFilter;
     if (state.curriculumSemFilter === 'Midyear') state.curriculumSemFilter = 'all';
+    if (o.termSemester != null) state.termSemester = o.termSemester;
+    if (o.termAcademicYear != null) state.termAcademicYear = o.termAcademicYear;
+    if (o.termAcademicYearCustom != null) state.termAcademicYearCustom = o.termAcademicYearCustom;
+    if (o.termAcademicYearIsCustom != null) state.termAcademicYearIsCustom = !!o.termAcademicYearIsCustom;
+    if (o.termAcademicYearEditingOther != null) state.termAcademicYearEditingOther = !!o.termAcademicYearEditingOther;
+    if (Array.isArray(o.termAcademicYearCustomOptions)) state.termAcademicYearCustomOptions = o.termAcademicYearCustomOptions.map(normalizeAcademicYearInput).filter(Boolean);
+    state.termAcademicYear = normalizeAcademicYearInput(state.termAcademicYear) || DEFAULT_ACADEMIC_YEAR;
     if (o.requestTimetableDept != null) state.requestTimetableDept = o.requestTimetableDept;
     if (o.requestTimetableRoom != null) state.requestTimetableRoom = o.requestTimetableRoom;
+    if (o.curriculumHistoryAyFilter != null) state.curriculumHistoryAyFilter = o.curriculumHistoryAyFilter;
   } catch (e) { /* ignore */ }
 }
 
@@ -203,8 +321,15 @@ function persistAppData() {
       curriculumDeptFilter: state.curriculumDeptFilter,
       curriculumYearFilter: state.curriculumYearFilter,
       curriculumSemFilter: state.curriculumSemFilter,
+      termSemester: state.termSemester,
+      termAcademicYear: state.termAcademicYear,
+      termAcademicYearCustom: state.termAcademicYearCustom,
+      termAcademicYearIsCustom: state.termAcademicYearIsCustom,
+      termAcademicYearEditingOther: state.termAcademicYearEditingOther,
+      termAcademicYearCustomOptions: state.termAcademicYearCustomOptions,
       requestTimetableDept: state.requestTimetableDept,
       requestTimetableRoom: state.requestTimetableRoom,
+      curriculumHistoryAyFilter: state.curriculumHistoryAyFilter,
     })
   );
 }
@@ -229,10 +354,17 @@ let state = {
   requests: [...REQUESTS],
   curriculum: [...CURRICULUM_DATA],
   curriculumDeptFilter: 'all',
-  curriculumYearFilter: 'all',
+  curriculumYearFilter: '1st Year',
   curriculumSemFilter: 'all',
+  termSemester: '1st Semester',
+  termAcademicYear: DEFAULT_ACADEMIC_YEAR,
+  termAcademicYearCustom: '',
+  termAcademicYearIsCustom: false,
+  termAcademicYearEditingOther: false,
+  termAcademicYearCustomOptions: [],
   requestTimetableDept: 'ie',
   requestTimetableRoom: '',
+  curriculumHistoryAyFilter: DEFAULT_ACADEMIC_YEAR,
 };
 let nextId = 100;
 const genId = () => `id_${Date.now().toString(36)}_${Math.random().toString(36).slice(2, 10)}`;
@@ -321,6 +453,7 @@ function normalizeCurriculumFromDb(row) {
     courseName: row.course_name || row.courseName || row.subject_name || row.subjectName || '',
     subjectCode: row.subject_code || row.subjectCode || '',
     section: row.section || '',
+    academicYear: normalizeAcademicYearInput(row.academic_year || row.academicYear) || DEFAULT_ACADEMIC_YEAR,
   };
 }
 function normalizeCurriculumToDb(row) {
@@ -336,6 +469,7 @@ function normalizeCurriculumToDb(row) {
     units: Number.isFinite(Number(row.units)) ? Number(row.units) : 0,
     subject_code: row.subjectCode || '',
     section: row.section || '',
+    academic_year: normalizeAcademicYearInput(row.academicYear) || DEFAULT_ACADEMIC_YEAR,
   };
 }
 function normalizeScheduleFromDb(row) {
@@ -378,6 +512,9 @@ function normalizeScheduleFromDb(row) {
     labLabel: row.lab_label || null,
     schYear: row.sch_year || '',
     schSem: row.sch_sem || '',
+    schAy: normalizeAcademicYearInput(row.sch_ay || row.schAy) || DEFAULT_ACADEMIC_YEAR,
+    createdAt: row.created_at || row.createdAt || null,
+    updatedAt: row.updated_at || row.updatedAt || null,
   };
 }
 function normalizeScheduleToDb(s) {
@@ -400,7 +537,26 @@ function normalizeScheduleToDb(s) {
     lab_label: s.labLabel || null,
     sch_year: s.schYear || null,
     sch_sem: s.schSem || null,
+    sch_ay: normalizeAcademicYearInput(s.schAy) || DEFAULT_ACADEMIC_YEAR,
   };
+}
+function isSupabaseMissingColumnError(err, columnName) {
+  let msg = String(err?.message || '');
+  return msg.includes(`'${columnName}'`) || msg.includes(`"${columnName}"`) || msg.toLowerCase().includes(columnName.toLowerCase());
+}
+async function upsertSchedulesDb(rows) {
+  let payload = rows.map(normalizeScheduleToDb);
+  let res = await window.cenSupabase.from('schedules').upsert(payload, { onConflict: 'id' });
+  if (!res.error || !isSupabaseMissingColumnError(res.error, 'sch_ay')) return res;
+  let fallback = payload.map(({ sch_ay, ...rest }) => rest);
+  return window.cenSupabase.from('schedules').upsert(fallback, { onConflict: 'id' });
+}
+async function upsertCurriculumDb(rows) {
+  let payload = rows.map(normalizeCurriculumToDb);
+  let res = await window.cenSupabase.from('curriculum').upsert(payload, { onConflict: 'id' });
+  if (!res.error || !isSupabaseMissingColumnError(res.error, 'academic_year')) return res;
+  let fallback = payload.map(({ academic_year, ...rest }) => rest);
+  return window.cenSupabase.from('curriculum').upsert(fallback, { onConflict: 'id' });
 }
 
 function normalizeRequestFromDb(row) {
@@ -541,8 +697,8 @@ async function syncCoreDataFromSupabase() {
     if (curriculumRepairRows.length > 0) {
       const chunkSize = 150;
       for (let i = 0; i < curriculumRepairRows.length; i += chunkSize) {
-        let chunk = curriculumRepairRows.slice(i, i + chunkSize).map(normalizeCurriculumToDb);
-        const { error: repairErr } = await window.cenSupabase.from('curriculum').upsert(chunk, { onConflict: 'id' });
+        let chunk = curriculumRepairRows.slice(i, i + chunkSize);
+        const { error: repairErr } = await upsertCurriculumDb(chunk);
         if (repairErr) {
           console.warn('Curriculum repair upsert failed (bundle rows missing in DB):', repairErr.message);
           break;
@@ -735,6 +891,17 @@ function curriculumColTotal(c) {
     return escapeHtml(String((Number.isFinite(lec) ? lec : 0) + (Number.isFinite(lab) ? lab : 0)));
   return '—';
 }
+/** Required Hours from Lec/Lab units (Lab = 3 hours per lab unit). */
+function curriculumRequiredHours(c) {
+  let lec = Number(c.lecUnits);
+  let lab = Number(c.labUnits);
+  let lecH = Number.isFinite(lec) ? lec : 0;
+  let labH = Number.isFinite(lab) ? lab * 3 : 0;
+  if (lecH > 0 || labH > 0) return escapeHtml(String(lecH + labH));
+  let total = Number(c.units);
+  if (Number.isFinite(total) && total > 0) return escapeHtml(String(total));
+  return '—';
+}
 function fmt12(t) { let [h,m]=t.split(':').map(Number); return `${h%12||12}:${String(m).padStart(2,'0')} ${h>=12?'PM':'AM'}`; }
 /** Display slot start as 7:30, 8:00, … (every row of the timetable time column). */
 function fmtSlot24(t) { let [h,m]=t.split(':').map(Number); return `${h}:${String(m).padStart(2,'0')}`; }
@@ -807,6 +974,170 @@ function sectionYearFromLabel(sectionLabel) {
   if (token.startsWith('II')) return '2nd Year';
   if (token.startsWith('I')) return '1st Year';
   return '';
+}
+/** Official CEN program colors by department and year (matches section / curriculum year labels). */
+const DEPT_YEAR_TIMETABLE_HEX = {
+  ie: { '1st Year': '#b6d7a8', '2nd Year': '#6aa84f', '3rd Year': '#38761d', '4th Year': '#274e13' },
+  cpe: { '1st Year': '#d9d2e9', '2nd Year': '#b4a7d6', '3rd Year': '#674ea7', '4th Year': '#351c75' },
+  ee: { '1st Year': '#fff2cc', '2nd Year': '#f1c232', '3rd Year': '#bf9000', '4th Year': '#7f6000' },
+  ece: { '1st Year': '#ead1dc', '2nd Year': '#c27ba0', '3rd Year': '#741b47', '4th Year': '#4c1130' },
+  ce: { '1st Year': '#c9daf8', '2nd Year': '#6d9eeb', '3rd Year': '#1155cc', '4th Year': '#1c4587' },
+  me: { '1st Year': '#fce5cd', '2nd Year': '#e69138', '3rd Year': '#b45f06', '4th Year': '#783f04' },
+};
+function parseHexColor(hex) {
+  let h = String(hex || '').trim().replace(/^#/, '');
+  if (h.length === 3) h = h.split('').map(c => c + c).join('');
+  if (!/^[0-9a-fA-F]{6}$/.test(h)) return null;
+  return {
+    r: parseInt(h.slice(0, 2), 16),
+    g: parseInt(h.slice(2, 4), 16),
+    b: parseInt(h.slice(4, 6), 16),
+  };
+}
+function rgbToHex(r, g, b) {
+  return '#' + [r, g, b].map(x => Math.max(0, Math.min(255, Math.round(x))).toString(16).padStart(2, '0')).join('');
+}
+function hexBorderDarker(hex, factor) {
+  let rgb = parseHexColor(hex);
+  if (!rgb) return hex;
+  factor = Math.min(1, Math.max(0, factor));
+  return rgbToHex(rgb.r * (1 - factor), rgb.g * (1 - factor), rgb.b * (1 - factor));
+}
+function relativeLuminanceForHex(hex) {
+  let rgb = parseHexColor(hex);
+  if (!rgb) return 1;
+  let lin = [rgb.r, rgb.g, rgb.b].map(c => {
+    c = c / 255;
+    return c <= 0.03928 ? c / 12.92 : Math.pow((c + 0.055) / 1.055, 2.4);
+  });
+  return 0.2126 * lin[0] + 0.7152 * lin[1] + 0.0722 * lin[2];
+}
+function timetableInnerTextStylesForFill(fillHex) {
+  if (relativeLuminanceForHex(fillHex) >= 0.38) return null;
+  return {
+    subStyle: 'font-weight: 700; font-size: 12px; color: #ffffff;',
+    lineStyle: 'font-size: 11px; color: rgba(255,255,255,0.9);',
+  };
+}
+function scheduleYearLabelForPalette(s) {
+  let y = (s.schYear || '').trim();
+  if (SCHEDULE_FORM_YEARS.includes(y)) return y;
+  return sectionYearFromLabel(s.section);
+}
+/** Fallback slot chrome when dept/year is unknown — concrete hex for print/export. */
+function legacyTimetableChromeFromColor(color) {
+  const map = {
+    blue: { bg: '#EFF6FF', border: '#3B82F6' },
+    purple: { bg: '#F5F3FF', border: '#8B5CF6' },
+    orange: { bg: '#FFFBEB', border: '#F59E0B' },
+    green: { bg: '#F0FDF4', border: '#16A34A' },
+  };
+  const m = map[color] || map.blue;
+  return { bg: m.bg, border: m.border, innerStyles: null };
+}
+/** How long borrow-request and conflict highlights stay on the timetable before reverting to dept/year colors. */
+const SCHEDULE_SPECIAL_HIGHLIGHT_MS = 3 * 24 * 60 * 60 * 1000;
+const TT_REQUEST_CHROME = { bg: '#f3f4f6', border: '#6b7280' };
+const TT_CONFLICT_CHROME = { bg: '#fef2f2', border: '#dc2626' };
+const TT_CONFLICT_SINCE_KEY = 'cen_tt_conflict_since_v1';
+function parseScheduleDateMs(iso) {
+  if (iso == null || iso === '') return null;
+  let d = Date.parse(String(iso));
+  return Number.isFinite(d) ? d : null;
+}
+function loadConflictSinceMap() {
+  try {
+    let raw = localStorage.getItem(TT_CONFLICT_SINCE_KEY);
+    let o = raw ? JSON.parse(raw) : {};
+    return o && typeof o === 'object' ? o : {};
+  } catch (e) {
+    return {};
+  }
+}
+function saveConflictSinceMap(map) {
+  try {
+    localStorage.setItem(TT_CONFLICT_SINCE_KEY, JSON.stringify(map));
+  } catch (e) { /* ignore */ }
+}
+/** Tracks when each schedule first had a conflict; cleared when resolved. Used for the 3-day red highlight. */
+function syncConflictHighlightsAndIds() {
+  let map = loadConflictSinceMap();
+  let changed = false;
+  let alive = new Set(state.schedules.map(s => s.id).filter(Boolean));
+  for (let k of Object.keys(map)) {
+    if (!alive.has(k)) {
+      delete map[k];
+      changed = true;
+    }
+  }
+  let conflictIds = new Set();
+  for (let s of state.schedules) {
+    let has = getConflictPairsForSchedule(s).length > 0;
+    if (has) {
+      conflictIds.add(s.id);
+      if (!map[s.id]) {
+        map[s.id] = new Date().toISOString();
+        changed = true;
+      }
+    } else if (map[s.id]) {
+      delete map[s.id];
+      changed = true;
+    }
+  }
+  if (changed) saveConflictSinceMap(map);
+  return { conflictSinceById: map, conflictIds };
+}
+function timetableDeptYearChrome(s) {
+  let dept = s.dept;
+  let yearLabel = scheduleYearLabelForPalette(s);
+  let fill = dept && yearLabel ? DEPT_YEAR_TIMETABLE_HEX[dept]?.[yearLabel] : null;
+  if (fill) {
+    let border = hexBorderDarker(fill, 0.28);
+    return { bg: fill, border, innerStyles: timetableInnerTextStylesForFill(fill) };
+  }
+  let legacyColor = s.color === 'orange' ? 'blue' : (s.color || 'blue');
+  return legacyTimetableChromeFromColor(legacyColor);
+}
+function borrowRequestHighlightActive(s) {
+  if (s.color !== 'orange') return false;
+  let t = parseScheduleDateMs(s.createdAt);
+  if (t == null) return false;
+  return Date.now() - t < SCHEDULE_SPECIAL_HIGHLIGHT_MS;
+}
+function conflictHighlightActive(s, conflictSinceById, conflictIds) {
+  if (!conflictIds.has(s.id)) return false;
+  let t = parseScheduleDateMs(conflictSinceById[s.id]);
+  if (t == null) return true;
+  return Date.now() - t < SCHEDULE_SPECIAL_HIGHLIGHT_MS;
+}
+/**
+ * Timetable cell chrome: conflict (red) and approved borrow/request (gray) for 3 days, then department × year colors.
+ * @param {object} conflictSinceById - from syncConflictHighlightsAndIds()
+ * @param {Set} conflictIds - schedules that currently overlap another (same rules as checkConflicts)
+ */
+function timetableSlotChrome(s, conflictSinceById, conflictIds) {
+  let reqOn = borrowRequestHighlightActive(s);
+  let confOn = conflictHighlightActive(s, conflictSinceById, conflictIds);
+  if (confOn) {
+    return {
+      bg: TT_CONFLICT_CHROME.bg,
+      border: TT_CONFLICT_CHROME.border,
+      innerStyles: null,
+      slotKind: 'conflict',
+      borderLeftWidth: 6,
+    };
+  }
+  if (reqOn) {
+    return {
+      bg: TT_REQUEST_CHROME.bg,
+      border: TT_REQUEST_CHROME.border,
+      innerStyles: null,
+      slotKind: 'request',
+      borderLeftWidth: 6,
+    };
+  }
+  let base = timetableDeptYearChrome(s);
+  return { ...base, slotKind: 'normal', borderLeftWidth: 3 };
 }
 function sectionOptionsForDeptYear(deptIds, yearLabel) {
   let all = mergeSectionOptions(deptIds);
@@ -920,6 +1251,9 @@ function semsForDeptYear(deptKey, year) {
   if (forYear.length) return distinctSemsFromRows(forYear);
   return [...CURRICULUM_FORM_SEMS];
 }
+function curriculumAcademicYearForFilter(r) {
+  return normalizeAcademicYearInput(r.academicYear) || DEFAULT_ACADEMIC_YEAR;
+}
 function subjectsSourceForCreateSchedule() {
   // When Supabase is active, only use DB-backed subjects so FK checks pass.
   if (hasSupabaseClient()) {
@@ -928,9 +1262,14 @@ function subjectsSourceForCreateSchedule() {
   let local = (typeof SUBJECTS_DATA !== 'undefined' && Array.isArray(SUBJECTS_DATA)) ? SUBJECTS_DATA : [];
   return local.filter(s => s?.id);
 }
-function subjectsForCreateScheduleSlot(dept, year, sem) {
+function subjectsForCreateScheduleSlot(dept, year, sem, ay) {
   let rows = curriculumRowsForDept(dept);
-  let forSlot = rows.filter(r => (r.year || '').trim() === year && (r.semester || '').trim() === sem);
+  let ayNorm = normalizeAcademicYearInput(ay) || DEFAULT_ACADEMIC_YEAR;
+  let forSlot = rows.filter(r =>
+    (r.year || '').trim() === year &&
+    (r.semester || '').trim() === sem &&
+    curriculumAcademicYearForFilter(r) === ayNorm,
+  );
   if (!forSlot.length) return [];
   let source = subjectsSourceForCreateSchedule();
   function findSubjectForCurriculumCode(cc) {
@@ -954,9 +1293,9 @@ function subjectsForCreateScheduleSlot(dept, year, sem) {
   }
   return out;
 }
-function subjectAllowedByCurriculum(dept, year, sem, subjectId) {
+function subjectAllowedByCurriculum(dept, year, sem, subjectId, ay) {
   if (!dept || !year || !sem || !subjectId) return false;
-  return subjectsForCreateScheduleSlot(dept, year, sem).some(s => s.id === subjectId);
+  return subjectsForCreateScheduleSlot(dept, year, sem, ay).some(s => s.id === subjectId);
 }
 function getCreateScheduleDeptForCascade() {
   let u = state.currentUser;
@@ -973,6 +1312,7 @@ function getCreateScheduleDeptForCascade() {
 function initCreateScheduleCurriculumCascade() {
   let yEl = document.getElementById('f_year');
   let sEl = document.getElementById('f_sem');
+  let ayEl = document.getElementById('f_ay');
   let subEl = document.getElementById('f_subject');
   let secEl = document.getElementById('f_section');
   let deptEl = document.getElementById('f_schedule_dept');
@@ -1042,7 +1382,19 @@ function initCreateScheduleCurriculumCascade() {
       fillSubjectSelect([], '');
       return;
     }
-    fillSubjectSelect(subjectsForCreateScheduleSlot(d, y, sem), '');
+    let ay = normalizeAcademicYearInput(ayEl?.value || state.termAcademicYear) || DEFAULT_ACADEMIC_YEAR;
+    fillSubjectSelect(subjectsForCreateScheduleSlot(d, y, sem, ay), '');
+  });
+  ayEl?.addEventListener('change', () => {
+    let d = getCreateScheduleDeptForCascade();
+    let y = yEl.value;
+    let sem = sEl.value;
+    if (!d || !y || !sem) {
+      fillSubjectSelect([], '');
+      return;
+    }
+    let ay = normalizeAcademicYearInput(ayEl.value || state.termAcademicYear) || DEFAULT_ACADEMIC_YEAR;
+    fillSubjectSelect(subjectsForCreateScheduleSlot(d, y, sem, ay), '');
   });
   deptEl?.addEventListener('change', rebuildAll);
 }
@@ -1077,7 +1429,8 @@ function pendingRequestsForUser() {
   let u = state.currentUser;
   if (!u) return 0;
   if (u.role === 'admin') return 0;
-  return state.requests.filter(r => r.toDept === u.dept && r.status === 'pending').length;
+  let term = currentTermFilter();
+  return state.requests.filter(r => r.toDept === u.dept && r.status === 'pending' && requestMatchesCurrentTerm(r, term)).length;
 }
 
 function checkConflicts(entry, excludeId=null) {
@@ -1166,7 +1519,9 @@ function getConflictPairsForSchedule(scheduleRow) {
 function dashboardSchedulesForConflictScope() {
   let u = state.currentUser;
   if (!u) return [];
-  return u.role === 'admin' ? state.schedules : state.schedules.filter(s => s.dept === u.dept);
+  let term = currentTermFilter();
+  let pool = u.role === 'admin' ? state.schedules : state.schedules.filter(s => s.dept === u.dept);
+  return pool.filter(s => scheduleMatchesCurrentTerm(s, term));
 }
 
 function getDashboardConflictList(schedulesToCheck) {
@@ -1244,7 +1599,7 @@ function render() {
       <div class="sidebar ${state.sidebarOpen?'open':''}" id="sidebar">${renderSidebar()}</div>
       <div class="overlay ${state.sidebarOpen?'show':''}" id="overlay"></div>
       <div class="main">
-        <div class="topbar"><span class="hamburger" id="hamburger" role="button" tabindex="0" aria-label="Open menu">${icon('menu', 22)}</span><div class="page-title">${getPageTitle()}</div><div class="topbar-actions"><button type="button" class="btn btn-outline btn-sm theme-toggle" id="themeToggleBtn" aria-label="${document.documentElement.dataset.theme === 'dark' ? 'Switch to light mode' : 'Switch to dark mode'}">${document.documentElement.dataset.theme === 'dark' ? icon('sun', 18) : icon('moon', 18)}</button>${state.page==='schedule'&&state.currentUser?.role!=='admin'?`<button class="btn btn-primary btn-sm" id="addSchedBtn">${icon('plus', 16)} Add Schedule</button>`:''}${state.page==='curriculum'&&state.currentUser?.role==='chairperson'?`<button type="button" class="btn btn-primary btn-sm" id="addCurriculumBtn">${icon('plus', 16)} Add Subject</button>`:''}${state.page==='requests'&&state.currentUser?.role==='chairperson'?`<button class="btn btn-primary btn-sm" id="requestRoomTopBtn">${icon('plus', 16)} Request a Room</button>`:''}</div></div>
+        <div class="topbar"><span class="hamburger" id="hamburger" role="button" tabindex="0" aria-label="Open menu">${icon('menu', 22)}</span>${renderTopbarCenter()}<div class="topbar-actions"><button type="button" class="btn btn-outline btn-sm theme-toggle" id="themeToggleBtn" aria-label="${document.documentElement.dataset.theme === 'dark' ? 'Switch to light mode' : 'Switch to dark mode'}">${document.documentElement.dataset.theme === 'dark' ? icon('sun', 18) : icon('moon', 18)}</button>${state.page==='schedule'&&state.currentUser?.role!=='admin'?`<button class="btn btn-primary btn-sm" id="addSchedBtn">${icon('plus', 16)} Add Schedule</button>`:''}${state.page==='curriculum'&&state.currentUser?.role==='chairperson'?`<button type="button" class="btn btn-primary btn-sm" id="addCurriculumBtn">${icon('plus', 16)} Add Subject</button>`:''}${state.page==='requests'&&state.currentUser?.role==='chairperson'?`<button class="btn btn-primary btn-sm" id="requestRoomTopBtn">${icon('plus', 16)} Request a Room</button>`:''}</div></div>
         <div class="content">${renderPage()}</div>
       </div>
     </div>
@@ -1321,13 +1676,15 @@ function renderPage() {
 
 function renderDashboard() {
   let u = state.currentUser;
-  let myScheds = u.role === 'admin' ? state.schedules : state.schedules.filter(s => s.dept === u.dept);
+  let term = currentTermFilter();
+  let myScheds = (u.role === 'admin' ? state.schedules : state.schedules.filter(s => s.dept === u.dept))
+    .filter(s => scheduleMatchesCurrentTerm(s, term));
   let schedsForConflicts = myScheds;
   let conflictCount = countSchedulesWithConflicts(schedsForConflicts);
   let roomCount = ROOMS.filter(r => u.role === 'admin' || r.dept === u.dept).length;
   let pendingCount = u.role === 'admin'
     ? 0
-    : state.requests.filter(r => r.status === 'pending' && r.toDept === u.dept).length;
+    : state.requests.filter(r => r.status === 'pending' && r.toDept === u.dept && requestMatchesCurrentTerm(r, term)).length;
   let statIc = 'stat-icon dashboard-stat-icon';
   return `
     <div class="stats-grid">
@@ -1391,10 +1748,16 @@ function normalizeScheduleFilters() {
 function renderSchedulePage() {
   let u = state.currentUser;
   normalizeScheduleFilters();
+  let termSem = state.termSemester || '1st Semester';
+  let termAy = normalizeAcademicYearInput(state.termAcademicYear) || DEFAULT_ACADEMIC_YEAR;
   let scheds =
     u.role === 'admin' || state.filterMode === 'room'
       ? state.schedules
       : state.schedules.filter(s => s.dept === u.dept);
+  scheds = scheds.filter(s =>
+    (s.schSem || '').trim() === termSem &&
+    (normalizeAcademicYearInput(s.schAy) || DEFAULT_ACADEMIC_YEAR) === termAy,
+  );
   if (state.filterMode === 'faculty') scheds = scheds.filter(s => s.professorId === state.filterFaculty);
   else if (state.filterMode === 'room') scheds = scheds.filter(s => scheduleMatchesRoomFilter(s, state.filterRoom));
   else if (state.filterMode === 'department' && u.role === 'admin') {
@@ -1464,14 +1827,14 @@ function scheduleGridCellLayout() {
   return 'section';
 }
 
-function buildScheduleCellInnerHtml(s, sub, cellLayout) {
+function buildScheduleCellInnerHtml(s, sub, cellLayout, innerStyleOverride) {
   let roomLine = escapeHtml(roomDisplayLineFromPick(s.roomId, s.roomOtherName));
   let subLine = escapeHtml(sub?.code || '—');
   let profLine = escapeHtml(professorDisplayLine(s));
   let sectionLine = escapeHtml(s.section || '—');
   let setLine = s.setLabel ? escapeHtml(s.setLabel) : '';
-  let subStyle = 'font-weight: 700; font-size: 12px; color: var(--chip-text-primary);';
-  let lineStyle = 'font-size: 11px; color: var(--chip-text-secondary);';
+  let subStyle = innerStyleOverride?.subStyle || 'font-weight: 700; font-size: 12px; color: var(--chip-text-primary);';
+  let lineStyle = innerStyleOverride?.lineStyle || 'font-size: 11px; color: var(--chip-text-secondary);';
   let parts = [`<div style="${subStyle}">${subLine}</div>`];
   if (cellLayout === 'faculty') {
     parts.push(`<div style="${lineStyle}">${sectionLine}</div>`);
@@ -1494,6 +1857,7 @@ function renderTimetableGrid(scheds, gridOpts) {
   let requestView = !!gridOpts.requestView;
   let requestCellClick = requestView && gridOpts.requestCellClick !== false;
   let requestBusyClickable = requestView && gridOpts.requestBusyClickable === true;
+  let { conflictSinceById, conflictIds } = syncConflictHighlightsAndIds();
   let emptyTitle = requestView
     ? (requestCellClick
       ? (d0, d1) => `Available — click to request a room (${d0}–${d1})`
@@ -1543,15 +1907,20 @@ function renderTimetableGrid(scheds, gridOpts) {
         const s = cell.schedule;
         const sub = cell.sub;
         const rowspan = cell.duration;
-        
-        const bg = s.color === 'blue' ? 'var(--blue-light)' : s.color === 'purple' ? 'var(--purple-light)' : s.color === 'orange' ? 'var(--orange-light)' : 'var(--green-light)';
-        const border = s.color === 'blue' ? 'var(--blue)' : s.color === 'purple' ? 'var(--purple)' : s.color === 'orange' ? 'var(--orange)' : 'var(--green)';
+        const chrome = timetableSlotChrome(s, conflictSinceById, conflictIds);
+        const bg = chrome.bg;
+        const border = chrome.border;
+        const bl = chrome.borderLeftWidth || 3;
+        let busyTitle = 'Click for details';
+        if (chrome.slotKind === 'conflict') busyTitle = 'Conflict — click for details';
+        else if (chrome.slotKind === 'request') busyTitle = 'Borrow request — click for details';
         let useClickableBusyCell = !requestView || requestBusyClickable;
+        const dataPal = ` data-tt-fill="${escapeHtml(chrome.bg)}" data-tt-border="${escapeHtml(chrome.border)}"`;
         let tdOpen = useClickableBusyCell
-          ? `<td rowspan="${rowspan}" data-schedid="${escapeHtml(s.id)}" title="Click for details" style="cursor:pointer; padding: 6px; border: 1px solid var(--border-ui); background: ${bg}; border-left: 3px solid ${border};">`
-          : `<td rowspan="${rowspan}" class="timetable-slot-busy" title="" style="cursor:default; padding: 6px; border: 1px solid var(--border-ui); background: ${bg}; border-left: 3px solid ${border};">`;
+          ? `<td rowspan="${rowspan}" data-schedid="${escapeHtml(s.id)}"${dataPal} title="${escapeHtml(busyTitle)}" style="cursor:pointer; padding: 6px; border: 1px solid var(--border-ui); background: ${bg}; border-left: ${bl}px solid ${border}; border-radius: 6px;">`
+          : `<td rowspan="${rowspan}" class="timetable-slot-busy"${dataPal} title="" style="cursor:default; padding: 6px; border: 1px solid var(--border-ui); background: ${bg}; border-left: ${bl}px solid ${border}; border-radius: 6px;">`;
         html += tdOpen;
-        html += buildScheduleCellInnerHtml(s, sub, cellLayout);
+        html += buildScheduleCellInnerHtml(s, sub, cellLayout, chrome.innerStyles);
         html += `</td>`;
       } else if (!cell || row !== timeToRow(cell.schedule.timeStart)) {
         // Skip cells that are part of a rowspan
@@ -1603,6 +1972,10 @@ function renderTimetableGrid(scheds, gridOpts) {
       .timetable-schedule .timetable-time-col { vertical-align: middle !important; }
       .timetable-table td {
         min-width: 100px;
+      }
+      .timetable-table td[data-schedid],
+      .timetable-table td.timetable-slot-busy {
+        border-radius: 6px;
       }
       .timetable-table td[data-schedid]:hover {
         filter: brightness(0.96);
@@ -1727,8 +2100,14 @@ function exportVisibleTimetable(format) {
           .filter(Boolean)
           .join('\n');
         let cls = '';
-        if (!isHead && cell.dataset?.schedid) cls = ' class="xls-busy"';
-        return `<${tag}${span}${cls}>${escapeHtml(txt)}</${tag}>`;
+        let pal = '';
+        if (!isHead && cell.dataset?.schedid) {
+          cls = ' class="xls-busy"';
+          let f = cell.getAttribute('data-tt-fill');
+          let b = cell.getAttribute('data-tt-border');
+          if (f && b) pal = ` style="background:${f};border-left:3px solid ${b}"`;
+        }
+        return `<${tag}${span}${cls}${pal}>${escapeHtml(txt)}</${tag}>`;
       }).join('');
       return `<tr>${cells}</tr>`;
     }).join('');
@@ -1749,6 +2128,40 @@ function exportVisibleTimetable(format) {
     downloadTextFile(`${stem}.xls`, html, 'application/vnd.ms-excel;charset=utf-8;');
     showToast('Excel exported.');
   }
+}
+function exportCurriculumHistoryAcademicYear() {
+  if (state.page !== 'curriculum') return;
+  let ay = normalizeAcademicYearInput(state.curriculumHistoryAyFilter) || DEFAULT_ACADEMIC_YEAR;
+  let scope = state.currentUser?.role === 'admin'
+    ? state.schedules
+    : state.schedules.filter(s => s.dept === state.currentUser?.dept);
+  let rows = scope.filter(s => scheduleAcademicYearForFilter(s) === ay);
+  if (!rows.length) {
+    showToast('No historical schedules to export for this academic year.');
+    return;
+  }
+  let head = ['Academic Year', 'Semester', 'Department', 'Section', 'Subject Code', 'Subject Name', 'Professor', 'Room', 'Days', 'Time Start', 'Time End'];
+  let body = rows.map(s => {
+    let sub = getSubject(s.subjectId);
+    let dept = getDept(s.dept);
+    return [
+      scheduleAcademicYearForFilter(s),
+      s.schSem || '',
+      dept?.code || s.dept || '',
+      s.section || '',
+      sub?.code || '',
+      sub?.name || '',
+      professorDisplayLine(s),
+      roomDisplayLineFromPick(s.roomId, s.roomOtherName),
+      (s.days || []).join('/'),
+      s.timeStart || '',
+      s.timeEnd || '',
+    ];
+  });
+  let csv = [head, ...body].map(r => r.map(csvEscape).join(',')).join('\r\n');
+  let fname = `curriculum-history-${ay.replace(/[^0-9-]+/g, '-')}.csv`;
+  downloadTextFile(fname, csv, 'text/csv;charset=utf-8;');
+  showToast('Historical schedule exported.');
 }
 
 function normalizeRequestTimetableFilters() {
@@ -1785,6 +2198,7 @@ function roomsForRequestDeptTimetable(deptId) {
 /** Requests page: Mon–Fri columns; shows classes using selected department's classrooms; chairpersons can click empty slots to start a borrow request. */
 function renderRequestDeptDayTimetable(u) {
   normalizeRequestTimetableFilters();
+  let term = currentTermFilter();
   let viewDept = state.requestTimetableDept;
   let deptInfo = getDept(viewDept);
   let deptRoomList = roomsForRequestDeptTimetable(viewDept);
@@ -1799,7 +2213,7 @@ function renderRequestDeptDayTimetable(u) {
   }
   let roomFilter = state.requestTimetableRoom;
   /** Same as main Schedule "By Room": match id or shared room name; include other depts using this space (e.g. approved borrows). */
-  let deptScheds = state.schedules.filter(s => scheduleMatchesRoomFilter(s, roomFilter));
+  let deptScheds = state.schedules.filter(s => scheduleMatchesRoomFilter(s, roomFilter) && scheduleMatchesCurrentTerm(s, term));
   let deptSelect = `<select class="filter-select request-dept-filter" id="requestTtDept" aria-label="Department (classrooms)">${withRooms.map(d => {
     return `<option value="${d.id}" ${viewDept === d.id ? 'selected' : ''}>${escapeHtml(d.code)} — ${escapeHtml(d.name)}</option>`;
   }).join('')}</select>`;
@@ -1826,12 +2240,13 @@ function renderRequestDeptDayTimetable(u) {
 function renderRequests() {
   let u = state.currentUser;
   normalizeRequestTimetableFilters();
+  let term = currentTermFilter();
   let pending = [];
   let outgoing = [];
 
   if (u.role === 'chairperson') {
-    pending = state.requests.filter(r => r.toDept === u.dept && r.status === 'pending');
-    outgoing = state.requests.filter(r => r.fromDept === u.dept);
+    pending = state.requests.filter(r => r.toDept === u.dept && r.status === 'pending' && requestMatchesCurrentTerm(r, term));
+    outgoing = state.requests.filter(r => r.fromDept === u.dept && requestMatchesCurrentTerm(r, term));
   }
 
   let requestListsBlock = u.role === 'chairperson' ? `
@@ -1943,12 +2358,14 @@ function renderCurriculumForm(d, opts) {
   let sSel = d.semester && !CURRICULUM_PAGE_SEMS.includes(d.semester) ? `<option value="${escapeHtml(d.semester)}" selected>${escapeHtml(d.semester)}</option>` : '';
   let yearOpts = SCHEDULE_FORM_YEARS.map(y => `<option value="${escapeHtml(y)}" ${d.year === y ? 'selected' : ''}>${escapeHtml(y)}</option>`).join('');
   let semOpts = CURRICULUM_PAGE_SEMS.map(s => `<option value="${escapeHtml(s)}" ${d.semester === s ? 'selected' : ''}>${escapeHtml(s)}</option>`).join('');
+  let ayVal = normalizeAcademicYearInput(d.academicYear) || normalizeAcademicYearInput(state.termAcademicYear) || DEFAULT_ACADEMIC_YEAR;
   let dis = readOnly ? 'disabled' : '';
   let deptDis = readOnly || !isAdminCurr ? 'disabled' : '';
   let roInp = readOnly ? 'readonly disabled' : '';
   return `<div class="form-grid form-grid-stacked curriculum-modal-form">
     <div class="form-group full"><label class="form-label" for="cc_dept">Department</label><select class="form-select" id="cc_dept" ${deptDis}>${deptOpts}</select></div>
     <div class="form-grid curriculum-form-year-sem"><div class="form-group"><label class="form-label" for="cc_year">Year</label><select class="form-select" id="cc_year" ${dis}><option value="">Select year...</option>${yearOpts}${ySel}</select></div><div class="form-group"><label class="form-label" for="cc_semester">Semester</label><select class="form-select" id="cc_semester" ${dis}><option value="">Select semester...</option>${semOpts}${sSel}</select></div></div>
+    <div class="form-group full"><label class="form-label" for="cc_ay">Academic Year</label><input class="form-input" id="cc_ay" value="${escapeHtml(ayVal)}" placeholder="2025-2026" ${roInp}></div>
     <div class="form-grid curriculum-form-code-subject"><div class="form-group"><label class="form-label" for="cc_courseCode">Course code</label><input class="form-input" id="cc_courseCode" placeholder="e.g. IE 100" value="${escapeHtml(d.courseCode || '')}" ${roInp}></div><div class="form-group"><label class="form-label" for="cc_subject">Subject</label><input class="form-input" id="cc_subject" placeholder="Subject title" value="${escapeHtml(d.subjectName || '')}" ${roInp}></div></div>
     <div class="form-grid curriculum-form-units"><div class="form-group"><label class="form-label" for="cc_lecUnits">Lec (units)</label><input class="form-input" id="cc_lecUnits" type="number" min="0" max="12" step="1" value="${escapeHtml(String(lecV))}" ${roInp}></div><div class="form-group"><label class="form-label" for="cc_labUnits">Lab (units)</label><input class="form-input" id="cc_labUnits" type="number" min="0" max="12" step="1" value="${escapeHtml(String(labV))}" ${roInp}></div><div class="form-group"><label class="form-label" for="cc_units_total">Total unit/s</label><input class="form-input" id="cc_units_total" type="text" readonly tabindex="-1" value="${escapeHtml(String(totV))}" aria-live="polite"></div></div>
   </div><input type="hidden" id="cc_edit_id" value="${escapeHtml(d.id || '')}">`;
@@ -1958,19 +2375,15 @@ function renderCurriculum() {
   mergeMissingCurriculumRowsInto(state.curriculum);
   let u = state.currentUser;
   let canMutateCurriculum = canUserMutateCurriculum(u);
+  let termAy = normalizeAcademicYearInput(state.termAcademicYear) || DEFAULT_ACADEMIC_YEAR;
   let chairDept = u?.role === 'chairperson' ? u.dept : '';
-  if (chairDept) state.curriculumDeptFilter = chairDept;
+  if (!SCHEDULE_FORM_YEARS.includes(state.curriculumYearFilter)) state.curriculumYearFilter = '1st Year';
   let rows = state.curriculum.filter(c => {
-    if (state.curriculumDeptFilter !== 'all' && curriculumFilterDept(c) !== state.curriculumDeptFilter) return false;
-    if (state.curriculumYearFilter !== 'all' && curriculumFilterYear(c) !== state.curriculumYearFilter) return false;
-    if (state.curriculumSemFilter !== 'all' && curriculumFilterSemester(c) !== state.curriculumSemFilter) return false;
+    if (chairDept && curriculumFilterDept(c) !== chairDept) return false;
+    if (curriculumFilterYear(c) !== state.curriculumYearFilter) return false;
+    if (curriculumAcademicYearForFilter(c) !== termAy) return false;
     return true;
   });
-  let deptFilter = chairDept
-    ? `<select class="filter-select curriculum-filter-select" id="curriculumDeptFilter" aria-label="Department" disabled><option value="${escapeHtml(chairDept)}" selected>${escapeHtml(getDept(chairDept)?.name || '')}</option></select>`
-    : `<select class="filter-select curriculum-filter-select" id="curriculumDeptFilter" aria-label="Department"><option value="all" ${state.curriculumDeptFilter === 'all' ? 'selected' : ''}>All departments</option>${DEPARTMENTS.map(d => `<option value="${d.id}" ${state.curriculumDeptFilter === d.id ? 'selected' : ''}>${escapeHtml(d.name)}</option>`).join('')}</select>`;
-  let yearFilter = `<select class="filter-select curriculum-filter-select" id="curriculumYearFilter" aria-label="Year"><option value="all" ${state.curriculumYearFilter === 'all' ? 'selected' : ''}>Year</option>${SCHEDULE_FORM_YEARS.map(y => `<option value="${escapeHtml(y)}" ${state.curriculumYearFilter === y ? 'selected' : ''}>${escapeHtml(y)}</option>`).join('')}</select>`;
-  let semFilter = `<select class="filter-select curriculum-filter-select" id="curriculumSemFilter" aria-label="Semester"><option value="all" ${state.curriculumSemFilter === 'all' ? 'selected' : ''}>Semester</option>${CURRICULUM_PAGE_SEMS.map(s => `<option value="${escapeHtml(s)}" ${state.curriculumSemFilter === s ? 'selected' : ''}>${escapeHtml(s)}</option>`).join('')}</select>`;
   let curriculumSubhead = canMutateCurriculum
     ? 'Add course and subject entries by department, year, and semester. Filter the list below.'
     : 'View-only: browse entries by department, year, and semester. Department chairs add and update curriculum rows.';
@@ -1986,20 +2399,11 @@ function renderCurriculum() {
       : u?.role === 'admin'
         ? `<td class="curriculum-td-actions"><button type="button" class="btn btn-outline btn-sm" data-viewcrow="${escapeHtml(c.id)}">View</button></td>`
         : '';
-  return `
-    <div class="page-header curriculum-header">
-      <div>
-        <h2>Curriculum</h2>
-        <p class="curriculum-subhead">${curriculumSubhead}</p>
-      </div>
-    </div>
-    <div class="curriculum-panel">
-      <div class="curriculum-filter-row" aria-hidden="false">
-        <div class="curriculum-filter-cell curriculum-filter-dept">${deptFilter}</div>
-        <div class="curriculum-filter-cell curriculum-filter-year">${yearFilter}</div>
-        <div class="curriculum-filter-cell curriculum-filter-sem">${semFilter}</div>
-        <div class="curriculum-filter-cell curriculum-filter-tail"></div>
-      </div>
+  let rowsFirstSem = rows.filter(c => curriculumFilterSemester(c) === '1st Semester');
+  let rowsSecondSem = rows.filter(c => curriculumFilterSemester(c) === '2nd Semester');
+  function curriculumSemTable(title, semRows) {
+    return `<div class="curriculum-sem-col">
+      <div class="curriculum-sem-title">${escapeHtml(title)}</div>
       <div class="table-wrap curriculum-table-wrap">
         <table class="curriculum-table">
           <colgroup>
@@ -2008,14 +2412,51 @@ function renderCurriculum() {
             <col class="curriculum-col-lec" />
             <col class="curriculum-col-lab" />
             <col class="curriculum-col-unit-total" />
+            <col class="curriculum-col-hours" />
             ${actionsCol}
           </colgroup>
-          <thead><tr><th scope="col">Course code</th><th scope="col">Subject</th><th scope="col" class="curriculum-th-num">Lec</th><th scope="col" class="curriculum-th-num">Lab</th><th scope="col" class="curriculum-th-num">Unit/s</th>${actionsTh}</tr></thead>
+          <thead><tr><th scope="col">Course code</th><th scope="col">Subject</th><th scope="col" class="curriculum-th-num">Lec</th><th scope="col" class="curriculum-th-num">Lab</th><th scope="col" class="curriculum-th-num">Unit/s</th><th scope="col">Hours</th>${actionsTh}</tr></thead>
           <tbody>
-        ${rows.map(c => `<tr><td>${escapeHtml(c.courseCode)}</td><td class="curriculum-td-subj">${escapeHtml(c.subjectName)}</td><td class="curriculum-td-num">${curriculumColLec(c)}</td><td class="curriculum-td-num">${curriculumColLab(c)}</td><td class="curriculum-td-num">${curriculumColTotal(c)}</td>${rowCells(c)}</tr>`).join('')}
+            ${semRows.map(c => `<tr><td>${escapeHtml(c.courseCode)}</td><td class="curriculum-td-subj">${escapeHtml(c.subjectName)}</td><td class="curriculum-td-num">${curriculumColLec(c)}</td><td class="curriculum-td-num">${curriculumColLab(c)}</td><td class="curriculum-td-num">${curriculumColTotal(c)}</td><td class="curriculum-td-hours">${curriculumRequiredHours(c)}</td>${rowCells(c)}</tr>`).join('')}
           </tbody>
         </table>
-        ${rows.length === 0 ? '<div class="curriculum-empty">No curriculum rows for this filter.</div>' : ''}
+        ${semRows.length === 0 ? '<div class="curriculum-empty">No subjects for this semester.</div>' : ''}
+      </div>
+    </div>`;
+  }
+  let scheduleScope = state.currentUser?.role === 'admin'
+    ? state.schedules
+    : state.schedules.filter(s => s.dept === state.currentUser?.dept);
+  let historyAyOptions = curriculumHistoryAcademicYearOptions(scheduleScope, state.curriculumHistoryAyFilter || termAy);
+  if (!historyAyOptions.includes(state.curriculumHistoryAyFilter)) {
+    state.curriculumHistoryAyFilter = historyAyOptions[0] || termAy;
+  }
+  let historyAy = normalizeAcademicYearInput(state.curriculumHistoryAyFilter) || termAy;
+  let historyRows = scheduleScope.filter(s => scheduleAcademicYearForFilter(s) === historyAy);
+  let historyAySelect = `<select class="filter-select curriculum-filter-select" id="curriculumHistoryAyFilter" aria-label="Historical schedule academic year">${historyAyOptions.map(ay => `<option value="${escapeHtml(ay)}" ${historyAy === ay ? 'selected' : ''}>${escapeHtml(ay)}</option>`).join('')}</select>`;
+  return `
+    <div class="curriculum-panel">
+      <div class="curriculum-sem-grid">
+        ${curriculumSemTable('First Semester', rowsFirstSem)}
+        ${curriculumSemTable('Second Semester', rowsSecondSem)}
+      </div>
+    </div>
+    <div class="curriculum-panel curriculum-history-panel">
+      <div class="curriculum-history-head">
+        <div>
+          <div class="card-title card-title-with-icon">${icon('calendar', 18)} Previous Academic Year Schedule </div>
+          <div class="curriculum-history-subhead">View saved schedules from current/previous academic years. Export the selected academic year only.</div>
+        </div>
+        <div class="curriculum-history-actions">${historyAySelect}<button type="button" class="btn btn-outline btn-sm" id="curriculumHistoryExportBtn">${icon('fileText', 16)} Export</button></div>
+      </div>
+      <div class="table-wrap curriculum-table-wrap">
+        <table class="curriculum-history-table">
+          <thead><tr><th>Academic Year</th><th>Semester</th><th>Subject</th><th>Section</th><th>Professor</th><th>Room</th><th>Days</th><th>Time</th></tr></thead>
+          <tbody>
+            ${historyRows.map(s => { let sub = getSubject(s.subjectId); return `<tr><td>${escapeHtml(scheduleAcademicYearForFilter(s))}</td><td>${escapeHtml(s.schSem || '—')}</td><td>${escapeHtml(sub?.code || '—')} — ${escapeHtml(sub?.name || '')}</td><td>${escapeHtml(s.section || '—')}</td><td>${escapeHtml(professorDisplayLine(s))}</td><td>${escapeHtml(roomDisplayLineFromPick(s.roomId, s.roomOtherName))}</td><td>${escapeHtml((s.days || []).map(d => d.slice(0, 3)).join(', '))}</td><td>${escapeHtml(fmt12(s.timeStart))}–${escapeHtml(fmt12(s.timeEnd))}</td></tr>`; }).join('')}
+          </tbody>
+        </table>
+        ${historyRows.length === 0 ? '<div class="curriculum-empty">No historical schedules for this academic year.</div>' : ''}
       </div>
     </div>
   `;
@@ -2192,6 +2633,7 @@ function renderScheduleForm() {
       ? `<option value="${escapeHtml(defSec)}" selected>${escapeHtml(defSec)}</option>`
       : '';
   const req = '<span class="label-req" aria-hidden="true">*</span>';
+  let defaultSchAy = normalizeAcademicYearInput(state.termAcademicYear) || DEFAULT_ACADEMIC_YEAR;
 
   let deptRow;
   if (isAdmin) {
@@ -2214,6 +2656,10 @@ function renderScheduleForm() {
     <div class="schedule-form-inline-row schedule-form-row-sem-subject">
       <div class="form-group"><label class="form-label" for="f_sem">Semester ${req}</label><select class="form-select" id="f_sem"><option value="">Select semester...</option></select></div>
       <div class="form-group"><label class="form-label" for="f_subject">Subject ${req}</label><select class="form-select" id="f_subject"><option value="">Select subject...</option></select></div>
+    </div>
+    <div class="schedule-form-inline-row">
+      <div class="form-group"><label class="form-label" for="f_ay">Academic Year ${req}</label><input class="form-input" id="f_ay" value="${escapeHtml(defaultSchAy)}" placeholder="2025-2026"></div>
+      <div class="form-group"></div>
     </div>
     <div class="schedule-form-inline-row">
       <div class="form-group"><label class="form-label" for="f_set">Set (optional)</label>${setABSelectHtml('f_set', '')}</div>
@@ -2277,6 +2723,10 @@ function renderViewSchedule(d) {
         <div class="form-group"><label class="form-label">Subject</label><div class="vs-readonly">${subLine}</div></div>
       </div>
       <div class="schedule-form-inline-row">
+        <div class="form-group"><label class="form-label">Academic Year</label><div class="vs-readonly">${escapeHtml(normalizeAcademicYearInput(d.schAy) || DEFAULT_ACADEMIC_YEAR)}</div></div>
+        <div class="form-group"></div>
+      </div>
+      <div class="schedule-form-inline-row">
         <div class="form-group"><label class="form-label">Set (optional)</label><div class="vs-readonly">${d.setLabel ? escapeHtml(d.setLabel) : 'None'}</div></div>
         <div class="form-group"><label class="form-label">Professor</label><div class="vs-readonly">${escapeHtml(professorFullNameDisplayLineFromPick(d.professorId, d.professorOtherName))}</div></div>
       </div>
@@ -2292,7 +2742,7 @@ function renderViewSchedule(d) {
   }
   let listDept = d.dept;
   let isAdmin = state.currentUser.role === 'admin';
-  let subList = subjectsForCreateScheduleSlot(listDept, d.schYear || '', d.schSem || '');
+  let subList = subjectsForCreateScheduleSlot(listDept, d.schYear || '', d.schSem || '', normalizeAcademicYearInput(d.schAy) || DEFAULT_ACADEMIC_YEAR);
   let profList = [...state.professors.filter(p => p.dept === listDept)].sort((a, b) => a.name.localeCompare(b.name));
   let roomList = [...roomsSourceForApp().filter(r => r.dept === listDept)].sort((a, b) => a.name.localeCompare(b.name));
   let subOpts = subList.map(x => `<option value="${escapeHtml(x.id)}" ${d.subjectId === x.id ? 'selected' : ''}>${escapeHtml(x.code)} — ${escapeHtml(x.name)}</option>`).join('');
@@ -2333,6 +2783,10 @@ function renderViewSchedule(d) {
     <div class="schedule-form-inline-row schedule-form-row-sem-subject">
       <div class="form-group"><label class="form-label" for="vs_sem">Semester</label>${scheduleSemSelectHtml('vs_sem', d.schSem || '')}</div>
       <div class="form-group"><label class="form-label" for="vs_subject">Subject</label>${vsSubjectSelect}</div>
+    </div>
+    <div class="schedule-form-inline-row">
+      <div class="form-group"><label class="form-label" for="vs_ay">Academic Year</label><input class="form-input" id="vs_ay" value="${escapeHtml(normalizeAcademicYearInput(d.schAy) || DEFAULT_ACADEMIC_YEAR)}" placeholder="2025-2026"></div>
+      <div class="form-group"></div>
     </div>
     <div class="schedule-form-inline-row">
       <div class="form-group"><label class="form-label" for="vs_set">Set (optional)</label>${setInput}</div>
@@ -2576,6 +3030,44 @@ function bindPage(){
   document.getElementById('filterSection')?.addEventListener('change',e=>{state.filterSection=e.target.value;render();});
   document.getElementById('filterFaculty')?.addEventListener('change',e=>{state.filterFaculty=e.target.value;render();});
   document.getElementById('filterRoom')?.addEventListener('change',e=>{state.filterRoom=e.target.value;render();});
+  document.getElementById('topbarTermSemester')?.addEventListener('change', e => {
+    state.termSemester = e.target.value || '1st Semester';
+    render();
+  });
+  document.getElementById('topbarTermAcademicYear')?.addEventListener('change', e => {
+    if (e.target.value === TERM_AY_OTHER_VALUE) {
+      state.termAcademicYearIsCustom = true;
+      state.termAcademicYearCustom = normalizeAcademicYearInput(state.termAcademicYearCustom || '');
+      state.termAcademicYear = state.termAcademicYearCustom || state.termAcademicYear || DEFAULT_ACADEMIC_YEAR;
+      state.termAcademicYearEditingOther = true;
+    } else {
+      state.termAcademicYear = normalizeAcademicYearInput(e.target.value || '') || DEFAULT_ACADEMIC_YEAR;
+      state.termAcademicYearCustom = '';
+      state.termAcademicYearIsCustom = false;
+      state.termAcademicYearEditingOther = false;
+    }
+    render();
+  });
+  function applyEditableAcademicYear(v) {
+    let customAy = normalizeAcademicYearInput(v || '');
+    if (customAy) {
+      state.termAcademicYearCustom = customAy;
+      state.termAcademicYear = customAy;
+      state.termAcademicYearIsCustom = true;
+      rememberCustomAcademicYear(customAy);
+    }
+    state.termAcademicYearEditingOther = false;
+    render();
+  }
+  document.getElementById('topbarTermAcademicYearOther')?.addEventListener('change', e => applyEditableAcademicYear(e.target.value));
+  document.getElementById('topbarTermAcademicYearOther')?.addEventListener('keydown', e => {
+    if (e.key === 'Enter') applyEditableAcademicYear(e.target.value);
+    if (e.key === 'Escape') {
+      state.termAcademicYearEditingOther = false;
+      render();
+    }
+  });
+  document.getElementById('topbarTermAcademicYearOther')?.addEventListener('blur', e => applyEditableAcademicYear(e.target.value));
   function bindScheduleCellOpenDetails(el) {
     el.addEventListener('click', e => {
       e.stopPropagation();
@@ -2707,6 +3199,7 @@ function bindPage(){
         dept: deptVal,
         schYear: (document.getElementById('vs_year')?.value || '').trim() || null,
         schSem: (document.getElementById('vs_sem')?.value || '').trim() || null,
+        schAy: normalizeAcademicYearInput(document.getElementById('vs_ay')?.value || '') || null,
         setLabel: (document.getElementById('vs_set')?.value || '').trim() || null,
         labLabel: state.schedules[idx].labLabel ?? null,
         color: state.schedules[idx].color,
@@ -2717,7 +3210,7 @@ function bindPage(){
       let vsRoomResolved = resolveScheduleRoomFromForm(roomSel, roomOtherTxt, vsRoomResolveList);
       entry.roomId = vsRoomResolved.roomId;
       entry.roomOtherName = vsRoomResolved.roomOtherName;
-      if (!entry.subjectId || !profId || !roomSel || !entry.section || !days.length || !entry.timeStart || !entry.timeEnd || !entry.schYear || !entry.schSem) {
+      if (!entry.subjectId || !profId || !roomSel || !entry.section || !days.length || !entry.timeStart || !entry.timeEnd || !entry.schYear || !entry.schSem || !entry.schAy) {
         showFormValidationBanner('vsConflictAlert', MSG_FORM_INCOMPLETE);
         return;
       }
@@ -2746,7 +3239,7 @@ function bindPage(){
         showFormValidationBanner('vsConflictAlert', 'Choose a subject that belongs to the selected department.');
         return;
       }
-      if (!subjectAllowedByCurriculum(entry.dept, entry.schYear, entry.schSem, entry.subjectId)) {
+      if (!subjectAllowedByCurriculum(entry.dept, entry.schYear, entry.schSem, entry.subjectId, entry.schAy)) {
         showFormValidationBanner('vsConflictAlert', 'Choose a subject listed in Curriculum for the selected year and semester.');
         return;
       }
@@ -2759,9 +3252,7 @@ function bindPage(){
         return;
       }
       if (hasSupabaseClient()) {
-        const { error } = await window.cenSupabase
-          .from('schedules')
-          .upsert([normalizeScheduleToDb(entry)], { onConflict: 'id' });
+        const { error } = await upsertSchedulesDb([entry]);
         if (error) {
           showFormValidationBanner('vsConflictAlert', `Supabase error: ${error.message}`);
           return;
@@ -2805,6 +3296,7 @@ function bindPage(){
         dept: entryDept,
         schYear: document.getElementById('f_year')?.value || '',
         schSem: document.getElementById('f_sem')?.value || '',
+        schAy: normalizeAcademicYearInput(document.getElementById('f_ay')?.value || '') || '',
         color: 'blue',
         setLabel: setV || null,
         labLabel: null,
@@ -2815,11 +3307,11 @@ function bindPage(){
       let roomResolved = resolveScheduleRoomFromForm(roomSel, roomOtherAdd, roomResolveList);
       entry.roomId = roomResolved.roomId;
       entry.roomOtherName = roomResolved.roomOtherName;
-      if (!entryDept || !entry.subjectId || !profSel || !roomSel || !entry.section || !days.length || !entry.timeStart || !entry.timeEnd || !entry.schYear || !entry.schSem) {
+      if (!entryDept || !entry.subjectId || !profSel || !roomSel || !entry.section || !days.length || !entry.timeStart || !entry.timeEnd || !entry.schYear || !entry.schSem || !entry.schAy) {
         showFormValidationBanner('conflictAlert', MSG_FORM_INCOMPLETE);
         return;
       }
-      if (!subjectAllowedByCurriculum(entryDept, entry.schYear, entry.schSem, entry.subjectId)) {
+      if (!subjectAllowedByCurriculum(entryDept, entry.schYear, entry.schSem, entry.subjectId, entry.schAy)) {
         showFormValidationBanner('conflictAlert', 'Choose a subject listed in Curriculum for the selected year and semester.');
         return;
       }
@@ -2852,9 +3344,7 @@ function bindPage(){
       }
       entry.id = genId();
       if (hasSupabaseClient()) {
-        const { error } = await window.cenSupabase
-          .from('schedules')
-          .upsert([normalizeScheduleToDb(entry)], { onConflict: 'id' });
+        const { error } = await upsertSchedulesDb([entry]);
         if (error) {
           showFormValidationBanner('conflictAlert', `Supabase error: ${error.message}`);
           return;
@@ -2917,6 +3407,7 @@ function bindPage(){
         dept: document.getElementById('cc_dept')?.value,
         year: (document.getElementById('cc_year')?.value || '').trim(),
         semester: (document.getElementById('cc_semester')?.value || '').trim(),
+        academicYear: normalizeAcademicYearInput(document.getElementById('cc_ay')?.value || ''),
         courseCode,
         subjectName,
         lecUnits,
@@ -2926,7 +3417,7 @@ function bindPage(){
         subjectCode: courseCode.replace(/\s+/g, '') || subjectName.replace(/\s+/g, '').slice(0, 24) || '—',
         section: '',
       };
-      if (!row.courseCode || !row.subjectName || !row.year || !row.semester || units < 1) return;
+      if (!row.courseCode || !row.subjectName || !row.year || !row.semester || !row.academicYear || units < 1) return;
       if (!window.confirm(editId ? MSG_CONFIRM_SAVE_CURRICULUM_EDIT : MSG_CONFIRM_SAVE_CURRICULUM_NEW)) return;
       if (editId) {
         let i = state.curriculum.findIndex(c => c.id === editId);
@@ -2937,9 +3428,7 @@ function bindPage(){
       }
       let savedRow = editId ? { ...row, id: editId } : row;
       if (hasSupabaseClient()) {
-        const { error } = await window.cenSupabase
-          .from('curriculum')
-          .upsert([normalizeCurriculumToDb(savedRow)], { onConflict: 'id' });
+        const { error } = await upsertCurriculumDb([savedRow]);
         if (error) {
           window.alert(`Unable to save curriculum in Supabase: ${error.message}`);
           return;
@@ -2961,6 +3450,7 @@ function bindPage(){
       let subId = document.getElementById('rq_subject')?.value || '';
       let schYear = (document.getElementById('rq_year')?.value || '').trim();
       let schSem = (document.getElementById('rq_sem')?.value || '').trim();
+      let schAy = normalizeAcademicYearInput(state.termAcademicYear) || DEFAULT_ACADEMIC_YEAR;
       let profReq = document.getElementById('rq_professor')?.value || '';
       let profOtherRq = (document.getElementById('rq_professor_other')?.value || '').trim();
       let toDeptPick = document.getElementById('rq_to_dept')?.value || '';
@@ -2970,7 +3460,7 @@ function bindPage(){
         showFormValidationBanner('rqFormAlert', MSG_FORM_INCOMPLETE);
         return;
       }
-      if (!subjectAllowedByCurriculum(state.currentUser.dept, schYear, schSem, subId)) {
+      if (!subjectAllowedByCurriculum(state.currentUser.dept, schYear, schSem, subId, schAy)) {
         showFormValidationBanner('rqFormAlert', 'Choose a subject listed in Curriculum for the selected year and semester.');
         return;
       }
@@ -3010,6 +3500,7 @@ function bindPage(){
         timeEnd,
         schYear,
         schSem,
+        schAy,
         setLabel: setV || null,
         labLabel: null,
         reason: reasonRq,
@@ -3090,11 +3581,10 @@ function bindPage(){
       }
     }
     r.status='approved';
-    let approvedSched = {id:genId(),subjectId:r.subjectId,professorId:r.professorId||null,professorOtherName:r.professorOtherName||null,roomId:r.roomId,roomOtherName:r.roomOtherName||null,dept:r.fromDept,section:r.section,days:r.days,timeStart:r.timeStart,timeEnd:r.timeEnd,color:'orange',setLabel:r.setLabel||null,labLabel:r.labLabel||null,schYear:r.schYear||'1st Year',schSem:r.schSem||'1st Semester'};
+    let approvedAt = new Date().toISOString();
+    let approvedSched = {id:genId(),subjectId:r.subjectId,professorId:r.professorId||null,professorOtherName:r.professorOtherName||null,roomId:r.roomId,roomOtherName:r.roomOtherName||null,dept:r.fromDept,section:r.section,days:r.days,timeStart:r.timeStart,timeEnd:r.timeEnd,color:'orange',setLabel:r.setLabel||null,labLabel:r.labLabel||null,schYear:r.schYear||'1st Year',schSem:r.schSem||'1st Semester',schAy:normalizeAcademicYearInput(r.schAy)||normalizeAcademicYearInput(state.termAcademicYear)||DEFAULT_ACADEMIC_YEAR,createdAt:approvedAt};
     if (hasSupabaseClient()) {
-      const { error } = await window.cenSupabase
-        .from('schedules')
-        .upsert([normalizeScheduleToDb(approvedSched)], { onConflict: 'id' });
+      const { error } = await upsertSchedulesDb([approvedSched]);
       if (error) {
         window.alert(`Request approved but schedule insert failed in Supabase: ${error.message}`);
         return;
@@ -3148,7 +3638,13 @@ function bindPage(){
   }));
   document.getElementById('curriculumDeptFilter')?.addEventListener('change',e=>{state.curriculumDeptFilter=e.target.value;render();});
   document.getElementById('curriculumYearFilter')?.addEventListener('change',e=>{state.curriculumYearFilter=e.target.value;render();});
+  document.getElementById('topbarCurriculumYearFilter')?.addEventListener('change',e=>{state.curriculumYearFilter=e.target.value || '1st Year';render();});
   document.getElementById('curriculumSemFilter')?.addEventListener('change',e=>{state.curriculumSemFilter=e.target.value;render();});
+  document.getElementById('curriculumHistoryAyFilter')?.addEventListener('change', e => {
+    state.curriculumHistoryAyFilter = normalizeAcademicYearInput(e.target.value || '') || DEFAULT_ACADEMIC_YEAR;
+    render();
+  });
+  document.getElementById('curriculumHistoryExportBtn')?.addEventListener('click', exportCurriculumHistoryAcademicYear);
   function syncCurriculumUnitsTotal() {
     let lecEl = document.getElementById('cc_lecUnits');
     let labEl = document.getElementById('cc_labUnits');
@@ -3281,7 +3777,8 @@ function bindPage(){
     }
     if (subEl) {
       let prevSub = (subEl.value || '').trim();
-      let subjects = year && sem ? subjectsForCreateScheduleSlot(deptId, year, sem) : [];
+      let ay = normalizeAcademicYearInput(state.termAcademicYear) || DEFAULT_ACADEMIC_YEAR;
+      let subjects = year && sem ? subjectsForCreateScheduleSlot(deptId, year, sem, ay) : [];
       let subOpts = subjects
         .map(s => `<option value="${escapeHtml(s.id)}" ${prevSub === s.id ? 'selected' : ''}>${escapeHtml(s.code)} — ${escapeHtml(s.name)}</option>`)
         .join('');
@@ -3309,9 +3806,10 @@ function bindPage(){
     let opts = sections.map(s => `<option value="${escapeHtml(s)}" ${selected === s ? 'selected' : ''}>${escapeHtml(s)}</option>`).join('');
     secEl.innerHTML = `<option value="">Select section...</option>${opts}`;
     let sem = document.getElementById('vs_sem')?.value || '';
+    let ay = normalizeAcademicYearInput(document.getElementById('vs_ay')?.value || state.termAcademicYear) || DEFAULT_ACADEMIC_YEAR;
     let subEl = document.getElementById('vs_subject');
     if (subEl) {
-      let subjects = year && sem ? subjectsForCreateScheduleSlot(deptId, year, sem) : [];
+      let subjects = year && sem ? subjectsForCreateScheduleSlot(deptId, year, sem, ay) : [];
       let subOpts = subjects.map(s => `<option value="${escapeHtml(s.id)}">${escapeHtml(s.code)} — ${escapeHtml(s.name)}</option>`).join('');
       subEl.innerHTML = `<option value="">Select subject</option>${subOpts}`;
     }
@@ -3319,10 +3817,22 @@ function bindPage(){
   document.getElementById('vs_sem')?.addEventListener('change', () => {
     let year = document.getElementById('vs_year')?.value || '';
     let sem = document.getElementById('vs_sem')?.value || '';
+    let ay = normalizeAcademicYearInput(document.getElementById('vs_ay')?.value || state.termAcademicYear) || DEFAULT_ACADEMIC_YEAR;
     let deptId = document.getElementById('vs_dept')?.value || state.currentUser?.dept;
     let subEl = document.getElementById('vs_subject');
     if (!subEl || !deptId) return;
-    let subjects = year && sem ? subjectsForCreateScheduleSlot(deptId, year, sem) : [];
+    let subjects = year && sem ? subjectsForCreateScheduleSlot(deptId, year, sem, ay) : [];
+    let subOpts = subjects.map(s => `<option value="${escapeHtml(s.id)}">${escapeHtml(s.code)} — ${escapeHtml(s.name)}</option>`).join('');
+    subEl.innerHTML = `<option value="">Select subject</option>${subOpts}`;
+  });
+  document.getElementById('vs_ay')?.addEventListener('change', () => {
+    let year = document.getElementById('vs_year')?.value || '';
+    let sem = document.getElementById('vs_sem')?.value || '';
+    let ay = normalizeAcademicYearInput(document.getElementById('vs_ay')?.value || state.termAcademicYear) || DEFAULT_ACADEMIC_YEAR;
+    let deptId = document.getElementById('vs_dept')?.value || state.currentUser?.dept;
+    let subEl = document.getElementById('vs_subject');
+    if (!subEl || !deptId) return;
+    let subjects = year && sem ? subjectsForCreateScheduleSlot(deptId, year, sem, ay) : [];
     let subOpts = subjects.map(s => `<option value="${escapeHtml(s.id)}">${escapeHtml(s.code)} — ${escapeHtml(s.name)}</option>`).join('');
     subEl.innerHTML = `<option value="">Select subject</option>${subOpts}`;
   });
