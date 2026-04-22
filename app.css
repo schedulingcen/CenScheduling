@@ -1201,7 +1201,7 @@ td { padding: 12px 16px; border-bottom: 1px solid var(--border-ui); font-size: 1
   grid-column: 1 / -1;
 }
 .curriculum-form-units {
-  grid-template-columns: 1fr 1fr 1fr;
+  grid-template-columns: 1fr 1fr 1fr 1fr;
   gap: 16px;
 }
 @media (max-width: 480px) {

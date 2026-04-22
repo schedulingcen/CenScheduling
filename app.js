@@ -47,6 +47,7 @@ function toggleAppTheme() {
 }
 
 const CEN_STATE_KEY = 'cen_app_state';
+const CURRICULUM_HOURS_OVERRIDES_KEY = 'cen_curriculum_required_hours_overrides_v1';
 const PAGE_TO_HTML = {
   dashboard: 'dashboard.html',
   schedule: 'schedule.html',
@@ -155,7 +156,7 @@ function renderTopbarCenter() {
     }).join('');
     return `<div class="curriculum-topbar-left"><div class="page-title page-title-curriculum-left">${escapeHtml(title)}</div><select class="filter-select curriculum-topbar-year" id="topbarCurriculumYearFilter" aria-label="Year filter">${yearOpts}</select></div>`;
   }
-  let termPages = ['schedule', 'curriculum', 'requests', 'dashboard'];
+  let termPages = ['schedule', 'curriculum', 'requests'];
   if (!termPages.includes(state.page)) {
     return `<div class="page-title">${getPageTitle()}</div>`;
   }
@@ -266,6 +267,7 @@ function hydratePersistedData() {
           year: c.year || base.year || '1st Year',
           semester: c.semester || base.semester || '1st Semester',
           academicYear: normalizeAcademicYearInput(c.academicYear || base.academicYear) || DEFAULT_ACADEMIC_YEAR,
+          requiredHours: Number.isFinite(Number(c.requiredHours)) ? Number(c.requiredHours) : (Number.isFinite(Number(base.requiredHours)) ? Number(base.requiredHours) : null),
         };
       });
       mergeMissingCurriculumRowsInto(merged);
@@ -372,6 +374,28 @@ const genId = () => `id_${Date.now().toString(36)}_${Math.random().toString(36).
 function hasSupabaseClient() {
   return !!(window.cenSupabaseReady && window.cenSupabase);
 }
+function loadCurriculumHoursOverrides() {
+  try {
+    let raw = localStorage.getItem(CURRICULUM_HOURS_OVERRIDES_KEY);
+    let obj = raw ? JSON.parse(raw) : {};
+    return obj && typeof obj === 'object' ? obj : {};
+  } catch (e) {
+    return {};
+  }
+}
+function saveCurriculumHoursOverrides(map) {
+  try {
+    localStorage.setItem(CURRICULUM_HOURS_OVERRIDES_KEY, JSON.stringify(map || {}));
+  } catch (e) { /* ignore */ }
+}
+function rememberCurriculumRequiredHours(curriculumId, hours) {
+  if (!curriculumId) return;
+  let n = Number(hours);
+  if (!Number.isFinite(n)) return;
+  let map = loadCurriculumHoursOverrides();
+  map[curriculumId] = n;
+  saveCurriculumHoursOverrides(map);
+}
 
 function normalizeSubjectFromDb(row) {
   if (!row) return null;
@@ -440,6 +464,7 @@ function isRetiredCpeDrawingRoom(r) {
 }
 function normalizeCurriculumFromDb(row) {
   if (!row) return null;
+  let localHours = loadCurriculumHoursOverrides()[row.id];
   return {
     id: row.id,
     dept: row.dept_id || row.dept,
@@ -450,6 +475,11 @@ function normalizeCurriculumFromDb(row) {
     lecUnits: Number.isFinite(Number(row.lec_units)) ? Number(row.lec_units) : 0,
     labUnits: Number.isFinite(Number(row.lab_units)) ? Number(row.lab_units) : 0,
     units: Number.isFinite(Number(row.units)) ? Number(row.units) : 0,
+    requiredHours: Number.isFinite(Number(row.required_hours))
+      ? Number(row.required_hours)
+      : (Number.isFinite(Number(row.requiredHours))
+        ? Number(row.requiredHours)
+        : (Number.isFinite(Number(localHours)) ? Number(localHours) : null)),
     courseName: row.course_name || row.courseName || row.subject_name || row.subjectName || '',
     subjectCode: row.subject_code || row.subjectCode || '',
     section: row.section || '',
@@ -467,6 +497,7 @@ function normalizeCurriculumToDb(row) {
     lec_units: Number.isFinite(Number(row.lecUnits)) ? Number(row.lecUnits) : 0,
     lab_units: Number.isFinite(Number(row.labUnits)) ? Number(row.labUnits) : 0,
     units: Number.isFinite(Number(row.units)) ? Number(row.units) : 0,
+    required_hours: Number.isFinite(Number(row.requiredHours)) ? Number(row.requiredHours) : null,
     subject_code: row.subjectCode || '',
     section: row.section || '',
     academic_year: normalizeAcademicYearInput(row.academicYear) || DEFAULT_ACADEMIC_YEAR,
@@ -554,9 +585,18 @@ async function upsertSchedulesDb(rows) {
 async function upsertCurriculumDb(rows) {
   let payload = rows.map(normalizeCurriculumToDb);
   let res = await window.cenSupabase.from('curriculum').upsert(payload, { onConflict: 'id' });
-  if (!res.error || !isSupabaseMissingColumnError(res.error, 'academic_year')) return res;
-  let fallback = payload.map(({ academic_year, ...rest }) => rest);
-  return window.cenSupabase.from('curriculum').upsert(fallback, { onConflict: 'id' });
+  if (!res.error) return res;
+  let fallback = payload;
+  if (isSupabaseMissingColumnError(res.error, 'academic_year')) {
+    fallback = fallback.map(({ academic_year, ...rest }) => rest);
+    res = await window.cenSupabase.from('curriculum').upsert(fallback, { onConflict: 'id' });
+    if (!res.error) return res;
+  }
+  if (isSupabaseMissingColumnError(res.error, 'required_hours')) {
+    fallback = fallback.map(({ required_hours, ...rest }) => rest);
+    return window.cenSupabase.from('curriculum').upsert(fallback, { onConflict: 'id' });
+  }
+  return res;
 }
 
 function normalizeRequestFromDb(row) {
@@ -893,6 +933,7 @@ function curriculumColTotal(c) {
 }
 /** Required Hours from Lec/Lab units (Lab = 3 hours per lab unit). */
 function curriculumRequiredHours(c) {
+  if (Number.isFinite(Number(c.requiredHours))) return escapeHtml(String(Number(c.requiredHours)));
   let lec = Number(c.lecUnits);
   let lab = Number(c.labUnits);
   let lecH = Number.isFinite(lec) ? lec : 0;
@@ -901,6 +942,13 @@ function curriculumRequiredHours(c) {
   let total = Number(c.units);
   if (Number.isFinite(total) && total > 0) return escapeHtml(String(total));
   return '—';
+}
+function computedCurriculumHoursFromUnits(lecUnits, labUnits) {
+  let lec = Number(lecUnits);
+  let lab = Number(labUnits);
+  let lecH = Number.isFinite(lec) ? lec : 0;
+  let labH = Number.isFinite(lab) ? lab * 3 : 0;
+  return lecH + labH;
 }
 function fmt12(t) { let [h,m]=t.split(':').map(Number); return `${h%12||12}:${String(m).padStart(2,'0')} ${h>=12?'PM':'AM'}`; }
 /** Display slot start as 7:30, 8:00, … (every row of the timetable time column). */
@@ -2349,6 +2397,7 @@ function renderCurriculumForm(d, opts) {
   if (!Number.isFinite(lecV)) lecV = 0;
   if (!Number.isFinite(labV)) labV = 0;
   let totV = lecV + labV;
+  let hoursV = Number.isFinite(Number(d.requiredHours)) ? Number(d.requiredHours) : totV;
   let isAdminCurr = state.currentUser?.role === 'admin';
   let currDeptId = isAdminCurr ? (d.dept || '') : (state.currentUser?.dept || d.dept || '');
   let deptOpts = isAdminCurr
@@ -2367,7 +2416,7 @@ function renderCurriculumForm(d, opts) {
     <div class="form-grid curriculum-form-year-sem"><div class="form-group"><label class="form-label" for="cc_year">Year</label><select class="form-select" id="cc_year" ${dis}><option value="">Select year...</option>${yearOpts}${ySel}</select></div><div class="form-group"><label class="form-label" for="cc_semester">Semester</label><select class="form-select" id="cc_semester" ${dis}><option value="">Select semester...</option>${semOpts}${sSel}</select></div></div>
     <div class="form-group full"><label class="form-label" for="cc_ay">Academic Year</label><input class="form-input" id="cc_ay" value="${escapeHtml(ayVal)}" placeholder="2025-2026" ${roInp}></div>
     <div class="form-grid curriculum-form-code-subject"><div class="form-group"><label class="form-label" for="cc_courseCode">Course code</label><input class="form-input" id="cc_courseCode" placeholder="e.g. IE 100" value="${escapeHtml(d.courseCode || '')}" ${roInp}></div><div class="form-group"><label class="form-label" for="cc_subject">Subject</label><input class="form-input" id="cc_subject" placeholder="Subject title" value="${escapeHtml(d.subjectName || '')}" ${roInp}></div></div>
-    <div class="form-grid curriculum-form-units"><div class="form-group"><label class="form-label" for="cc_lecUnits">Lec (units)</label><input class="form-input" id="cc_lecUnits" type="number" min="0" max="12" step="1" value="${escapeHtml(String(lecV))}" ${roInp}></div><div class="form-group"><label class="form-label" for="cc_labUnits">Lab (units)</label><input class="form-input" id="cc_labUnits" type="number" min="0" max="12" step="1" value="${escapeHtml(String(labV))}" ${roInp}></div><div class="form-group"><label class="form-label" for="cc_units_total">Total unit/s</label><input class="form-input" id="cc_units_total" type="text" readonly tabindex="-1" value="${escapeHtml(String(totV))}" aria-live="polite"></div></div>
+    <div class="form-grid curriculum-form-units"><div class="form-group"><label class="form-label" for="cc_lecUnits">Lec (units)</label><input class="form-input" id="cc_lecUnits" type="number" min="0" max="12" step="1" value="${escapeHtml(String(lecV))}" ${roInp}></div><div class="form-group"><label class="form-label" for="cc_labUnits">Lab (units)</label><input class="form-input" id="cc_labUnits" type="number" min="0" max="12" step="1" value="${escapeHtml(String(labV))}" ${roInp}></div><div class="form-group"><label class="form-label" for="cc_units_total">Total unit/s</label><input class="form-input" id="cc_units_total" type="text" readonly tabindex="-1" value="${escapeHtml(String(totV))}" aria-live="polite"></div><div class="form-group"><label class="form-label" for="cc_hours">Hours</label><input class="form-input" id="cc_hours" type="number" min="0" max="40" step="0.5" value="${escapeHtml(String(hoursV))}" ${roInp}></div></div>
   </div><input type="hidden" id="cc_edit_id" value="${escapeHtml(d.id || '')}">`;
 }
 
@@ -3400,9 +3449,11 @@ function bindPage(){
       let subjectName = (document.getElementById('cc_subject')?.value || '').trim();
       let lecU = parseInt(document.getElementById('cc_lecUnits')?.value, 10);
       let labU = parseInt(document.getElementById('cc_labUnits')?.value, 10);
+      let hrsU = parseFloat(document.getElementById('cc_hours')?.value);
       let lecUnits = Number.isFinite(lecU) ? lecU : 0;
       let labUnits = Number.isFinite(labU) ? labU : 0;
       let units = lecUnits + labUnits;
+      let requiredHours = Number.isFinite(hrsU) ? hrsU : computedCurriculumHoursFromUnits(lecUnits, labUnits);
       let row = {
         dept: document.getElementById('cc_dept')?.value,
         year: (document.getElementById('cc_year')?.value || '').trim(),
@@ -3413,11 +3464,15 @@ function bindPage(){
         lecUnits,
         labUnits,
         units,
+        requiredHours,
         courseName: subjectName,
         subjectCode: courseCode.replace(/\s+/g, '') || subjectName.replace(/\s+/g, '').slice(0, 24) || '—',
         section: '',
       };
-      if (!row.courseCode || !row.subjectName || !row.year || !row.semester || !row.academicYear || units < 1) return;
+      if (!row.courseCode || !row.subjectName || !row.year || !row.semester || !row.academicYear) {
+        showToast('Complete required curriculum fields before saving.');
+        return;
+      }
       if (!window.confirm(editId ? MSG_CONFIRM_SAVE_CURRICULUM_EDIT : MSG_CONFIRM_SAVE_CURRICULUM_NEW)) return;
       if (editId) {
         let i = state.curriculum.findIndex(c => c.id === editId);
@@ -3427,6 +3482,9 @@ function bindPage(){
         state.curriculum.push(row);
       }
       let savedRow = editId ? { ...row, id: editId } : row;
+      if (Number.isFinite(Number(savedRow.requiredHours))) {
+        rememberCurriculumRequiredHours(savedRow.id, savedRow.requiredHours);
+      }
       if (hasSupabaseClient()) {
         const { error } = await upsertCurriculumDb([savedRow]);
         if (error) {
@@ -3649,15 +3707,25 @@ function bindPage(){
     let lecEl = document.getElementById('cc_lecUnits');
     let labEl = document.getElementById('cc_labUnits');
     let out = document.getElementById('cc_units_total');
+    let hoursEl = document.getElementById('cc_hours');
     if (!lecEl || !labEl || !out) return;
     let lec = parseInt(lecEl.value, 10);
     let lab = parseInt(labEl.value, 10);
     let a = Number.isFinite(lec) ? lec : 0;
     let b = Number.isFinite(lab) ? lab : 0;
     out.value = String(a + b);
+    if (hoursEl && hoursEl.dataset.manual !== '1') {
+      hoursEl.value = String(computedCurriculumHoursFromUnits(a, b));
+    }
   }
   document.getElementById('cc_lecUnits')?.addEventListener('input', syncCurriculumUnitsTotal);
   document.getElementById('cc_labUnits')?.addEventListener('input', syncCurriculumUnitsTotal);
+  document.getElementById('cc_hours')?.addEventListener('input', e => {
+    e.target.dataset.manual = '1';
+  });
+  document.getElementById('cc_hours')?.addEventListener('focus', e => {
+    if (e.target.value === '') e.target.dataset.manual = '0';
+  });
   syncCurriculumUnitsTotal();
   document.getElementById('addProfBtn')?.addEventListener('click',()=>{openModal({type:'addProfessor',data:{}});});
   document.querySelectorAll('[data-editprof]').forEach(el=>el.addEventListener('click',()=>{let p=state.professors.find(x=>x.id===el.dataset.editprof);if(p)openModal({type:'addProfessor',data:{...p}});}));
