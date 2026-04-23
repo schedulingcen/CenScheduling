@@ -959,6 +959,39 @@ function slotEndFromRow(row) {
   let total = h * 60 + m + 30;
   return `${Math.floor(total / 60)}:${String(total % 60).padStart(2, '0')}`;
 }
+/** Latest time a class may end (building close). */
+const TIMETABLE_DAY_CLOSE = '21:30';
+/** Period end options: 8:00 AM … 9:30 PM (no times past close). */
+function timetableTimeEndChoices() {
+  return timeSlots.slice(1).filter(t => t <= TIMETABLE_DAY_CLOSE);
+}
+/** Slot starts allowed for new/edited classes (through 9:00 PM; last row 9:30 is display-only). */
+function timetableTimeStartChoices() {
+  return timeSlots.filter(t => t < TIMETABLE_DAY_CLOSE);
+}
+/** Timetable day columns: IE is Mon–Fri only; every other program includes Saturday. */
+function timetableDayColumnsForDept(deptId) {
+  if (deptId === 'ie') return DAYS;
+  return DAYS_WITH_SATURDAY;
+}
+/** When a room (or mixed) view can show classes from multiple programs, use Saturday unless every row is IE. */
+function timetableDayColumnsForSchedules(scheds, fallbackDeptId) {
+  if (Array.isArray(scheds) && scheds.length) {
+    let depts = [...new Set(scheds.map(s => s && s.dept).filter(Boolean))];
+    if (depts.length && depts.every(d => d === 'ie')) return DAYS;
+    return DAYS_WITH_SATURDAY;
+  }
+  return timetableDayColumnsForDept(fallbackDeptId);
+}
+/** Department that defines the schedule tab timetable columns for the current user/filters. */
+function timetableGridDeptForSchedulePage(u) {
+  if (!u) return null;
+  if (u.role !== 'admin') return u.dept;
+  return state.filterDept && state.filterDept !== 'all' ? state.filterDept : null;
+}
+function saturdayNotAllowedMessage() {
+  return 'Industrial Engineering (IE) does not use Saturday. Uncheck Saturday or pick another department.';
+}
 function timeRangesOverlap(aStart, aEnd, bStart, bEnd) { return aStart < bEnd && aEnd > bStart; }
 function scheduleRoomOccupancyKey(s) {
   if (!s) return '';
@@ -1345,6 +1378,96 @@ function subjectAllowedByCurriculum(dept, year, sem, subjectId, ay) {
   if (!dept || !year || !sem || !subjectId) return false;
   return subjectsForCreateScheduleSlot(dept, year, sem, ay).some(s => s.id === subjectId);
 }
+/** Curriculum row for this dept/year/sem/AY + subject (same matching as schedule subject list). */
+function curriculumRowForScheduleSubject(dept, year, sem, subjectId, ay) {
+  if (!dept || !year || !sem || !subjectId) return null;
+  let rows = curriculumRowsForDept(dept);
+  let ayNorm = normalizeAcademicYearInput(ay) || DEFAULT_ACADEMIC_YEAR;
+  let forSlot = rows.filter(r =>
+    (r.year || '').trim() === year &&
+    (r.semester || '').trim() === sem &&
+    curriculumAcademicYearForFilter(r) === ayNorm,
+  );
+  let sub = getSubject(subjectId);
+  if (!sub || sub.dept !== dept) return null;
+  let codeNorm = normalizeSubjectCode(sub.code);
+  for (let r of forSlot) {
+    let c = curriculumCodeFromRow(r);
+    let expanded = expandNormalizedCodesForDept(dept, normalizeSubjectCode(c));
+    if (expanded.has(codeNorm)) return r;
+  }
+  return null;
+}
+/** Lab column in curriculum has a value → treat as lab subject (Set A/B required). Uses lab units > 0 after normalization. */
+function curriculumSubjectHasLabUnits(dept, year, sem, subjectId, ay) {
+  let row = curriculumRowForScheduleSubject(dept, year, sem, subjectId, ay);
+  if (!row) return false;
+  let raw = row.labUnits != null ? row.labUnits : row.lab_units;
+  if (raw == null || (typeof raw === 'string' && !String(raw).trim())) return false;
+  let lab = Number(raw);
+  return Number.isFinite(lab) && lab > 0;
+}
+const MSG_SET_REQUIRED_FOR_LAB = 'This subject has lab units in Curriculum. Choose Set A or Set B.';
+/** Set is enabled only for lab subjects (curriculum lab units > 0). Otherwise disabled and cleared. */
+function updateScheduleSetFieldRequirement(labelEl, selectEl, contextComplete, hasLabUnits) {
+  if (!labelEl || !selectEl) return;
+  const req = '<span class="label-req" aria-hidden="true">*</span>';
+  let labFieldActive = contextComplete && hasLabUnits;
+  if (!labFieldActive) {
+    selectEl.value = '';
+    selectEl.disabled = true;
+    selectEl.required = false;
+    selectEl.setAttribute('aria-required', 'false');
+    labelEl.textContent = 'Set';
+    return;
+  }
+  selectEl.disabled = false;
+  labelEl.innerHTML = `Set ${req}`;
+  selectEl.required = true;
+  selectEl.setAttribute('aria-required', 'true');
+}
+function refreshCreateScheduleSetLabUi() {
+  let labelEl = document.getElementById('f_set_label');
+  let sel = document.getElementById('f_set');
+  if (!labelEl || !sel) return;
+  let y = document.getElementById('f_year')?.value || '';
+  let sem = document.getElementById('f_sem')?.value || '';
+  let sub = document.getElementById('f_subject')?.value || '';
+  let ay = normalizeAcademicYearInput(document.getElementById('f_ay')?.value || state.termAcademicYear) || DEFAULT_ACADEMIC_YEAR;
+  let deptEl = document.getElementById('f_schedule_dept');
+  let admin = state.currentUser?.role === 'admin';
+  let picked = admin && deptEl && !deptEl.disabled ? deptEl.value : state.currentUser?.dept;
+  let entryDept = picked === 'all' ? (getSubject(sub)?.dept || null) : picked;
+  let contextComplete = !!(entryDept && y && sem && sub);
+  let hasLab = contextComplete && curriculumSubjectHasLabUnits(entryDept, y, sem, sub, ay);
+  updateScheduleSetFieldRequirement(labelEl, sel, contextComplete, hasLab);
+}
+function refreshViewScheduleSetLabUi() {
+  let labelEl = document.getElementById('vs_set_label');
+  let sel = document.getElementById('vs_set');
+  if (!labelEl || !sel) return;
+  let dept = document.getElementById('vs_dept')?.value || '';
+  let y = document.getElementById('vs_year')?.value || '';
+  let sem = document.getElementById('vs_sem')?.value || '';
+  let sub = document.getElementById('vs_subject')?.value || '';
+  let ay = normalizeAcademicYearInput(document.getElementById('vs_ay')?.value || '') || DEFAULT_ACADEMIC_YEAR;
+  let contextComplete = !!(dept && y && sem && sub);
+  let hasLab = contextComplete && curriculumSubjectHasLabUnits(dept, y, sem, sub, ay);
+  updateScheduleSetFieldRequirement(labelEl, sel, contextComplete, hasLab);
+}
+function refreshRequestSetLabUi() {
+  let u = state.currentUser;
+  let labelEl = document.getElementById('rq_set_label');
+  let sel = document.getElementById('rq_set');
+  if (!labelEl || !sel || !u?.dept) return;
+  let y = document.getElementById('rq_year')?.value || '';
+  let sem = document.getElementById('rq_sem')?.value || '';
+  let sub = document.getElementById('rq_subject')?.value || '';
+  let ay = normalizeAcademicYearInput(state.termAcademicYear) || DEFAULT_ACADEMIC_YEAR;
+  let contextComplete = !!(y && sem && sub);
+  let hasLab = contextComplete && curriculumSubjectHasLabUnits(u.dept, y, sem, sub, ay);
+  updateScheduleSetFieldRequirement(labelEl, sel, contextComplete, hasLab);
+}
 function getCreateScheduleDeptForCascade() {
   let u = state.currentUser;
   if (!u) return null;
@@ -1391,6 +1514,7 @@ function initCreateScheduleCurriculumCascade() {
       subEl.disabled = true;
       secEl.innerHTML = '<option value="">Select section...</option>';
       secEl.disabled = true;
+      refreshCreateScheduleSetLabUi();
       return;
     }
     yEl.disabled = false;
@@ -1402,6 +1526,7 @@ function initCreateScheduleCurriculumCascade() {
     fillSemSelect([], '');
     fillSubjectSelect([], '');
     fillSectionSelect(sectionOptionsForDeptYear([d], ''), '');
+    refreshCreateScheduleSetLabUi();
   }
 
   rebuildAll();
@@ -1414,12 +1539,14 @@ function initCreateScheduleCurriculumCascade() {
       fillSemSelect([], '');
       fillSubjectSelect([], '');
       fillSectionSelect(sectionOptionsForDeptYear([d], ''), '');
+      refreshCreateScheduleSetLabUi();
       return;
     }
     let sems = semsForDeptYear(d, y);
     fillSemSelect(sems, '');
     fillSubjectSelect([], '');
     fillSectionSelect(sectionOptionsForDeptYear([d], y), '');
+    refreshCreateScheduleSetLabUi();
   });
 
   sEl.addEventListener('change', () => {
@@ -1428,10 +1555,12 @@ function initCreateScheduleCurriculumCascade() {
     let sem = sEl.value;
     if (!d || !y || !sem) {
       fillSubjectSelect([], '');
+      refreshCreateScheduleSetLabUi();
       return;
     }
     let ay = normalizeAcademicYearInput(ayEl?.value || state.termAcademicYear) || DEFAULT_ACADEMIC_YEAR;
     fillSubjectSelect(subjectsForCreateScheduleSlot(d, y, sem, ay), '');
+    refreshCreateScheduleSetLabUi();
   });
   ayEl?.addEventListener('change', () => {
     let d = getCreateScheduleDeptForCascade();
@@ -1439,11 +1568,14 @@ function initCreateScheduleCurriculumCascade() {
     let sem = sEl.value;
     if (!d || !y || !sem) {
       fillSubjectSelect([], '');
+      refreshCreateScheduleSetLabUi();
       return;
     }
     let ay = normalizeAcademicYearInput(ayEl.value || state.termAcademicYear) || DEFAULT_ACADEMIC_YEAR;
     fillSubjectSelect(subjectsForCreateScheduleSlot(d, y, sem, ay), '');
+    refreshCreateScheduleSetLabUi();
   });
+  subEl.addEventListener('change', refreshCreateScheduleSetLabUi);
   deptEl?.addEventListener('change', rebuildAll);
 }
 function getBorrowableRooms(u) {
@@ -1647,7 +1779,7 @@ function render() {
       <div class="sidebar ${state.sidebarOpen?'open':''}" id="sidebar">${renderSidebar()}</div>
       <div class="overlay ${state.sidebarOpen?'show':''}" id="overlay"></div>
       <div class="main">
-        <div class="topbar"><span class="hamburger" id="hamburger" role="button" tabindex="0" aria-label="Open menu">${icon('menu', 22)}</span>${renderTopbarCenter()}<div class="topbar-actions"><button type="button" class="btn btn-outline btn-sm theme-toggle" id="themeToggleBtn" aria-label="${document.documentElement.dataset.theme === 'dark' ? 'Switch to light mode' : 'Switch to dark mode'}">${document.documentElement.dataset.theme === 'dark' ? icon('sun', 18) : icon('moon', 18)}</button>${state.page==='schedule'&&state.currentUser?.role!=='admin'?`<button class="btn btn-primary btn-sm" id="addSchedBtn">${icon('plus', 16)} Add Schedule</button>`:''}${state.page==='curriculum'&&state.currentUser?.role==='chairperson'?`<button type="button" class="btn btn-primary btn-sm" id="addCurriculumBtn">${icon('plus', 16)} Add Subject</button>`:''}${state.page==='requests'&&state.currentUser?.role==='chairperson'?`<button class="btn btn-primary btn-sm" id="requestRoomTopBtn">${icon('plus', 16)} Request a Room</button>`:''}</div></div>
+        <div class="topbar"><span class="hamburger" id="hamburger" role="button" tabindex="0" aria-label="Open menu">${icon('menu', 22)}</span>${renderTopbarCenter()}<div class="topbar-actions"><button type="button" class="btn btn-outline btn-sm theme-toggle" id="themeToggleBtn" aria-label="${document.documentElement.dataset.theme === 'dark' ? 'Switch to light mode' : 'Switch to dark mode'}">${document.documentElement.dataset.theme === 'dark' ? icon('sun', 18) : icon('moon', 18)}</button>${state.page==='schedule'&&state.currentUser?.role!=='admin'?`<button type="button" class="btn btn-schedule-clear-all btn-sm" id="clearAllSchedulesBtn">Clear All</button><button type="button" class="btn btn-primary btn-sm btn-schedule-add-pill" id="addSchedBtn">${icon('plus', 16)} Add Schedule</button>`:''}${state.page==='curriculum'&&state.currentUser?.role==='chairperson'?`<button type="button" class="btn btn-primary btn-sm" id="addCurriculumBtn">${icon('plus', 16)} Add Subject</button>`:''}${state.page==='requests'&&state.currentUser?.role==='chairperson'?`<button class="btn btn-primary btn-sm" id="requestRoomTopBtn">${icon('plus', 16)} Create a Request</button>`:''}</div></div>
         <div class="content">${renderPage()}</div>
       </div>
     </div>
@@ -1846,6 +1978,12 @@ function renderSchedulePage() {
     let label = selectedRoom?.name || roomDisplayLineFromPick(state.filterRoom, '');
     if (label) printRoomTitleAttr = ` data-print-title="${escapeHtml(label)}"`;
   }
+  let timetableGridOpts = { cellLayout: scheduleGridCellLayout() };
+  if (state.filterMode === 'room') {
+    timetableGridOpts.timetableDays = timetableDayColumnsForSchedules(scheds, state.filterDept);
+  } else {
+    timetableGridOpts.timetableDays = timetableDayColumnsForDept(timetableGridDeptForSchedulePage(u));
+  }
   return `
     <div class="timetable-wrap" id="schedule-timetable">
       <div class="timetable-toolbar">
@@ -1863,7 +2001,7 @@ function renderSchedulePage() {
           <button class="btn btn-outline btn-sm" id="printBtn">${icon('printer', 16)} Print</button>
         </div>
       </div>
-      <div class="timetable-scroll" id="printArea"${printRoomTitleAttr}>${renderTimetableGrid(scheds, { cellLayout: scheduleGridCellLayout() })}</div>
+      <div class="timetable-scroll" id="printArea"${printRoomTitleAttr}>${renderTimetableGrid(scheds, timetableGridOpts)}</div>
     </div>
   `;
 }
@@ -1905,6 +2043,7 @@ function renderTimetableGrid(scheds, gridOpts) {
   let requestView = !!gridOpts.requestView;
   let requestCellClick = requestView && gridOpts.requestCellClick !== false;
   let requestBusyClickable = requestView && gridOpts.requestBusyClickable === true;
+  let dayCols = gridOpts.timetableDays || DAYS;
   let { conflictSinceById, conflictIds } = syncConflictHighlightsAndIds();
   let emptyTitle = requestView
     ? (requestCellClick
@@ -1913,7 +2052,7 @@ function renderTimetableGrid(scheds, gridOpts) {
     : (d0, d1) => `Click to add schedule (${d0}–${d1})`;
   // Create a 2D array for the grid (rows x columns)
   const rows = timeSlots.length;
-  const cols = DAYS.length;
+  const cols = dayCols.length;
   
   // Initialize empty grid cells
   let grid = Array(rows).fill().map(() => Array(cols).fill(null));
@@ -1925,7 +2064,7 @@ function renderTimetableGrid(scheds, gridOpts) {
     const sub = getSubject(s.subjectId);
     
     s.days.forEach(day => {
-      const col = DAYS.indexOf(day);
+      const col = dayCols.indexOf(day);
       if (col >= 0 && startRow >= 0) {
         grid[startRow][col] = { schedule: s, sub, duration };
       }
@@ -1938,18 +2077,30 @@ function renderTimetableGrid(scheds, gridOpts) {
   // Header row
   html += '<thead><tr>';
   html += '<th class="timetable-time-col timetable-time-col-header">Time</th>';
-  DAYS.forEach(day => {
+  dayCols.forEach(day => {
     html += `<th style="padding: 10px; border: 1px solid var(--border-ui); background: var(--table-header-bg);">${day}</th>`;
   });
   html += '</tr></thead><tbody>';
   
-  // Time rows (7:30 AM … 7:30 PM — slot starts; timeSlots in data.js)
+  // Time rows: 7:30 AM … 9:30 PM (last row marks day close; bookable slots end at 9:00 start / 9:30 end)
   for (let row = 0; row < rows; row++) {
     const time = timeSlots[row];
+    const isDayCloseRow = time === TIMETABLE_DAY_CLOSE;
     html += '<tr>';
     html += `<td class="timetable-time-col">${fmt12(time)}</td>`;
     
     for (let col = 0; col < cols; col++) {
+      if (isDayCloseRow) {
+        let isPartOfRowspan = false;
+        for (let r = row - 1; r >= 0 && !isPartOfRowspan; r--) {
+          const prevCell = grid[r][col];
+          if (prevCell && r + prevCell.duration > row) isPartOfRowspan = true;
+        }
+        if (!isPartOfRowspan) {
+          html += '<td class="timetable-slot-day-close" style="padding: 4px; border: 1px solid var(--border-ui); background: var(--table-header-bg); opacity: 0.55;" title=""></td>';
+        }
+        continue;
+      }
       const cell = grid[row][col];
       if (cell && row === timeToRow(cell.schedule.timeStart)) {
         const s = cell.schedule;
@@ -1980,7 +2131,7 @@ function renderTimetableGrid(scheds, gridOpts) {
           }
         }
         if (!isPartOfRowspan) {
-          const dayName = DAYS[col];
+          const dayName = dayCols[col];
           const tStart = timeSlots[row];
           const tEnd = slotEndFromRow(row);
           let emptyExtraClass = requestView && !requestCellClick ? ' timetable-slot-readonly' : '';
@@ -2243,7 +2394,7 @@ function roomsForRequestDeptTimetable(deptId) {
   });
 }
 
-/** Requests page: Mon–Fri columns; shows classes using selected department's classrooms; chairpersons can click empty slots to start a borrow request. */
+/** Requests · Available Rooms: always Mon–Sat columns so Saturday appears even when filtering IE classrooms. */
 function renderRequestDeptDayTimetable(u) {
   normalizeRequestTimetableFilters();
   let term = currentTermFilter();
@@ -2281,7 +2432,7 @@ function renderRequestDeptDayTimetable(u) {
   return `
     <p class="request-tt-intro">${intro}</p>
     <div class="timetable-toolbar request-tt-toolbar request-tt-filters-row">${deptSelect}${roomSelect}<span class="request-tt-meta">${escapeHtml(deptInfo?.code || '')} · ${metaRoom}</span></div>
-    <div class="timetable-scroll" id="requestRoomTimetableArea">${renderTimetableGrid(deptScheds, { requestView: true, requestCellClick: canClickRequest, requestBusyClickable: u.role === 'admin', cellLayout: 'room' })}</div>
+    <div class="timetable-scroll" id="requestRoomTimetableArea">${renderTimetableGrid(deptScheds, { requestView: true, requestCellClick: canClickRequest, requestBusyClickable: u.role === 'admin', cellLayout: 'room', timetableDays: DAYS_WITH_SATURDAY })}</div>
   `;
 }
 
@@ -2464,7 +2615,7 @@ function renderCurriculum() {
             <col class="curriculum-col-hours" />
             ${actionsCol}
           </colgroup>
-          <thead><tr><th scope="col">Course code</th><th scope="col">Subject</th><th scope="col" class="curriculum-th-num">Lec</th><th scope="col" class="curriculum-th-num">Lab</th><th scope="col" class="curriculum-th-num">Unit/s</th><th scope="col">Hours</th>${actionsTh}</tr></thead>
+          <thead><tr><th scope="col">Course code</th><th scope="col">Subject</th><th scope="col" class="curriculum-th-num">Lec</th><th scope="col" class="curriculum-th-num">Lab</th><th scope="col" class="curriculum-th-num">Unit/s</th><th scope="col" class="curriculum-th-hours">Hours</th>${actionsTh}</tr></thead>
           <tbody>
             ${semRows.map(c => `<tr><td>${escapeHtml(c.courseCode)}</td><td class="curriculum-td-subj">${escapeHtml(c.subjectName)}</td><td class="curriculum-td-num">${curriculumColLec(c)}</td><td class="curriculum-td-num">${curriculumColLab(c)}</td><td class="curriculum-td-num">${curriculumColTotal(c)}</td><td class="curriculum-td-hours">${curriculumRequiredHours(c)}</td>${rowCells(c)}</tr>`).join('')}
           </tbody>
@@ -2673,8 +2824,8 @@ function renderScheduleForm() {
         })()
       : '';
   roomOpts += `<option value="${ROOM_OTHER_ID}">Others:</option>`;
-  let timeStartOpts = timeSlots.slice(0, -1).map(t => `<option value="${t}" ${slot && slot.timeStart === t ? 'selected' : ''}>${fmt12(t)}</option>`).join('');
-  let timeEndOpts = timeSlots.slice(1).map(t => `<option value="${t}" ${slot && slot.timeEnd === t ? 'selected' : ''}>${fmt12(t)}</option>`).join('');
+  let timeStartOpts = timetableTimeStartChoices().map(t => `<option value="${t}" ${slot && slot.timeStart === t ? 'selected' : ''}>${fmt12(t)}</option>`).join('');
+  let timeEndOpts = timetableTimeEndChoices().map(t => `<option value="${t}" ${slot && slot.timeEnd === t ? 'selected' : ''}>${fmt12(t)}</option>`).join('');
   let secChoices = mergeSectionOptions(secDeptIds);
   let secOpts = secChoices.map(s => `<option value="${escapeHtml(s)}" ${defSec && defSec === s ? 'selected' : ''}>${escapeHtml(s)}</option>`).join('');
   let secLegacyOpt =
@@ -2694,6 +2845,8 @@ function renderScheduleForm() {
     let dInfo = getDept(u.dept);
     deptRow = `<div class="form-group"><label class="form-label" for="f_schedule_dept">Department</label><select class="form-select" id="f_schedule_dept" disabled aria-label="Your department"><option value="${escapeHtml(u.dept)}" selected>${escapeHtml(dInfo?.code || '')} — ${escapeHtml(dInfo?.name || '')}</option></select></div>`;
   }
+  let deptForDayPickers = !isAdmin ? u.dept : formDept === 'all' || !formDept ? null : formDept;
+  let dayColListForForm = timetableDayColumnsForDept(deptForDayPickers);
 
   return `<div id="conflictAlert"></div>
   <div class="schedule-form-wrapper">
@@ -2711,7 +2864,7 @@ function renderScheduleForm() {
       <div class="form-group"></div>
     </div>
     <div class="schedule-form-inline-row">
-      <div class="form-group"><label class="form-label" for="f_set">Set (optional)</label>${setABSelectHtml('f_set', '')}</div>
+      <div class="form-group"><label class="form-label" for="f_set" id="f_set_label">Set</label>${setABSelectHtml('f_set', '')}</div>
       <div class="form-group professor-select-group">
         <label class="form-label" id="f_professor_lb">Professor ${req}</label>
         <div class="professor-field-slot">
@@ -2728,7 +2881,7 @@ function renderScheduleForm() {
       </div>
     </div>
     <div class="schedule-form-inline-row">
-      <div class="form-group"><span class="form-label">Day(s) ${req}</span><div class="days-check">${DAYS.map(d => `<input type="checkbox" class="day-checkbox" id="day_${d}" value="${d}" ${slot && slot.day === d ? 'checked' : ''}><label class="day-label" for="day_${d}">${d.slice(0, 3)}</label>`).join('')}</div></div>
+      <div class="form-group"><span class="form-label">Day(s) ${req}</span><div class="days-check">${dayColListForForm.map(d => `<input type="checkbox" class="day-checkbox" id="day_${d}" value="${d}" ${slot && slot.day === d ? 'checked' : ''}><label class="day-label" for="day_${d}">${d.slice(0, 3)}</label>`).join('')}</div></div>
       <div class="form-group room-select-group">
         <label class="form-label" id="f_room_lb">Room ${req}</label>
         <div class="professor-field-slot">
@@ -2776,7 +2929,7 @@ function renderViewSchedule(d) {
         <div class="form-group"></div>
       </div>
       <div class="schedule-form-inline-row">
-        <div class="form-group"><label class="form-label">Set (optional)</label><div class="vs-readonly">${d.setLabel ? escapeHtml(d.setLabel) : 'None'}</div></div>
+        <div class="form-group"><label class="form-label">Set</label><div class="vs-readonly">${d.setLabel ? escapeHtml(d.setLabel) : 'None'}</div></div>
         <div class="form-group"><label class="form-label">Professor</label><div class="vs-readonly">${escapeHtml(professorFullNameDisplayLineFromPick(d.professorId, d.professorOtherName))}</div></div>
       </div>
       <div class="schedule-form-inline-row">
@@ -2813,10 +2966,11 @@ function renderViewSchedule(d) {
       ? `<option value="${escapeHtml(d.section)}" selected>${escapeHtml(d.section)}</option>`
       : '';
   let deptOpts = DEPARTMENTS.map(x => `<option value="${x.id}" ${d.dept === x.id ? 'selected' : ''}>${escapeHtml(x.code)} — ${escapeHtml(x.name)}</option>`).join('');
-  let timeStartOpts = timeSlots.slice(0, -1).map(t => `<option value="${t}" ${d.timeStart === t ? 'selected' : ''}>${fmt12(t)}</option>`).join('');
-  let timeEndOpts = timeSlots.slice(1).map(t => `<option value="${t}" ${d.timeEnd === t ? 'selected' : ''}>${fmt12(t)}</option>`).join('');
+  let timeStartOpts = timetableTimeStartChoices().map(t => `<option value="${t}" ${d.timeStart === t ? 'selected' : ''}>${fmt12(t)}</option>`).join('');
+  let timeEndOpts = timetableTimeEndChoices().map(t => `<option value="${t}" ${d.timeEnd === t ? 'selected' : ''}>${fmt12(t)}</option>`).join('');
   let setInput = setABSelectHtml('vs_set', d.setLabel || '');
-  let daysHtml = `<div class="days-check vs-days-check">${DAYS.map(day => `<input type="checkbox" class="day-checkbox" id="vsday_${day}" value="${day}" ${Array.isArray(d.days) && d.days.includes(day) ? 'checked' : ''}><label class="day-label" for="vsday_${day}">${day.slice(0, 3)}</label>`).join('')}</div>`;
+  let vsDayColList = timetableDayColumnsForDept(listDept);
+  let daysHtml = `<div class="days-check vs-days-check">${vsDayColList.map(day => `<input type="checkbox" class="day-checkbox" id="vsday_${day}" value="${day}" ${Array.isArray(d.days) && d.days.includes(day) ? 'checked' : ''}><label class="day-label" for="vsday_${day}">${day.slice(0, 3)}</label>`).join('')}</div>`;
   let deptControl = isAdmin
     ? `<select class="form-select" id="vs_dept">${deptOpts}</select>`
     : `<div class="vs-dept-readout">${dept ? `<span class="badge-dept ${dept.id}">${escapeHtml(dept.code)}</span> ${escapeHtml(dept.name)}` : '—'}</div><input type="hidden" id="vs_dept" value="${escapeHtml(d.dept)}">`;
@@ -2838,7 +2992,7 @@ function renderViewSchedule(d) {
       <div class="form-group"></div>
     </div>
     <div class="schedule-form-inline-row">
-      <div class="form-group"><label class="form-label" for="vs_set">Set (optional)</label>${setInput}</div>
+      <div class="form-group"><label class="form-label" for="vs_set" id="vs_set_label">Set</label>${setInput}</div>
       <div class="form-group"><label class="form-label" for="vs_professor">Professor</label><div class="professor-field-slot"><div id="vs_professor_select_wrap" ${d.professorId === PROFESSOR_OTHER_ID ? 'hidden' : ''}><select class="form-select" id="vs_professor" aria-label="Professor"><option value="">Select professor</option>${profOpts}</select></div><div id="vs_professor_other_wrap" ${d.professorId === PROFESSOR_OTHER_ID ? '' : 'hidden'}><div class="professor-other-row"><input type="text" class="form-input" id="vs_professor_other" value="${escapeHtml(d.professorOtherName || '')}" autocomplete="off" aria-label="Professor name when Others is selected"><button type="button" class="btn btn-outline btn-sm professor-pick-list-btn" id="vs_professor_list_btn" aria-label="Choose from faculty list">List</button></div></div></div></div>
     </div>
     <div class="schedule-form-inline-row">
@@ -2912,12 +3066,13 @@ function renderRequestForm() {
   let subOpts = mySubs.map(s => `<option value="${escapeHtml(s.id)}">${escapeHtml(s.code)} — ${escapeHtml(s.name)}</option>`).join('');
   let profOpts = myProfs.map(p => `<option value="${escapeHtml(p.id)}">${escapeHtml(p.name)} (${escapeHtml(p.short)})</option>`).join('')
     + `<option value="${PROFESSOR_OTHER_ID}">Others:</option>`;
-  let ts = timeSlots.slice(0, -1).map(t => `<option value="${t}" ${slot && slot.timeStart === t ? 'selected' : ''}>${fmt12(t)}</option>`).join('');
-  let te = timeSlots.slice(1).map(t => `<option value="${t}" ${slot && slot.timeEnd === t ? 'selected' : ''}>${fmt12(t)}</option>`).join('');
+  let ts = timetableTimeStartChoices().map(t => `<option value="${t}" ${slot && slot.timeStart === t ? 'selected' : ''}>${fmt12(t)}</option>`).join('');
+  let te = timetableTimeEndChoices().map(t => `<option value="${t}" ${slot && slot.timeEnd === t ? 'selected' : ''}>${fmt12(t)}</option>`).join('');
   let setSelect = `<select class="form-select" id="rq_set"><option value="">— None —</option><option value="Set A">Set A</option><option value="Set B">Set B</option></select>`;
   let rqReasonOpts = REQUEST_ROOM_REASON_CHOICES.map(
     t => `<option value="${escapeHtml(t)}" ${selectedReason === t ? 'selected' : ''}>${escapeHtml(t)}</option>`
   ).join('');
+  let rqDayColList = timetableDayColumnsForDept(selectedToDeptId || null);
   let yearHtml = scheduleYearSelectHtml('rq_year', '', 'required');
   let semHtml = scheduleSemSelectHtml('rq_sem', '', 'required');
   return `<div class="request-room-form schedule-form-wrapper">
@@ -2988,10 +3143,10 @@ function renderRequestForm() {
     <div class="schedule-form-inline-row request-form-days-set-row request-room-form-inline-pair">
       <div class="form-group">
         <span class="form-label">Day(s) ${req}</span>
-        <div class="days-check rq-days-check">${DAYS.map(d => `<input type="checkbox" class="day-checkbox" id="rqday_${d}" value="${d}" ${slot && slot.day === d ? 'checked' : ''}><label class="day-label" for="rqday_${d}">${d.slice(0, 3)}</label>`).join('')}</div>
+        <div class="days-check rq-days-check">${rqDayColList.map(d => `<input type="checkbox" class="day-checkbox" id="rqday_${d}" value="${d}" ${slot && slot.day === d ? 'checked' : ''}><label class="day-label" for="rqday_${d}">${d.slice(0, 3)}</label>`).join('')}</div>
       </div>
       <div class="form-group">
-        <label class="form-label" for="rq_set">Set (optional)</label>
+        <label class="form-label" for="rq_set" id="rq_set_label">Set</label>
         ${setSelect}
       </div>
     </div>
@@ -3065,6 +3220,25 @@ function bindPage(){
       if (!s) return;
       openModal({ type: 'viewSchedule', viewScheduleMode: 'view', data: { ...s, days: Array.isArray(s.days) ? [...s.days] : [] } });
     });
+  });
+  document.getElementById('clearAllSchedulesBtn')?.addEventListener('click', async () => {
+    if (isDean) return;
+    let u = state.currentUser;
+    let dept = u?.dept;
+    if (!dept) return;
+    if (!window.confirm('Are you sure you want to clear all Schedules?')) return;
+    if (hasSupabaseClient()) {
+      const { error } = await window.cenSupabase.from('schedules').delete().eq('dept_id', dept);
+      if (error) {
+        window.alert(`Unable to clear schedules: ${error.message}`);
+        return;
+      }
+      await syncSchedulesFromSupabase();
+    } else {
+      state.schedules = state.schedules.filter(s => s.dept !== dept);
+    }
+    showToast('Schedules cleared');
+    render();
   });
   document.getElementById('addSchedBtn')?.addEventListener('click', () => {
     if (isDean) return;
@@ -3263,6 +3437,10 @@ function bindPage(){
         showFormValidationBanner('vsConflictAlert', MSG_FORM_INCOMPLETE);
         return;
       }
+      if (deptVal === 'ie' && days.includes('Saturday')) {
+        showFormValidationBanner('vsConflictAlert', saturdayNotAllowedMessage());
+        return;
+      }
       if (profId === PROFESSOR_OTHER_ID && !profOtherTxt) {
         showFormValidationBanner('vsConflictAlert', 'Enter the professor or instructor name when Others is selected.');
         return;
@@ -3290,6 +3468,10 @@ function bindPage(){
       }
       if (!subjectAllowedByCurriculum(entry.dept, entry.schYear, entry.schSem, entry.subjectId, entry.schAy)) {
         showFormValidationBanner('vsConflictAlert', 'Choose a subject listed in Curriculum for the selected year and semester.');
+        return;
+      }
+      if (curriculumSubjectHasLabUnits(entry.dept, entry.schYear, entry.schSem, entry.subjectId, entry.schAy) && !((entry.setLabel || '').trim())) {
+        showFormValidationBanner('vsConflictAlert', MSG_SET_REQUIRED_FOR_LAB);
         return;
       }
       if (!window.confirm(MSG_CONFIRM_SCHEDULE_OR_REQUEST_SAVE)) return;
@@ -3364,6 +3546,10 @@ function bindPage(){
         showFormValidationBanner('conflictAlert', 'Choose a subject listed in Curriculum for the selected year and semester.');
         return;
       }
+      if (curriculumSubjectHasLabUnits(entryDept, entry.schYear, entry.schSem, entry.subjectId, entry.schAy) && !setV) {
+        showFormValidationBanner('conflictAlert', MSG_SET_REQUIRED_FOR_LAB);
+        return;
+      }
       if (profSel === PROFESSOR_OTHER_ID && !profOtherAdd) {
         showFormValidationBanner('conflictAlert', 'Enter the professor or instructor name when Others is selected.');
         return;
@@ -3382,6 +3568,10 @@ function bindPage(){
       }
       if (timeToRow(entry.timeEnd) <= timeToRow(entry.timeStart)) {
         showFormValidationBanner('conflictAlert', 'End time must be after start time.');
+        return;
+      }
+      if (entryDept === 'ie' && days.includes('Saturday')) {
+        showFormValidationBanner('conflictAlert', saturdayNotAllowedMessage());
         return;
       }
       if (!window.confirm(MSG_CONFIRM_SCHEDULE_OR_REQUEST_SAVE)) return;
@@ -3522,6 +3712,10 @@ function bindPage(){
         showFormValidationBanner('rqFormAlert', 'Choose a subject listed in Curriculum for the selected year and semester.');
         return;
       }
+      if (curriculumSubjectHasLabUnits(state.currentUser.dept, schYear, schSem, subId, schAy) && !setV) {
+        showFormValidationBanner('rqFormAlert', MSG_SET_REQUIRED_FOR_LAB);
+        return;
+      }
       let roomAllowed = room?.dept === toDeptPick || (isTeachingAssignmentReason && room?.dept === state.currentUser.dept);
       if (!roomAllowed) {
         showFormValidationBanner('rqFormAlert', isTeachingAssignmentReason
@@ -3535,6 +3729,10 @@ function bindPage(){
       }
       if (timeToRow(timeEnd) <= timeToRow(timeStart)) {
         showFormValidationBanner('rqFormAlert', 'End time must be after start time.');
+        return;
+      }
+      if (toDeptPick === 'ie' && days.includes('Saturday')) {
+        showFormValidationBanner('rqFormAlert', saturdayNotAllowedMessage());
         return;
       }
       for (let day of days) {
@@ -3822,7 +4020,10 @@ function bindPage(){
   bindRoomOtherSwap('f_room');
   bindRoomOtherSwap('vs_room');
   if (state.modal?.type === 'newRequest') {
-    queueMicrotask(() => document.getElementById('rq_reason')?.focus({ preventScroll: true }));
+    queueMicrotask(() => {
+      document.getElementById('rq_reason')?.focus({ preventScroll: true });
+      refreshRequestSetLabUi();
+    });
   }
   function syncRequestFormSectionAndSubject() {
     let deptId = state.currentUser?.dept;
@@ -3861,9 +4062,11 @@ function bindPage(){
           : '';
       subEl.innerHTML = `<option value="">Select subject...</option>${subOpts}${subLegacy}`;
     }
+    refreshRequestSetLabUi();
   }
   document.getElementById('rq_year')?.addEventListener('change', syncRequestFormSectionAndSubject);
   document.getElementById('rq_sem')?.addEventListener('change', syncRequestFormSectionAndSubject);
+  document.getElementById('rq_subject')?.addEventListener('change', refreshRequestSetLabUi);
   document.getElementById('vs_year')?.addEventListener('change', e => {
     let year = e.target?.value || '';
     let deptId = document.getElementById('vs_dept')?.value || state.currentUser?.dept;
@@ -3881,6 +4084,7 @@ function bindPage(){
       let subOpts = subjects.map(s => `<option value="${escapeHtml(s.id)}">${escapeHtml(s.code)} — ${escapeHtml(s.name)}</option>`).join('');
       subEl.innerHTML = `<option value="">Select subject</option>${subOpts}`;
     }
+    refreshViewScheduleSetLabUi();
   });
   document.getElementById('vs_sem')?.addEventListener('change', () => {
     let year = document.getElementById('vs_year')?.value || '';
@@ -3892,6 +4096,7 @@ function bindPage(){
     let subjects = year && sem ? subjectsForCreateScheduleSlot(deptId, year, sem, ay) : [];
     let subOpts = subjects.map(s => `<option value="${escapeHtml(s.id)}">${escapeHtml(s.code)} — ${escapeHtml(s.name)}</option>`).join('');
     subEl.innerHTML = `<option value="">Select subject</option>${subOpts}`;
+    refreshViewScheduleSetLabUi();
   });
   document.getElementById('vs_ay')?.addEventListener('change', () => {
     let year = document.getElementById('vs_year')?.value || '';
@@ -3903,8 +4108,16 @@ function bindPage(){
     let subjects = year && sem ? subjectsForCreateScheduleSlot(deptId, year, sem, ay) : [];
     let subOpts = subjects.map(s => `<option value="${escapeHtml(s.id)}">${escapeHtml(s.code)} — ${escapeHtml(s.name)}</option>`).join('');
     subEl.innerHTML = `<option value="">Select subject</option>${subOpts}`;
+    refreshViewScheduleSetLabUi();
   });
-  if (state.modal?.type === 'addSchedule') initCreateScheduleCurriculumCascade();
+  document.getElementById('vs_subject')?.addEventListener('change', refreshViewScheduleSetLabUi);
+  if (state.modal?.type === 'addSchedule') {
+    initCreateScheduleCurriculumCascade();
+    queueMicrotask(() => refreshCreateScheduleSetLabUi());
+  }
+  if (state.modal?.type === 'viewSchedule' && state.modal.viewScheduleMode === 'edit') {
+    queueMicrotask(() => refreshViewScheduleSetLabUi());
+  }
 }
 
 function showToast(msg){state.toast=msg;render();setTimeout(()=>{state.toast=null;render();},3000);}
