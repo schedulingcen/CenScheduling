@@ -29,6 +29,18 @@
   color: var(--orange);
 }
 .request-icon .icon svg { width: 20px; height: 20px; }
+.request-icon.request-icon-pending {
+  background: #FFFBEB;
+  color: #D97706;
+}
+.request-icon.request-icon-approved {
+  background: #F0FDF4;
+  color: #16A34A;
+}
+.request-icon.request-icon-declined {
+  background: #FEF2F2;
+  color: #DC2626;
+}
 
 .request-info {
   flex: 1;
@@ -54,10 +66,10 @@
   flex-shrink: 0;
 }
 
-/* Room Requests: two columns; same list viewport for Incoming / Outgoing (aligned). */
+/* Room Requests: narrower Incoming, wider Outgoing. */
 .requests-queue-grid {
   display: grid;
-  grid-template-columns: 1fr 1fr;
+  grid-template-columns: minmax(260px, 0.5fr) minmax(0, 1.5fr);
   gap: 20px;
   margin-bottom: 20px;
   align-items: stretch;
@@ -113,8 +125,42 @@
 .requests-list .request-card:last-child {
   margin-bottom: 0;
 }
+.outgoing-status-grid {
+  display: grid;
+  grid-template-columns: repeat(3, minmax(0, 1fr));
+  gap: 12px;
+  width: 100%;
+}
+.outgoing-status-col {
+  background: var(--surface);
+  border: 1px solid var(--border-ui);
+  border-radius: 12px;
+  min-height: 0;
+  display: flex;
+  flex-direction: column;
+}
+.outgoing-status-col-header {
+  border-bottom: 1px solid var(--border-ui);
+  padding: 10px 12px;
+}
+.outgoing-status-col-title {
+  font-size: 13px;
+  font-weight: 700;
+  color: var(--text-primary);
+}
+.outgoing-status-count {
+  margin-left: 6px;
+}
+.outgoing-status-col-body {
+  padding: 10px;
+  min-height: 0;
+  flex: 1;
+}
 @media (max-width: 768px) {
   .requests-queue-grid {
+    grid-template-columns: 1fr;
+  }
+  .outgoing-status-grid {
     grid-template-columns: 1fr;
   }
 }
@@ -146,6 +192,7 @@
 
 .badge-status.pending { background: #FFFBEB; color: #92400E; border: 1px solid #FCD34D; }
 .badge-status.approved { background: #F0FDF4; color: #166534; border: 1px solid #86EFAC; }
+.badge-status.declined { background: #FEF2F2; color: #991B1B; border: 1px solid #FCA5A5; }
 .badge-status.active { background: #F0FDF4; color: #166534; }
 .badge-status.inactive { background: #F0F0F0; color: #616161; }
 
@@ -1378,6 +1425,7 @@ html[data-theme="dark"] #requestRoomTimetableArea .timetable-slot-empty:hover {
 .badge-status { display: inline-block; padding: 2px 8px; border-radius: 20px; font-size: 11px; font-weight: 600; }
 .badge-status.pending { background: var(--orange-light); color: #92400E; }
 .badge-status.approved { background: var(--green-light); color: #166534; }
+.badge-status.declined { background: #FEE2E2; color: #991B1B; }
 .table-wrap { background: var(--surface); border-radius: 12px; border: 1px solid var(--border-ui); overflow: hidden; }
 /* Allow horizontal scroll for wide timetables (dashboard summary). */
 .table-wrap.dashboard-summary-wrap {

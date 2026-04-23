@@ -281,7 +281,12 @@ function hydratePersistedData() {
   if (!raw) return;
   try {
     const o = JSON.parse(raw);
-    if (Array.isArray(o.professors)) state.professors = o.professors;
+    if (Array.isArray(o.professors)) {
+      state.professors = o.professors.map(p => ({
+        ...p,
+        name: normalizeProfessorTitle(p?.name),
+      }));
+    }
     if (Array.isArray(o.subjects)) state.subjects = o.subjects;
     if (Array.isArray(o.schedules)) state.schedules = o.schedules;
     if (Array.isArray(o.requests)) state.requests = o.requests;
@@ -396,7 +401,7 @@ let state = {
   filterSection: '',
   filterFaculty: '',
   filterRoom: '',
-  professors: [...PROFESSORS_DATA],
+  professors: [...PROFESSORS_DATA].map(p => ({ ...p, name: normalizeProfessorTitle(p?.name) })),
   subjects: [...SUBJECTS_DATA],
   rooms: [...ROOMS],
   schedules: [...SCHEDULES],
@@ -467,11 +472,21 @@ function normalizeSubjectToDb(sub) {
     active: sub.active !== false,
   };
 }
+function normalizeProfessorTitle(name) {
+  let raw = String(name || '').trim();
+  if (!raw) return raw;
+  let hasPhdSuffix = /\s*,?\s*ph\.?\s*d\.?\s*$/i.test(raw);
+  if (!hasPhdSuffix) return raw;
+  let noPhd = raw.replace(/\s*,?\s*ph\.?\s*d\.?\s*$/i, '').trim();
+  if (!noPhd) return raw;
+  if (/^dr\.?\s+/i.test(noPhd)) return noPhd;
+  return `DR. ${noPhd}`;
+}
 function normalizeProfessorFromDb(row) {
   if (!row) return null;
   return {
     id: row.id,
-    name: row.name,
+    name: normalizeProfessorTitle(row.name),
     short: row.short || '',
     dept: row.dept_id || row.dept,
     active: row.active !== false,
@@ -480,7 +495,7 @@ function normalizeProfessorFromDb(row) {
 function normalizeProfessorToDb(prof) {
   return {
     id: prof.id,
-    name: prof.name,
+    name: normalizeProfessorTitle(prof.name),
     short: prof.short || '',
     dept_id: prof.dept,
     active: prof.active !== false,
@@ -3058,8 +3073,8 @@ function renderRequests() {
   }
 
   let requestListsBlock = u.role === 'chairperson' ? `
-    <div class="requests-queue-grid">
-      <div class="card requests-queue-card" id="incoming-requests">
+    <div class="requests-queue-grid" style="display:grid;grid-template-columns:minmax(260px,0.7fr) minmax(0,1.8fr);gap:20px;">
+      <div class="card requests-queue-card" id="incoming-requests" style="min-width:0;">
         <div class="card-header">
           <div class="card-title card-title-with-icon">${icon('inbox', 18)} Incoming Requests ${pending.length ? `<span style="background: var(--red); color: #fff; font-size: 10px; padding: 2px 6px; border-radius: 10px; margin-left: 6px;">${pending.length}</span>` : ''}</div>
         </div>
@@ -3095,34 +3110,58 @@ function renderRequests() {
         </div>
       </div>
 
-      <div class="card requests-queue-card">
+      <div class="card requests-queue-card" style="min-width:0;">
         <div class="card-header">
           <div class="card-title card-title-with-icon">${icon('send', 18)} My Outgoing Requests</div>
         </div>
         <div class="card-body requests-queue-card-body">
-          <div class="requests-list ${outgoing.length === 0 ? 'requests-list--empty' : ''}">
-            ${
-              outgoing.length === 0
-                ? `<div class="requests-list-empty-state"><div class="requests-list-empty-icon">${icon('clipboard', 40)}</div><p>No outgoing requests yet.</p></div>`
-                : outgoing
-                    .map(r => {
-                      const room = getRoom(r.roomId);
-                      const to = getDept(r.toDept);
-                      const sub = getSubject(r.subjectId);
-                      return `
-                <div class="request-card">
-                  <div class="request-icon">${icon('refresh', 20)}</div>
-                  <div class="request-info">
-                    <div class="request-title">${room?.name || 'Unknown Room'} from <span class="badge-dept ${r.toDept}">${to?.code || '?'}</span></div>
-                    <div class="request-meta">${sub?.code || '?'} · ${r.section} · ${r.professorId ? escapeHtml(professorDisplayLineFromPick(r.professorId, r.professorOtherName)) + ' · ' : ''}${r.days.map(d => d.slice(0, 3)).join(', ')} ${fmt12(r.timeStart)}–${fmt12(r.timeEnd)}</div>
-                    <div style="margin-top: 6px;"><span class="badge-status ${r.status}">${r.status.charAt(0).toUpperCase() + r.status.slice(1)}</span></div>
+          ${(() => {
+            const pendingOut = outgoing.filter(r => r.status === 'pending');
+            const approvedOut = outgoing.filter(r => r.status === 'approved');
+            const declinedOut = outgoing.filter(r => r.status === 'declined');
+            const renderOutgoingStatusColumn = (title, list) => `
+              <div class="outgoing-status-col">
+                <div class="outgoing-status-col-header">
+                  <div class="outgoing-status-col-title">${escapeHtml(title)} <span class="outgoing-status-count">${list.length}</span></div>
+                </div>
+                <div class="outgoing-status-col-body">
+                  <div class="requests-list ${list.length === 0 ? 'requests-list--empty' : ''}">
+                    ${
+                      list.length === 0
+                        ? `<div class="requests-list-empty-state"><p>No ${escapeHtml(title.toLowerCase())} requests.</p></div>`
+                        : list
+                            .map(r => {
+                              const room = getRoom(r.roomId);
+                              const to = getDept(r.toDept);
+                              const sub = getSubject(r.subjectId);
+                              const statusIcon = r.status === 'approved' ? 'check' : (r.status === 'declined' ? 'close' : 'refresh');
+                              const statusIconColor = r.status === 'approved' ? '#16A34A' : (r.status === 'declined' ? '#DC2626' : '#D97706');
+                              const statusIconBg = r.status === 'approved' ? '#F0FDF4' : (r.status === 'declined' ? '#FEF2F2' : '#FFFBEB');
+                              return `
+                                <div class="request-card">
+                                  <div class="request-icon request-icon-${escapeHtml(r.status || 'pending')}" style="color:${statusIconColor};background:${statusIconBg};">${icon(statusIcon, 20)}</div>
+                                  <div class="request-info">
+                                    <div class="request-title">${room?.name || 'Unknown Room'} from <span class="badge-dept ${r.toDept}">${to?.code || '?'}</span></div>
+                                    <div class="request-meta">${sub?.code || '?'} · ${r.section} · ${r.professorId ? escapeHtml(professorDisplayLineFromPick(r.professorId, r.professorOtherName)) + ' · ' : ''}${r.days.map(d => d.slice(0, 3)).join(', ')} ${fmt12(r.timeStart)}–${fmt12(r.timeEnd)}</div>
+                                    <div style="margin-top: 6px;"><span class="badge-status ${r.status}">${r.status.charAt(0).toUpperCase() + r.status.slice(1)}</span></div>
+                                  </div>
+                                </div>
+                              `;
+                            })
+                            .join('')
+                    }
                   </div>
                 </div>
-              `;
-                    })
-                    .join('')
-            }
-          </div>
+              </div>
+            `;
+            return `
+              <div class="outgoing-status-grid" style="display:grid;grid-template-columns:repeat(3,minmax(0,1fr));gap:12px;">
+                ${renderOutgoingStatusColumn('Pending', pendingOut)}
+                ${renderOutgoingStatusColumn('Approved', approvedOut)}
+                ${renderOutgoingStatusColumn('Declined', declinedOut)}
+              </div>
+            `;
+          })()}
         </div>
       </div>
     </div>
