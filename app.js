@@ -53,6 +53,7 @@ const PAGE_TO_HTML = {
   schedule: 'schedule.html',
   requests: 'request.html',
   curriculum: 'curriculum.html',
+  section: 'curriculum.html',
   faculty: 'faculty.html',
   accounts: 'accounts.html',
   account: 'account.html',
@@ -230,10 +231,27 @@ function pageHref(pageId) {
 }
 
 function resolveInitialPage() {
-  const allowed = ['dashboard', 'schedule', 'requests', 'curriculum', 'faculty', 'accounts', 'account'];
-  if (typeof window.CEN_PAGE === 'string' && allowed.includes(window.CEN_PAGE)) return window.CEN_PAGE;
+  const allowed = ['dashboard', 'schedule', 'requests', 'curriculum', 'section', 'faculty', 'accounts', 'account'];
   const file = (location.pathname.split('/').pop() || '').toLowerCase();
+  if (file === 'curriculum.html' && (location.hash || '').toLowerCase() === '#section') return 'section';
+  if (typeof window.CEN_PAGE === 'string' && allowed.includes(window.CEN_PAGE)) return window.CEN_PAGE;
   return HTML_TO_PAGE[file] || 'dashboard';
+}
+function syncPageFromLocationHash() {
+  const file = (location.pathname.split('/').pop() || '').toLowerCase();
+  if (file !== 'curriculum.html') return;
+  const h = (location.hash || '').toLowerCase();
+  if (h === '#section') {
+    if (state.page !== 'section') {
+      state.page = 'section';
+      render();
+    }
+    return;
+  }
+  if (state.page === 'section') {
+    state.page = 'curriculum';
+    render();
+  }
 }
 
 function hydratePersistedData() {
@@ -287,6 +305,7 @@ function hydratePersistedData() {
     state.termAcademicYear = normalizeAcademicYearInput(state.termAcademicYear) || DEFAULT_ACADEMIC_YEAR;
     if (o.requestTimetableDept != null) state.requestTimetableDept = o.requestTimetableDept;
     if (o.requestTimetableRoom != null) state.requestTimetableRoom = o.requestTimetableRoom;
+    if (o.sectionYearFilter != null) state.sectionYearFilter = o.sectionYearFilter;
     if (o.dashboardSummaryDay != null && typeof o.dashboardSummaryDay === 'string' && DAYS_WITH_SATURDAY.includes(o.dashboardSummaryDay)) {
       state.dashboardSummaryDay = o.dashboardSummaryDay;
     }
@@ -335,6 +354,7 @@ function persistAppData() {
       termAcademicYearCustomOptions: state.termAcademicYearCustomOptions,
       requestTimetableDept: state.requestTimetableDept,
       requestTimetableRoom: state.requestTimetableRoom,
+      sectionYearFilter: state.sectionYearFilter,
       dashboardSummaryDay: state.dashboardSummaryDay,
     })
   );
@@ -372,6 +392,7 @@ let state = {
   requestTimetableDept: 'ie',
   requestTimetableRoom: '',
   dashboardSummaryDay: 'Monday',
+  sectionYearFilter: 'all',
 };
 let nextId = 100;
 const genId = () => `id_${Date.now().toString(36)}_${Math.random().toString(36).slice(2, 10)}`;
@@ -959,12 +980,12 @@ function curriculumColTotal(c) {
 }
 /** Required Hours from Lec/Lab units (Lab = 3 hours per lab unit). */
 function curriculumRequiredHours(c) {
-  if (Number.isFinite(Number(c.requiredHours))) return escapeHtml(String(Number(c.requiredHours)));
   let lec = Number(c.lecUnits);
   let lab = Number(c.labUnits);
   let lecH = Number.isFinite(lec) ? lec : 0;
   let labH = Number.isFinite(lab) ? lab * 3 : 0;
-  if (lecH > 0 || labH > 0) return escapeHtml(String(lecH + labH));
+  if (Number.isFinite(lec) || Number.isFinite(lab)) return escapeHtml(String(lecH + labH));
+  if (Number.isFinite(Number(c.requiredHours))) return escapeHtml(String(Number(c.requiredHours)));
   let total = Number(c.units);
   if (Number.isFinite(total) && total > 0) return escapeHtml(String(total));
   return '—';
@@ -1544,8 +1565,12 @@ function initCreateScheduleCurriculumCascade() {
     subEl.innerHTML = '<option value="">Select subject...</option>' + subjects.map(s => `<option value="${escapeHtml(s.id)}" ${selectedId === s.id ? 'selected' : ''}>${escapeHtml(s.code)} — ${escapeHtml(s.name)}</option>`).join('');
   }
   function fillSectionSelect(sections, selectedSection) {
-    let opts = sections.map(sec => `<option value="${escapeHtml(sec)}" ${selectedSection === sec ? 'selected' : ''}>${escapeHtml(sec)}</option>`).join('');
-    secEl.innerHTML = '<option value="">Select section...</option>' + opts;
+    let dl = document.getElementById('f_section_list');
+    if (dl) {
+      dl.innerHTML = sections.map(sec => `<option value="${escapeHtml(sec)}"></option>`).join('');
+    }
+    let pick = selectedSection || secEl.value || '';
+    secEl.value = pick;
   }
 
   function rebuildAll() {
@@ -1557,7 +1582,7 @@ function initCreateScheduleCurriculumCascade() {
       sEl.disabled = true;
       subEl.innerHTML = '<option value="">Select subject...</option>';
       subEl.disabled = true;
-      secEl.innerHTML = '<option value="">Select section...</option>';
+      secEl.value = '';
       secEl.disabled = true;
       refreshCreateScheduleSetLabUi();
       return;
@@ -1888,7 +1913,7 @@ function scrollToHashFragmentIfAny() {
 }
 
 function getPageTitle() {
-  let titles={dashboard:'Dashboard',schedule:'Timetable Schedule',requests:'Room Requests',curriculum:'Curriculum',faculty:'Faculty',accounts:'Accounts',account:'My Account'};
+  let titles={dashboard:'Dashboard',schedule:'Timetable Schedule',requests:'Room Requests',curriculum:'Curriculum',section:'Section',faculty:'Faculty',accounts:'Accounts',account:'My Account'};
   return titles[state.page]||'Dashboard';
 }
 
@@ -1897,6 +1922,10 @@ function renderSidebar() {
   let pendingIn = pendingRequestsForUser();
   let nav = (id, icn, label, extra = '') =>
     `<a href="${pageHref(id)}" class="nav-item ${state.page === id ? 'active' : ''}" ${id === 'requests' && pendingIn && (u?.role === 'chairperson' || u?.role === 'admin') ? `title="${pendingIn} pending room request(s)"` : ''}><span class="nav-icon">${icon(icn, 18)}</span>${label}${extra}</a>`;
+  let sectionNav =
+    u.role === 'admin' || u.role === 'chairperson'
+      ? `<a href="${pageHref('section')}#section" class="nav-item ${state.page === 'section' ? 'active' : ''}"><span class="nav-icon">${icon('book', 18)}</span>Section</a>`
+      : '';
   let requestsExtra = '';
   if ((u?.role === 'chairperson' || u?.role === 'admin') && pendingIn > 0) {
     requestsExtra = `<span class="badge nav-requests-badge" aria-label="${pendingIn} pending room requests">${pendingIn}</span>`;
@@ -1913,6 +1942,7 @@ function renderSidebar() {
       ${u.role === 'chairperson' || u.role === 'admin' ? nav('requests', 'refresh', 'Requests', requestsExtra) : ''}
       <div class="nav-section-label" style="margin-top:8px">Manage</div>
       ${(u.role==='admin'||u.role==='chairperson')?nav('curriculum','book','Curriculum'):''}
+      ${sectionNav}
       ${u.role==='admin'?nav('faculty','users','Faculty'):''}
       ${u.role==='admin'?nav('accounts','settings','Accounts'):''}
       ${u.role==='chairperson'?nav('account','user','My Account'):''}
@@ -1927,6 +1957,7 @@ function renderPage() {
     case 'schedule': return renderSchedulePage();
     case 'requests': return renderRequests();
     case 'curriculum': return renderCurriculum();
+    case 'section': return renderSectionPage();
     case 'faculty': return renderFaculty();
     case 'accounts': return renderAccounts();
     case 'account': return renderMyAccount();
@@ -2587,13 +2618,11 @@ function exportCurriculumTableCsv() {
     if (c.units != null && Number.isFinite(Number(c.units))) units = String(Number(c.units));
     else if (lecS || labS) units = String((Number.isFinite(lecN) ? lecN : 0) + (Number.isFinite(labN) ? labN : 0));
     let hours = '';
-    if (Number.isFinite(Number(c.requiredHours))) hours = String(Number(c.requiredHours));
-    else {
-      let lecH = Number.isFinite(lecN) ? lecN : 0;
-      let labH = Number.isFinite(labN) ? labN * 3 : 0;
-      if (lecH > 0 || labH > 0) hours = String(lecH + labH);
-      else if (Number.isFinite(Number(c.units)) && Number(c.units) > 0) hours = String(Number(c.units));
-    }
+    let lecH = Number.isFinite(lecN) ? lecN : 0;
+    let labH = Number.isFinite(labN) ? labN * 3 : 0;
+    if (Number.isFinite(lecN) || Number.isFinite(labN)) hours = String(lecH + labH);
+    else if (Number.isFinite(Number(c.requiredHours))) hours = String(Number(c.requiredHours));
+    else if (Number.isFinite(Number(c.units)) && Number(c.units) > 0) hours = String(Number(c.units));
     return [
       curriculumAyFilter,
       d?.code || curriculumFilterDept(c) || '',
@@ -3035,7 +3064,7 @@ function renderCurriculumForm(d, opts) {
   if (!Number.isFinite(lecV)) lecV = 0;
   if (!Number.isFinite(labV)) labV = 0;
   let totV = lecV + labV;
-  let hoursV = Number.isFinite(Number(d.requiredHours)) ? Number(d.requiredHours) : totV;
+  let hoursV = computedCurriculumHoursFromUnits(lecV, labV);
   let isAdminCurr = state.currentUser?.role === 'admin';
   let currDeptId = isAdminCurr ? (d.dept || '') : (state.currentUser?.dept || d.dept || '');
   let deptOpts = isAdminCurr
@@ -3054,7 +3083,7 @@ function renderCurriculumForm(d, opts) {
     <div class="form-grid curriculum-form-year-sem"><div class="form-group"><label class="form-label" for="cc_year">Year</label><select class="form-select" id="cc_year" ${dis}><option value="">Select year...</option>${yearOpts}${ySel}</select></div><div class="form-group"><label class="form-label" for="cc_semester">Semester</label><select class="form-select" id="cc_semester" ${dis}><option value="">Select semester...</option>${semOpts}${sSel}</select></div></div>
     <div class="form-group full"><label class="form-label" for="cc_ay">Academic Year</label><input class="form-input" id="cc_ay" value="${escapeHtml(ayVal)}" placeholder="2025-2026" ${roInp}></div>
     <div class="form-grid curriculum-form-code-subject"><div class="form-group"><label class="form-label" for="cc_courseCode">Code</label><input class="form-input" id="cc_courseCode" placeholder="e.g. IE 100" value="${escapeHtml(d.courseCode || '')}" ${roInp}></div><div class="form-group"><label class="form-label" for="cc_subject">Subject</label><input class="form-input" id="cc_subject" placeholder="Subject title" value="${escapeHtml(d.subjectName || '')}" ${roInp}></div></div>
-    <div class="form-grid curriculum-form-units"><div class="form-group"><label class="form-label" for="cc_lecUnits">Lec (units)</label><input class="form-input" id="cc_lecUnits" type="number" min="0" max="12" step="1" value="${escapeHtml(String(lecV))}" ${roInp}></div><div class="form-group"><label class="form-label" for="cc_labUnits">Lab (units)</label><input class="form-input" id="cc_labUnits" type="number" min="0" max="12" step="1" value="${escapeHtml(String(labV))}" ${roInp}></div><div class="form-group"><label class="form-label" for="cc_units_total">Total unit/s</label><input class="form-input" id="cc_units_total" type="text" readonly tabindex="-1" value="${escapeHtml(String(totV))}" aria-live="polite"></div><div class="form-group"><label class="form-label" for="cc_hours">Hours</label><input class="form-input" id="cc_hours" type="number" min="0" max="40" step="0.5" value="${escapeHtml(String(hoursV))}" ${roInp}></div></div>
+    <div class="form-grid curriculum-form-units"><div class="form-group"><label class="form-label" for="cc_lecUnits">Lec (units)</label><input class="form-input" id="cc_lecUnits" type="number" min="0" max="12" step="1" value="${escapeHtml(String(lecV))}" ${roInp}></div><div class="form-group"><label class="form-label" for="cc_labUnits">Lab (units)</label><input class="form-input" id="cc_labUnits" type="number" min="0" max="12" step="1" value="${escapeHtml(String(labV))}" ${roInp}></div><div class="form-group"><label class="form-label" for="cc_units_total">Total unit/s</label><input class="form-input" id="cc_units_total" type="text" readonly tabindex="-1" value="${escapeHtml(String(totV))}" aria-live="polite"></div><div class="form-group"><label class="form-label" for="cc_hours">Hours</label><input class="form-input" id="cc_hours" type="number" min="0" max="40" step="0.5" value="${escapeHtml(String(hoursV))}" readonly tabindex="-1" aria-readonly="true"></div></div>
   </div><input type="hidden" id="cc_edit_id" value="${escapeHtml(d.id || '')}">`;
 }
 
@@ -3120,8 +3149,8 @@ function renderCurriculum() {
       : '';
   let rowsFirstSem = rows.filter(c => curriculumFilterSemester(c) === '1st Semester');
   let rowsSecondSem = rows.filter(c => curriculumFilterSemester(c) === '2nd Semester');
-  function curriculumSemTable(title, semRows) {
-    return `<div class="curriculum-sem-col">
+  function curriculumSemTable(title, semRows, id) {
+    return `<div class="curriculum-sem-col" id="${escapeHtml(id)}">
       <div class="curriculum-sem-title">${escapeHtml(title)}</div>
       <div class="table-wrap curriculum-table-wrap">
         <table class="curriculum-table">
@@ -3147,11 +3176,68 @@ function renderCurriculum() {
     <div class="curriculum-panel">
       ${curriculumToolbar}
       <div class="curriculum-sem-grid">
-        ${curriculumSemTable('First Semester', rowsFirstSem)}
-        ${curriculumSemTable('Second Semester', rowsSecondSem)}
+        ${curriculumSemTable('First Semester', rowsFirstSem, 'curriculum-first-sem')}
+        ${curriculumSemTable('Second Semester', rowsSecondSem, 'curriculum-second-sem')}
       </div>
     </div>
   `;
+}
+
+function sectionRowsForUser() {
+  let u = state.currentUser;
+  let deptIds = u?.role === 'admin' ? DEPARTMENTS.map(d => d.id) : [u?.dept].filter(Boolean);
+  let rows = [];
+  for (let deptId of deptIds) {
+    let fromSamples = Array.isArray(SECTION_SAMPLES_BY_DEPT[deptId]) ? SECTION_SAMPLES_BY_DEPT[deptId] : [];
+    let fromSched = state.schedules.filter(s => s.dept === deptId).map(s => s.section);
+    let all = [...new Set([...fromSamples, ...fromSched].map(s => String(s || '').trim()).filter(Boolean))];
+    all.forEach(sec => rows.push({ dept: deptId, year: sectionYearFromLabel(sec) || '—', section: sec }));
+  }
+  rows.sort((a, b) =>
+    (getDept(a.dept)?.name || a.dept).localeCompare(getDept(b.dept)?.name || b.dept) ||
+    String(a.year).localeCompare(String(b.year)) ||
+    String(a.section).localeCompare(String(b.section)),
+  );
+  return rows;
+}
+function renderSectionForm(d) {
+  d = d || {};
+  let u = state.currentUser;
+  let isAdmin = u?.role === 'admin';
+  let deptVal = d.dept || (isAdmin ? DEPARTMENTS[0]?.id : u?.dept) || '';
+  let deptOpts = isAdmin
+    ? DEPARTMENTS.map(x => `<option value="${escapeHtml(x.id)}" ${deptVal === x.id ? 'selected' : ''}>${escapeHtml(x.code)} — ${escapeHtml(x.name)}</option>`).join('')
+    : `<option value="${escapeHtml(deptVal)}" selected>${escapeHtml(getDept(deptVal)?.code || '')} — ${escapeHtml(getDept(deptVal)?.name || '')}</option>`;
+  let deptDis = isAdmin ? '' : 'disabled';
+  let yearOpts = SCHEDULE_FORM_YEARS.map(y => `<option value="${escapeHtml(y)}" ${d.year === y ? 'selected' : ''}>${escapeHtml(y)}</option>`).join('');
+  return `<div class="form-grid form-grid-stacked">
+    <div class="form-group"><label class="form-label" for="sec_dept">Department</label><select class="form-select" id="sec_dept" ${deptDis}>${deptOpts}</select></div>
+    <div class="form-group"><label class="form-label" for="sec_year">Year</label><select class="form-select" id="sec_year"><option value="">Select year...</option>${yearOpts}</select></div>
+    <div class="form-group"><label class="form-label" for="sec_name">Section</label><input class="form-input" id="sec_name" value="${escapeHtml(d.section || '')}" placeholder="e.g. BSIE IGK"></div>
+    <input type="hidden" id="sec_edit_dept" value="${escapeHtml(d._oldDept || '')}">
+    <input type="hidden" id="sec_edit_section" value="${escapeHtml(d._oldSection || '')}">
+  </div>`;
+}
+function renderSectionPage() {
+  let u = state.currentUser;
+  if (!(u?.role === 'admin' || u?.role === 'chairperson')) {
+    return '<div class="card"><div class="card-body">You do not have access to Sections.</div></div>';
+  }
+  if (state.sectionYearFilter !== 'all' && !SCHEDULE_FORM_YEARS.includes(state.sectionYearFilter)) state.sectionYearFilter = 'all';
+  let rows = sectionRowsForUser();
+  if (state.sectionYearFilter !== 'all') rows = rows.filter(r => r.year === state.sectionYearFilter);
+  let yearOpts = [['all', 'All Years'], ...SCHEDULE_FORM_YEARS.map(y => [y, y])]
+    .map(([v, lab]) => `<option value="${escapeHtml(v)}" ${state.sectionYearFilter === v ? 'selected' : ''}>${escapeHtml(lab)}</option>`)
+    .join('');
+  return `<div class="page-header"><div><h2>Section</h2></div><button class="btn btn-primary" id="addSectionBtn">${icon('plus', 16)} Add Section</button></div>
+    <div class="card"><div class="card-body">
+      <div class="curriculum-toolbar-main" style="padding:0 0 10px;">
+        <select class="filter-select curriculum-year-filter-select" id="sectionYearFilter" aria-label="Section year filter">${yearOpts}</select>
+      </div>
+      <div class="table-wrap"><table><thead><tr><th>Department</th><th>Year</th><th>Section</th><th>Actions</th></tr></thead><tbody>
+        ${rows.map(r => `<tr><td>${escapeHtml(getDept(r.dept)?.code || r.dept)} — ${escapeHtml(getDept(r.dept)?.name || '')}</td><td>${escapeHtml(r.year)}</td><td>${escapeHtml(r.section)}</td><td><button class="btn btn-outline btn-sm" data-editsection="${escapeHtml(r.dept)}::${escapeHtml(r.section)}">Edit</button> <button class="btn btn-danger btn-sm" data-delsection="${escapeHtml(r.dept)}::${escapeHtml(r.section)}">Delete</button></td></tr>`).join('')}
+      </tbody></table></div>
+    </div></div>`;
 }
 
 function renderFaculty() {
@@ -3208,6 +3294,10 @@ function renderModal() {
   }
   if(type==='addSubject') return modalWrap(data?.id?'Edit Subject':'Add Subject',renderSubjectForm(data));
   if(type==='addProfessor') return modalWrap(data?.id?'Edit Professor':'Add Professor',renderProfessorForm(data));
+  if (type === 'addSection') {
+    let d = data || {};
+    return modalWrap(d._oldSection ? 'Edit Section' : 'Add Section', renderSectionForm(d));
+  }
   if (type === 'addCurriculum') {
     let d = data || {};
     let viewOnly = !canUserMutateCurriculum(state.currentUser);
@@ -3372,7 +3462,7 @@ function renderScheduleForm() {
     ${deptRow}
     <div class="schedule-form-inline-row">
       <div class="form-group"><label class="form-label" for="f_year">Year ${req}</label><select class="form-select" id="f_year"><option value="">Select year...</option></select></div>
-      <div class="form-group"><label class="form-label" for="f_section">Section ${req}</label><select class="form-select" id="f_section"><option value="">Select section...</option>${secOpts}${secLegacyOpt}</select></div>
+      <div class="form-group"><label class="form-label" for="f_section">Section ${req}</label><input class="form-input" id="f_section" list="f_section_list" placeholder="Select or type section..." value="${escapeHtml(defSec || '')}"><datalist id="f_section_list">${secOpts}${secLegacyOpt}</datalist></div>
     </div>
     <div class="schedule-form-inline-row schedule-form-row-sem-subject">
       <div class="form-group"><label class="form-label" for="f_sem">Semester ${req}</label><select class="form-select" id="f_sem"><option value="">Select semester...</option></select></div>
@@ -3477,10 +3567,10 @@ function renderViewSchedule(d) {
   let roomOpts = roomList.map(r => `<option value="${escapeHtml(r.id)}" ${d.roomId === r.id ? 'selected' : ''}>${escapeHtml(r.name)}</option>`).join('')
     + `<option value="${ROOM_OTHER_ID}" ${d.roomId === ROOM_OTHER_ID ? 'selected' : ''}>Others:</option>`;
   let secChoices = mergeSectionOptions([listDept]);
-  let secOpts = secChoices.map(sec => `<option value="${escapeHtml(sec)}" ${String(d.section) === sec ? 'selected' : ''}>${escapeHtml(sec)}</option>`).join('');
+  let secOpts = secChoices.map(sec => `<option value="${escapeHtml(sec)}"></option>`).join('');
   let secLegacyOpt =
     d.section && !secChoices.includes(String(d.section))
-      ? `<option value="${escapeHtml(d.section)}" selected>${escapeHtml(d.section)}</option>`
+      ? `<option value="${escapeHtml(d.section)}"></option>`
       : '';
   let deptOpts = DEPARTMENTS.map(x => `<option value="${x.id}" ${d.dept === x.id ? 'selected' : ''}>${escapeHtml(x.code)} — ${escapeHtml(x.name)}</option>`).join('');
   let timeStartOpts = timetableTimeStartChoices().map(t => `<option value="${t}" ${d.timeStart === t ? 'selected' : ''}>${fmt12(t)}</option>`).join('');
@@ -3491,7 +3581,7 @@ function renderViewSchedule(d) {
   let deptControl = isAdmin
     ? `<select class="form-select" id="vs_dept">${deptOpts}</select>`
     : `<div class="vs-dept-readout">${dept ? `<span class="badge-dept ${dept.id}">${escapeHtml(dept.code)}</span> ${escapeHtml(dept.name)}` : '—'}</div><input type="hidden" id="vs_dept" value="${escapeHtml(d.dept)}">`;
-  let vsSectionSelect = `<select class="form-select" id="vs_section"><option value="">Select section...</option>${secOpts}${secLegacyOpt}</select>`;
+  let vsSectionSelect = `<input class="form-input" id="vs_section" list="vs_section_list" placeholder="Select or type section..." value="${escapeHtml(d.section || '')}"><datalist id="vs_section_list">${secOpts}${secLegacyOpt}</datalist>`;
   let vsSubjectSelect = `<select class="form-select" id="vs_subject"><option value="">Select subject</option>${subOpts}${subLegacyOpt}</select>`;
   let ayVal = normalizeAcademicYearInput(d.schAy) || DEFAULT_ACADEMIC_YEAR;
   let ayReadEdit = escapeHtml(ayVal);
@@ -3682,6 +3772,10 @@ function renderRequestForm() {
 
 // Event binding
 function bindGlobal(){
+  if (!window.__cenHashPageSyncBound) {
+    window.__cenHashPageSyncBound = '1';
+    window.addEventListener('hashchange', syncPageFromLocationHash);
+  }
   document.getElementById('logoutBtn')?.addEventListener('click',()=>{
     if (!window.confirm(MSG_CONFIRM_LOGOUT)) return;
     sessionStorage.clear();
@@ -4121,6 +4215,36 @@ function bindPage(){
       render();
       return;
     }
+    if (mt === 'addSection') {
+      let u = state.currentUser;
+      if (!(u?.role === 'admin' || u?.role === 'chairperson')) return;
+      let dept = (document.getElementById('sec_dept')?.value || (u.role === 'chairperson' ? u.dept : '') || '').trim();
+      let year = (document.getElementById('sec_year')?.value || '').trim();
+      let section = (document.getElementById('sec_name')?.value || '').trim().toUpperCase();
+      let oldDept = (document.getElementById('sec_edit_dept')?.value || '').trim();
+      let oldSection = (document.getElementById('sec_edit_section')?.value || '').trim();
+      if (!dept || !year || !section) {
+        showToast(MSG_FORM_INCOMPLETE);
+        return;
+      }
+      if (!SCHEDULE_FORM_YEARS.includes(year)) {
+        showToast('Choose a valid year.');
+        return;
+      }
+      if (!SECTION_SAMPLES_BY_DEPT[dept]) SECTION_SAMPLES_BY_DEPT[dept] = [];
+      let target = SECTION_SAMPLES_BY_DEPT[dept].map(s => String(s || '').trim());
+      if (oldDept && oldSection && SECTION_SAMPLES_BY_DEPT[oldDept]) {
+        SECTION_SAMPLES_BY_DEPT[oldDept] = SECTION_SAMPLES_BY_DEPT[oldDept].filter(s => String(s || '').trim() !== oldSection);
+      }
+      if (!target.includes(section)) SECTION_SAMPLES_BY_DEPT[dept].push(section);
+      if (oldDept && oldSection && (oldDept !== dept || oldSection !== section)) {
+        state.schedules = state.schedules.map(s => (s.dept === oldDept && String(s.section || '').trim() === oldSection ? { ...s, dept, section, schYear: year } : s));
+      }
+      state.modal = null;
+      showToast(oldSection ? 'Section updated' : 'Section added');
+      render();
+      return;
+    }
     if (mt === 'addSubject') {
       let sub = { id: document.getElementById('saveSubjectBtn')?.dataset.editid || genId(), code: document.getElementById('fs_code').value, name: document.getElementById('fs_name').value, dept: document.getElementById('fs_dept').value, units: parseInt(document.getElementById('fs_units').value), active: true };
       if (sub.code && sub.name) {
@@ -4163,11 +4287,10 @@ function bindPage(){
       let subjectName = (document.getElementById('cc_subject')?.value || '').trim();
       let lecU = parseInt(document.getElementById('cc_lecUnits')?.value, 10);
       let labU = parseInt(document.getElementById('cc_labUnits')?.value, 10);
-      let hrsU = parseFloat(document.getElementById('cc_hours')?.value);
       let lecUnits = Number.isFinite(lecU) ? lecU : 0;
       let labUnits = Number.isFinite(labU) ? labU : 0;
       let units = lecUnits + labUnits;
-      let requiredHours = Number.isFinite(hrsU) ? hrsU : computedCurriculumHoursFromUnits(lecUnits, labUnits);
+      let requiredHours = computedCurriculumHoursFromUnits(lecUnits, labUnits);
       let row = {
         dept: document.getElementById('cc_dept')?.value,
         year: (document.getElementById('cc_year')?.value || '').trim(),
@@ -4427,6 +4550,39 @@ function bindPage(){
     state.curriculumAcademicYearFilter = normalizeAcademicYearInput(e.target.value || '') || DEFAULT_ACADEMIC_YEAR;
     render();
   });
+  document.getElementById('sectionYearFilter')?.addEventListener('change', e => {
+    state.sectionYearFilter = e.target.value || 'all';
+    render();
+  });
+  document.getElementById('addSectionBtn')?.addEventListener('click', () => {
+    let u = state.currentUser;
+    if (!(u?.role === 'admin' || u?.role === 'chairperson')) return;
+    openModal({ type: 'addSection', data: { dept: u.role === 'chairperson' ? u.dept : DEPARTMENTS[0]?.id || '', year: '', section: '' } });
+  });
+  document.querySelectorAll('[data-editsection]').forEach(el =>
+    el.addEventListener('click', () => {
+      let raw = el.getAttribute('data-editsection') || '';
+      let [dept, section] = raw.split('::');
+      if (!dept || !section) return;
+      openModal({
+        type: 'addSection',
+        data: { dept, year: sectionYearFromLabel(section) || '', section, _oldDept: dept, _oldSection: section },
+      });
+    }),
+  );
+  document.querySelectorAll('[data-delsection]').forEach(el =>
+    el.addEventListener('click', () => {
+      let raw = el.getAttribute('data-delsection') || '';
+      let [dept, section] = raw.split('::');
+      if (!dept || !section) return;
+      if (!window.confirm('Delete this section from the section list?')) return;
+      if (SECTION_SAMPLES_BY_DEPT[dept]) {
+        SECTION_SAMPLES_BY_DEPT[dept] = SECTION_SAMPLES_BY_DEPT[dept].filter(s => String(s || '').trim() !== section);
+      }
+      showToast('Section deleted');
+      render();
+    }),
+  );
   document.getElementById('curriculumExportBtn')?.addEventListener('click', () => {
     if (state.page !== 'curriculum') return;
     exportCurriculumTableCsv();
@@ -4506,18 +4662,12 @@ function bindPage(){
     let a = Number.isFinite(lec) ? lec : 0;
     let b = Number.isFinite(lab) ? lab : 0;
     out.value = String(a + b);
-    if (hoursEl && hoursEl.dataset.manual !== '1') {
+    if (hoursEl) {
       hoursEl.value = String(computedCurriculumHoursFromUnits(a, b));
     }
   }
   document.getElementById('cc_lecUnits')?.addEventListener('input', syncCurriculumUnitsTotal);
   document.getElementById('cc_labUnits')?.addEventListener('input', syncCurriculumUnitsTotal);
-  document.getElementById('cc_hours')?.addEventListener('input', e => {
-    e.target.dataset.manual = '1';
-  });
-  document.getElementById('cc_hours')?.addEventListener('focus', e => {
-    if (e.target.value === '') e.target.dataset.manual = '0';
-  });
   syncCurriculumUnitsTotal();
   document.getElementById('addProfBtn')?.addEventListener('click',()=>{openModal({type:'addProfessor',data:{}});});
   document.querySelectorAll('[data-editprof]').forEach(el=>el.addEventListener('click',()=>{let p=state.professors.find(x=>x.id===el.dataset.editprof);if(p)openModal({type:'addProfessor',data:{...p}});}));
@@ -4668,8 +4818,13 @@ function bindPage(){
     if (!secEl || !deptId) return;
     let selected = secEl.value;
     let sections = sectionOptionsForDeptYear([deptId], year);
-    let opts = sections.map(s => `<option value="${escapeHtml(s)}" ${selected === s ? 'selected' : ''}>${escapeHtml(s)}</option>`).join('');
-    secEl.innerHTML = `<option value="">Select section...</option>${opts}`;
+    let secListEl = document.getElementById('vs_section_list');
+    if (secListEl) {
+      secListEl.innerHTML = sections.map(s => `<option value="${escapeHtml(s)}"></option>`).join('');
+    }
+    if (selected && !sections.includes(selected)) {
+      secEl.value = selected;
+    }
     let sem = document.getElementById('vs_sem')?.value || '';
     let ay = normalizeAcademicYearInput(document.getElementById('vs_ay')?.value || state.termAcademicYear) || DEFAULT_ACADEMIC_YEAR;
     let subEl = document.getElementById('vs_subject');
