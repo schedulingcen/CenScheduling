@@ -589,7 +589,7 @@ const timeSlots = ['07:30','08:00','08:30','09:00','09:30','10:00','10:30','11:0
 
 // Sample section labels for schedule / request dropdowns (merged with sections already on timetables)
 const SECTION_SAMPLES_BY_DEPT = {
-  ie: ['BSIE IGL', 'BSIE IIGK', 'BSIE IIGL', 'BSIE IIIGK', 'BSIE IIIGL', 'BSIE IVGK', 'BSIE IVGL'],
+  ie: ['BSIE IGK', 'BSIE IGL', 'BSIE IIGK', 'BSIE IIGL', 'BSIE IIIGK', 'BSIE IIIGL', 'BSIE IVGK', 'BSIE IVGL'],
   cpe: ['BSCPE IGE', 'BSCPE IGF', 'BSCPE IIGE', 'BSCPE IIGF', 'BSCPE IIIGE', 'BSCPE IIIGF', 'BSCPE IVGE', 'BSCPE IVGF'],
   ce: ['BSCE IGA', 'BSCE IGB', 'BSCE IIGA', 'BSCE IIGB', 'BSCE IIIGA', 'BSCE IIIGB', 'BSCE IVGA', 'BSCE IVGB'],
   ee: ['BSEE IGI', 'BSEE IGJ', 'BSEE IIGI', 'BSEE IIGJ', 'BSEE IIIGI', 'BSEE IIIGJ', 'BSEE IVGI', 'BSEE IVGJ'],

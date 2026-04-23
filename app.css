@@ -213,22 +213,30 @@
   text-align: center;
   box-sizing: border-box;
 }
-.dashboard-summary-room-th {
-  background: var(--table-header-bg);
+/* Schedule Summary: top row (TIME / ROOMS, lab columns) — light red band */
+.dashboard-summary-table thead .dashboard-summary-corner,
+.dashboard-summary-table thead .dashboard-summary-room-th {
+  background: var(--red-light);
+  color: #111;
   font-weight: 700;
-  color: var(--text-primary);
   white-space: nowrap;
 }
+.dashboard-summary-table thead .dashboard-summary-room-th {
+  min-width: 72px;
+  max-width: 140px;
+  line-height: 1.2;
+}
 .dashboard-summary-corner {
-  background: var(--table-header-bg);
-  font-weight: 700;
-  color: var(--text-primary);
-  white-space: nowrap;
   position: sticky;
   left: 0;
   z-index: 3;
   min-width: 104px;
   box-shadow: 1px 0 0 var(--border-ui);
+}
+html[data-theme="dark"] .dashboard-summary-table thead .dashboard-summary-corner,
+html[data-theme="dark"] .dashboard-summary-table thead .dashboard-summary-room-th {
+  background: var(--red-light);
+  color: #111;
 }
 .dashboard-summary-time-th {
   background: var(--table-header-bg);
@@ -245,11 +253,6 @@
   background: var(--surface);
   box-shadow: 1px 0 0 var(--border-ui);
   min-width: 104px;
-}
-.dashboard-summary-room-th {
-  min-width: 72px;
-  max-width: 140px;
-  line-height: 1.2;
 }
 .dashboard-summary-empty {
   background: var(--surface);
@@ -658,6 +661,100 @@ a.stat-card--clickable:visited {
 .conflict-reason-list li { margin-bottom: 4px; }
 .conflict-view-sched-btn { margin-top: 10px; }
 .modal-conflicts .modal-body { max-height: min(75vh, 560px); overflow-y: auto; }
+.modal.modal-schedule-export-wizard {
+  width: min(520px, calc(100vw - 32px));
+}
+.schedule-export-wizard-badge-row {
+  display: flex;
+  justify-content: flex-end;
+  margin: -4px 0 10px;
+}
+.schedule-export-readonly-badge {
+  font-size: 11px;
+  font-weight: 600;
+  text-transform: uppercase;
+  letter-spacing: 0.04em;
+  color: var(--text-muted);
+  border: 1px solid var(--border-ui);
+  padding: 4px 10px;
+  border-radius: 999px;
+  background: var(--surface-elevated, var(--gray-100));
+}
+.schedule-export-wizard-top {
+  display: grid;
+  grid-template-columns: 1fr 1fr;
+  gap: 16px;
+  margin-bottom: 4px;
+}
+.schedule-export-format-box {
+  background: var(--surface-elevated, rgba(0, 0, 0, 0.03));
+  border: 1px solid var(--border-ui);
+  border-radius: 10px;
+  padding: 14px 16px 16px;
+  margin-top: 8px;
+}
+html[data-theme="dark"] .schedule-export-format-box {
+  background: rgba(255, 255, 255, 0.04);
+}
+.schedule-export-format-title {
+  font-size: 12px;
+  font-weight: 700;
+  text-transform: uppercase;
+  letter-spacing: 0.04em;
+  color: var(--text-muted);
+  margin-bottom: 4px;
+}
+.schedule-export-format-hint {
+  margin: 0 0 4px;
+  font-size: 12px;
+}
+.schedule-export-layout-grid {
+  display: grid;
+  grid-template-columns: 1fr 1fr;
+  gap: 10px;
+  margin-top: 10px;
+}
+.schedule-export-layout-btn {
+  position: relative;
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  gap: 8px;
+  padding: 10px 12px;
+  border-radius: 8px;
+  border: 1px solid var(--border-ui);
+  background: var(--surface);
+  cursor: pointer;
+  font-size: 13px;
+  font-weight: 600;
+  color: var(--text-primary);
+  transition: border-color 0.15s, background 0.15s;
+}
+.schedule-export-layout-btn:hover {
+  border-color: var(--red);
+  background: var(--surface-elevated, var(--surface));
+}
+.schedule-export-layout-btn input {
+  position: absolute;
+  opacity: 0;
+  width: 1px;
+  height: 1px;
+  margin: 0;
+  clip: rect(0, 0, 0, 0);
+}
+.schedule-export-layout-btn.schedule-export-layout-btn--on {
+  border: 2px solid var(--red);
+  padding: 9px 11px;
+}
+.schedule-export-layout-btn .icon {
+  flex-shrink: 0;
+}
+@media (max-width: 480px) {
+  .schedule-export-wizard-top,
+  .schedule-export-layout-grid {
+    grid-template-columns: 1fr;
+  }
+}
 .stat-icon { width: 48px; height: 48px; border-radius: 12px; display: flex; align-items: center; justify-content: center; }
 .stat-icon .icon svg { width: 24px; height: 24px; }
 .stat-icon.blue { background: var(--blue-light); }
@@ -671,6 +768,17 @@ a.btn { text-decoration: none; }
 html[data-theme="dark"] .btn-secondary { background: #2a2a38; color: var(--text-primary); }
 .btn-outline { background: transparent; border: 1px solid var(--border-ui); color: var(--text-primary); }
 .btn-outline:hover { border-color: var(--red); color: var(--red); }
+.btn.curriculum-export-btn {
+  border: 1px solid var(--red);
+}
+.btn.curriculum-export-btn:hover {
+  border-color: var(--red-dark);
+  color: var(--red-dark);
+}
+html[data-theme="dark"] .btn.curriculum-export-btn:hover {
+  border-color: var(--red);
+  color: var(--red-light, #f5a5a5);
+}
 .btn-sm { padding: 5px 10px; font-size: 12px; }
 /* Schedule topbar: Clear All + Add Schedule — same 8px corners as .btn / Create a Request */
 .btn-schedule-clear-all {
@@ -864,6 +972,27 @@ html[data-theme="dark"] .btn-schedule-clear-all:hover {
   font-size: 14px;
 }
 .view-schedule-form .form-label { font-weight: 700; }
+/* Academic Year: fixed for the term context; shown at top as read-only in view + edit. */
+.view-schedule-form .vs-ay-readout-top .vs-readonly {
+  padding: 10px 12px;
+  min-height: 42px;
+  border-radius: 8px;
+  border: 1px solid var(--border-ui);
+  background: var(--surface-elevated, var(--bg-secondary));
+  color: var(--text-primary);
+  font-weight: 600;
+  font-size: 15px;
+  display: flex;
+  align-items: center;
+}
+.view-schedule-form .vs-ay-readout-top .form-label {
+  font-size: 11px;
+  font-weight: 600;
+  text-transform: uppercase;
+  letter-spacing: 0.04em;
+  color: var(--text-muted);
+  margin-bottom: 6px;
+}
 .vs-field {
   display: flex;
   flex-direction: column;
@@ -1286,6 +1415,41 @@ td { padding: 12px 16px; border-bottom: 1px solid var(--border-ui); font-size: 1
   align-items: end;
   background: var(--surface);
 }
+.curriculum-toolbar-block {
+  padding: 6px 16px 2px;
+  background: var(--surface);
+}
+.curriculum-toolbar-main {
+  display: flex;
+  flex-wrap: wrap;
+  align-items: center;
+  justify-content: space-between;
+  gap: 12px 16px;
+}
+.curriculum-toolbar-main.curriculum-toolbar-year-only {
+  justify-content: flex-start;
+}
+.curriculum-toolbar-year-only .curriculum-year-filter-select {
+  flex: 0 0 auto;
+}
+.curriculum-toolbar-row {
+  display: flex;
+  flex-wrap: wrap;
+  align-items: center;
+  justify-content: flex-start;
+}
+.curriculum-toolbar-actions {
+  display: flex;
+  flex-wrap: wrap;
+  align-items: center;
+  gap: 12px;
+}
+.curriculum-year-filter-select {
+  min-width: 220px;
+  max-width: 320px;
+  width: min(100%, 280px);
+  flex-shrink: 0;
+}
 .curriculum-filter-cell .curriculum-filter-select,
 .curriculum-filter-cell.filter-select {
   width: 100%;
@@ -1416,7 +1580,7 @@ td { padding: 12px 16px; border-bottom: 1px solid var(--border-ui); font-size: 1
   display: grid;
   grid-template-columns: 1fr 1fr;
   gap: 12px;
-  padding: 12px;
+  padding: 4px 12px 12px;
 }
 .curriculum-sem-col {
   min-width: 0;
@@ -1437,44 +1601,12 @@ td { padding: 12px 16px; border-bottom: 1px solid var(--border-ui); font-size: 1
   overflow-y: hidden;
   -webkit-overflow-scrolling: touch;
 }
-.curriculum-history-panel {
-  margin-top: -8px;
-}
-.curriculum-history-head {
-  display: flex;
-  align-items: flex-start;
-  justify-content: space-between;
-  gap: 12px;
-  padding: 14px 20px;
-  border-bottom: 1px solid var(--border-ui);
-}
-.curriculum-history-subhead {
-  margin-top: 4px;
-  font-size: 12px;
-  color: var(--text-muted);
-}
-.curriculum-history-actions {
-  display: flex;
-  align-items: center;
-  gap: 8px;
-}
-.curriculum-history-table th,
-.curriculum-history-table td {
-  white-space: nowrap;
-}
 @media (max-width: 900px) {
   .curriculum-filter-row {
     grid-template-columns: 1fr;
   }
   .curriculum-sem-grid {
     grid-template-columns: 1fr;
-  }
-  .curriculum-history-head {
-    flex-direction: column;
-    align-items: stretch;
-  }
-  .curriculum-history-actions {
-    width: 100%;
   }
 }
 @media (max-width: 520px) {

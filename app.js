@@ -122,11 +122,6 @@ function requestMatchesCurrentTerm(r, term = currentTermFilter()) {
 function scheduleAcademicYearForFilter(s) {
   return normalizeAcademicYearInput(s.schAy) || DEFAULT_ACADEMIC_YEAR;
 }
-function curriculumHistoryAcademicYearOptions(rows, selectedAy) {
-  let set = new Set([normalizeAcademicYearInput(selectedAy) || DEFAULT_ACADEMIC_YEAR]);
-  for (let s of rows) set.add(scheduleAcademicYearForFilter(s));
-  return [...set].filter(Boolean).sort((a, b) => String(b).localeCompare(String(a)));
-}
 function mergeAcademicYearOptions(presets, custom) {
   let out = [];
   let seen = new Set();
@@ -149,20 +144,6 @@ function renderTopbarCenter() {
   if (state.page === 'curriculum') {
     let u = state.currentUser;
     let deptFilter = state.curriculumDeptFilter || 'all';
-    let title = 'Curriculum';
-    if (u?.role === 'admin') {
-      if (deptFilter !== 'all') {
-        let dn = getDept(deptFilter)?.name || '';
-        if (dn) title = `Curriculum of ${dn}`;
-      }
-    } else if (u?.dept) {
-      let deptName = getDept(u.dept)?.name || '';
-      if (deptName) title = `Curriculum of ${deptName}`;
-    }
-    let yearOpts = SCHEDULE_FORM_YEARS.map(y => {
-      let label = y === '1st Year' ? 'First Year' : y;
-      return `<option value="${escapeHtml(y)}" ${state.curriculumYearFilter === y ? 'selected' : ''}>${escapeHtml(label)}</option>`;
-    }).join('');
     let deptSelect = '';
     if (u?.role === 'admin') {
       let deptOpts =
@@ -173,7 +154,7 @@ function renderTopbarCenter() {
         ).join('');
       deptSelect = `<select class="filter-select curriculum-topbar-dept" id="curriculumDeptFilter" aria-label="Department filter">${deptOpts}</select>`;
     }
-    return `<div class="curriculum-topbar-left"><div class="page-title page-title-curriculum-left">${escapeHtml(title)}</div>${deptSelect}<select class="filter-select curriculum-topbar-year" id="topbarCurriculumYearFilter" aria-label="Year filter">${yearOpts}</select></div>`;
+    return `<div class="curriculum-topbar-left"><div class="page-title page-title-curriculum-left">${escapeHtml(curriculumTopbarDegreeTitle())}</div>${deptSelect}</div>`;
   }
   let termPages = ['schedule', 'curriculum', 'requests'];
   if (!termPages.includes(state.page)) {
@@ -294,6 +275,7 @@ function hydratePersistedData() {
     }
     if (o.curriculumDeptFilter != null) state.curriculumDeptFilter = o.curriculumDeptFilter;
     if (o.curriculumYearFilter != null) state.curriculumYearFilter = o.curriculumYearFilter;
+    if (o.curriculumAcademicYearFilter != null) state.curriculumAcademicYearFilter = o.curriculumAcademicYearFilter;
     if (o.curriculumSemFilter != null) state.curriculumSemFilter = o.curriculumSemFilter;
     if (state.curriculumSemFilter === 'Midyear') state.curriculumSemFilter = 'all';
     if (o.termSemester != null) state.termSemester = o.termSemester;
@@ -305,7 +287,6 @@ function hydratePersistedData() {
     state.termAcademicYear = normalizeAcademicYearInput(state.termAcademicYear) || DEFAULT_ACADEMIC_YEAR;
     if (o.requestTimetableDept != null) state.requestTimetableDept = o.requestTimetableDept;
     if (o.requestTimetableRoom != null) state.requestTimetableRoom = o.requestTimetableRoom;
-    if (o.curriculumHistoryAyFilter != null) state.curriculumHistoryAyFilter = o.curriculumHistoryAyFilter;
     if (o.dashboardSummaryDay != null && typeof o.dashboardSummaryDay === 'string' && DAYS_WITH_SATURDAY.includes(o.dashboardSummaryDay)) {
       state.dashboardSummaryDay = o.dashboardSummaryDay;
     }
@@ -344,6 +325,7 @@ function persistAppData() {
       curriculum: state.curriculum,
       curriculumDeptFilter: state.curriculumDeptFilter,
       curriculumYearFilter: state.curriculumYearFilter,
+      curriculumAcademicYearFilter: state.curriculumAcademicYearFilter,
       curriculumSemFilter: state.curriculumSemFilter,
       termSemester: state.termSemester,
       termAcademicYear: state.termAcademicYear,
@@ -353,7 +335,6 @@ function persistAppData() {
       termAcademicYearCustomOptions: state.termAcademicYearCustomOptions,
       requestTimetableDept: state.requestTimetableDept,
       requestTimetableRoom: state.requestTimetableRoom,
-      curriculumHistoryAyFilter: state.curriculumHistoryAyFilter,
       dashboardSummaryDay: state.dashboardSummaryDay,
     })
   );
@@ -379,7 +360,8 @@ let state = {
   requests: [...REQUESTS],
   curriculum: [...CURRICULUM_DATA],
   curriculumDeptFilter: 'all',
-  curriculumYearFilter: '1st Year',
+  curriculumYearFilter: 'all',
+  curriculumAcademicYearFilter: DEFAULT_ACADEMIC_YEAR,
   curriculumSemFilter: 'all',
   termSemester: '1st Semester',
   termAcademicYear: DEFAULT_ACADEMIC_YEAR,
@@ -389,7 +371,6 @@ let state = {
   termAcademicYearCustomOptions: [],
   requestTimetableDept: 'ie',
   requestTimetableRoom: '',
-  curriculumHistoryAyFilter: DEFAULT_ACADEMIC_YEAR,
   dashboardSummaryDay: 'Monday',
 };
 let nextId = 100;
@@ -930,6 +911,27 @@ function getRoom(id) {
   return ROOMS.find(r => r.id === id);
 }
 function getDept(id) { return DEPARTMENTS.find(d=>d.id===id); }
+/** Top bar title on Curriculum, e.g. "Curriculum of BS Electrical Engineering". */
+function curriculumTopbarDegreeTitle() {
+  let u = state.currentUser;
+  let ay =
+    normalizeAcademicYearInput(state.curriculumAcademicYearFilter) ||
+    normalizeAcademicYearInput(state.termAcademicYear) ||
+    DEFAULT_ACADEMIC_YEAR;
+  let aySuffix = ` (AY ${ay})`;
+  if (!u) return `Curriculum${aySuffix}`;
+  if (u.role === 'admin') {
+    let df = state.curriculumDeptFilter || 'all';
+    if (df === 'all') return `Curriculum — All departments${aySuffix}`;
+    let d = getDept(df);
+    return d ? `Curriculum of BS ${d.name}${aySuffix}` : `Curriculum${aySuffix}`;
+  }
+  if (u.dept) {
+    let d = getDept(u.dept);
+    return d ? `Curriculum of BS ${d.name}${aySuffix}` : `Curriculum${aySuffix}`;
+  }
+  return `Curriculum${aySuffix}`;
+}
 function escapeHtml(s) {
   if (s == null) return '';
   return String(s).replace(/&/g, '&amp;').replace(/</g, '&lt;').replace(/"/g, '&quot;');
@@ -1068,15 +1070,28 @@ function mergeSectionOptions(deptIds) {
   const fromSched = [...new Set(state.schedules.filter(s => ids.includes(s.dept)).map(s => String(s.section)))];
   const samples = [];
   ids.forEach(id => { const arr = SECTION_SAMPLES_BY_DEPT[id]; if (arr) samples.push(...arr); });
-  return [...new Set([...fromSched, ...samples])].sort((a, b) => String(a).localeCompare(String(b)));
+  // Keep legacy IE first-year section visible even if sample data is stale in cache.
+  if (ids.includes('ie')) samples.push('BSIE IGK');
+  return [...new Set([...fromSched, ...samples].map(s => String(s || '').trim()).filter(Boolean))]
+    .sort((a, b) => String(a).localeCompare(String(b)));
 }
 function sectionYearFromLabel(sectionLabel) {
-  let token = String(sectionLabel || '').trim().split(/\s+/)[1] || '';
+  let raw = String(sectionLabel || '').trim().toUpperCase();
+  if (!raw) return '';
+  let token = raw.split(/\s+/)[1] || '';
+  let compactMatch = raw.match(/^(?:BSCPE|BSEE|BSCE|BSME|BSECE|BSIE)\s*([IVX]+|[1-4])/);
+  if ((!token || token.length < 1) && compactMatch) token = compactMatch[1] || '';
+  if (!token && compactMatch) token = compactMatch[1] || '';
+  if (!token) {
+    let suffix = raw.replace(/^(BSCPE|BSEE|BSCE|BSME|BSECE|BSIE)\s*/, '');
+    if (/^IG[A-Z]*$/.test(suffix)) token = 'I';
+  }
   token = token.toUpperCase();
-  if (token.startsWith('IV')) return '4th Year';
-  if (token.startsWith('III')) return '3rd Year';
-  if (token.startsWith('II')) return '2nd Year';
-  if (token.startsWith('I')) return '1st Year';
+  if (/^IG[A-Z]*$/.test(token)) return '1st Year';
+  if (/^4/.test(token) || token.startsWith('IV')) return '4th Year';
+  if (/^3/.test(token) || token.startsWith('III')) return '3rd Year';
+  if (/^2/.test(token) || token.startsWith('II')) return '2nd Year';
+  if (/^1/.test(token) || token.startsWith('I')) return '1st Year';
   return '';
 }
 /** Official CEN program colors by department and year (matches section / curriculum year labels). */
@@ -1246,7 +1261,14 @@ function timetableSlotChrome(s, conflictSinceById, conflictIds) {
 function sectionOptionsForDeptYear(deptIds, yearLabel) {
   let all = mergeSectionOptions(deptIds);
   if (!yearLabel) return all;
-  return all.filter(s => sectionYearFromLabel(s) === yearLabel);
+  let ids = Array.isArray(deptIds) ? deptIds : [deptIds];
+  let fromScheduleYear = new Set(
+    state.schedules
+      .filter(s => ids.includes(s.dept) && String(s.schYear || '').trim() === yearLabel)
+      .map(s => String(s.section || '').trim())
+      .filter(Boolean),
+  );
+  return all.filter(s => fromScheduleYear.has(String(s).trim()) || sectionYearFromLabel(s) === yearLabel);
 }
 /** Placeholder for section text fields (shown when the field is empty). */
 function sectionInputPlaceholder() {
@@ -1626,8 +1648,27 @@ function roomsFreeForBorrowing(u, days, timeStart, timeEnd) {
   return borrow.filter(r => days.every(day => !roomSlotOccupied(r.id, day, timeStart, timeEnd)));
 }
 // Row index matches timeSlots: row 0 = 07:30, row 1 = 08:00, … (30-minute steps from grid start).
-function timeToRow(t) { let [h,m]=t.split(':').map(Number); return Math.floor(((h*60+m)-(7*60+30))/30); }
-function timeDuration(s,e) { let [sh,sm]=s.split(':').map(Number), [eh,em]=e.split(':').map(Number); return ((eh*60+em)-(sh*60+sm))/30; }
+function parseTimeToMinutes(t) {
+  let m = String(t || '').match(/^\s*(\d{1,2}):(\d{2})/);
+  if (!m) return NaN;
+  return Number(m[1]) * 60 + Number(m[2]);
+}
+function timeToRow(t) {
+  let mins = parseTimeToMinutes(t);
+  if (!Number.isFinite(mins)) return -1;
+  return Math.floor((mins - (7 * 60 + 30)) / 30);
+}
+function timeDuration(s, e) {
+  let start = parseTimeToMinutes(s);
+  let end = parseTimeToMinutes(e);
+  if (!Number.isFinite(start) || !Number.isFinite(end)) return 1;
+  let diff = end - start;
+  if (diff <= 0) return 1;
+  let slots = Math.ceil(diff / 30);
+  // UI expectation: when an end time lands on :30, color includes that row label.
+  if (end % 60 === 30) slots += 1;
+  return Math.max(1, slots);
+}
 function pendingRequestsForUser() {
   let u = state.currentUser;
   if (!u) return 0;
@@ -1726,6 +1767,22 @@ function dashboardSchedulesForConflictScope() {
   let pool = u.role === 'admin' ? state.schedules : state.schedules.filter(s => s.dept === u.dept);
   return pool.filter(s => scheduleMatchesCurrentTerm(s, term));
 }
+/** All schedules in the current term (every department) for the dashboard Schedule Summary grid. */
+function dashboardScheduleSummarySchedules() {
+  let term = currentTermFilter();
+  return state.schedules.filter(s => scheduleMatchesCurrentTerm(s, term));
+}
+/** IE program timetables omit Saturday (see `timetableDayColumnsForDept`); match that here so chairs do not pick Saturday and see an empty summary. */
+function dashboardSummaryDayOptionsForUser(u) {
+  if (u?.role === 'chairperson' && u.dept === 'ie') return DAYS;
+  return DAYS_WITH_SATURDAY;
+}
+/** Chairpersons may edit or delete only schedules for their own department (e.g. college-wide Schedule Summary is view-only for others' bookings). */
+function scheduleMutableByCurrentChair(s) {
+  let u = state.currentUser;
+  if (!u || !s || u.role !== 'chairperson') return false;
+  return s.dept === u.dept;
+}
 
 function getDashboardConflictList(schedulesToCheck) {
   return schedulesToCheck
@@ -1802,7 +1859,7 @@ function render() {
       <div class="sidebar ${state.sidebarOpen?'open':''}" id="sidebar">${renderSidebar()}</div>
       <div class="overlay ${state.sidebarOpen?'show':''}" id="overlay"></div>
       <div class="main">
-        <div class="topbar"><span class="hamburger" id="hamburger" role="button" tabindex="0" aria-label="Open menu">${icon('menu', 22)}</span>${renderTopbarCenter()}<div class="topbar-actions"><button type="button" class="btn btn-outline btn-sm theme-toggle" id="themeToggleBtn" aria-label="${document.documentElement.dataset.theme === 'dark' ? 'Switch to light mode' : 'Switch to dark mode'}">${document.documentElement.dataset.theme === 'dark' ? icon('sun', 18) : icon('moon', 18)}</button>${state.page==='schedule'&&state.currentUser?.role!=='admin'?`<button type="button" class="btn btn-schedule-clear-all btn-sm" id="clearAllSchedulesBtn">Clear All</button><button type="button" class="btn btn-primary btn-sm btn-schedule-add-pill" id="addSchedBtn">${icon('plus', 16)} Add Schedule</button>`:''}${state.page==='curriculum'&&(state.currentUser?.role==='chairperson'||state.currentUser?.role==='admin')?`<button type="button" class="btn btn-primary btn-sm" id="addCurriculumBtn">${icon('plus', 16)} Add Subject</button>`:''}${state.page==='requests'&&state.currentUser?.role==='chairperson'?`<button class="btn btn-primary btn-sm" id="requestRoomTopBtn">${icon('plus', 16)} Create a Request</button>`:''}</div></div>
+        <div class="topbar"><span class="hamburger" id="hamburger" role="button" tabindex="0" aria-label="Open menu">${icon('menu', 22)}</span>${renderTopbarCenter()}<div class="topbar-actions"><button type="button" class="btn btn-outline btn-sm theme-toggle" id="themeToggleBtn" aria-label="${document.documentElement.dataset.theme === 'dark' ? 'Switch to light mode' : 'Switch to dark mode'}">${document.documentElement.dataset.theme === 'dark' ? icon('sun', 18) : icon('moon', 18)}</button>${state.page==='schedule'&&state.currentUser?.role!=='admin'?`<button type="button" class="btn btn-schedule-clear-all btn-sm" id="clearAllSchedulesBtn">Clear All</button><button type="button" class="btn btn-primary btn-sm btn-schedule-add-pill" id="addSchedBtn">${icon('plus', 16)} Add Schedule</button>`:''}${state.page==='curriculum'&&(state.currentUser?.role==='chairperson'||state.currentUser?.role==='admin')?`<button type="button" class="btn btn-outline btn-sm curriculum-export-btn" id="curriculumExportBtn">${icon('fileText', 16)} Export</button><button type="button" class="btn btn-primary btn-sm" id="addCurriculumBtn">${icon('plus', 16)} Add Subject</button>`:''}${state.page==='requests'&&state.currentUser?.role==='chairperson'?`<button class="btn btn-primary btn-sm" id="requestRoomTopBtn">${icon('plus', 16)} Create a Request</button>`:''}</div></div>
         <div class="content">${renderPage()}</div>
       </div>
     </div>
@@ -1889,11 +1946,12 @@ function renderDashboard() {
     ? 0
     : state.requests.filter(r => r.status === 'pending' && r.toDept === u.dept && requestMatchesCurrentTerm(r, term)).length;
   let statIc = 'stat-icon dashboard-stat-icon';
+  let summaryDayList = dashboardSummaryDayOptionsForUser(u);
   let summaryDay = state.dashboardSummaryDay || 'Monday';
-  if (!DAYS_WITH_SATURDAY.includes(summaryDay)) summaryDay = 'Monday';
+  if (!summaryDayList.includes(summaryDay)) summaryDay = 'Monday';
   state.dashboardSummaryDay = summaryDay;
-  let summaryScheds = dashboardSchedulesForConflictScope();
-  let dayOpts = DAYS_WITH_SATURDAY.map(
+  let summaryScheds = dashboardScheduleSummarySchedules();
+  let dayOpts = summaryDayList.map(
     d => `<option value="${escapeHtml(d)}" ${summaryDay === d ? 'selected' : ''}>${escapeHtml(d)}</option>`,
   ).join('');
   let summaryGrid = renderDashboardRoomSummaryGrid(summaryScheds, summaryDay);
@@ -2058,19 +2116,23 @@ function buildScheduleCellInnerHtml(s, sub, cellLayout, innerStyleOverride) {
   let subLine = escapeHtml(sub?.code || '—');
   let profLine = escapeHtml(professorDisplayLine(s));
   let sectionLine = escapeHtml(s.section || '—');
+  let timeLine = `${escapeHtml(fmt12(s.timeStart || ''))}–${escapeHtml(fmt12(s.timeEnd || ''))}`;
   let setLine = s.setLabel ? escapeHtml(s.setLabel) : '';
   let subStyle = innerStyleOverride?.subStyle || 'font-weight: 700; font-size: 12px; color: var(--chip-text-primary);';
   let lineStyle = innerStyleOverride?.lineStyle || 'font-size: 11px; color: var(--chip-text-secondary);';
   let parts = [`<div style="${subStyle}">${subLine}</div>`];
   if (cellLayout === 'faculty') {
     parts.push(`<div style="${lineStyle}">${sectionLine}</div>`);
+    parts.push(`<div style="${lineStyle}">${timeLine}</div>`);
     if (setLine) parts.push(`<div style="${lineStyle}">${setLine}</div>`);
     parts.push(`<div style="${lineStyle}">${roomLine}</div>`);
   } else if (cellLayout === 'room') {
     parts.push(`<div style="${lineStyle}">${sectionLine}</div>`);
+    parts.push(`<div style="${lineStyle}">${timeLine}</div>`);
     if (setLine) parts.push(`<div style="${lineStyle}">${setLine}</div>`);
     parts.push(`<div style="${lineStyle}">${profLine}</div>`);
   } else {
+    parts.push(`<div style="${lineStyle}">${timeLine}</div>`);
     parts.push(`<div style="${lineStyle}">${roomLine}</div>`);
     parts.push(`<div style="${lineStyle}">${profLine}</div>`);
   }
@@ -2150,7 +2212,8 @@ function renderTimetableGrid(scheds, gridOpts) {
         const bg = chrome.bg;
         const border = chrome.border;
         const bl = chrome.borderLeftWidth || 3;
-        let busyTitle = 'Click for details';
+        const timeRangeLabel = `${fmt12(s.timeStart || '')}–${fmt12(s.timeEnd || '')}`;
+        let busyTitle = `Click for details (${timeRangeLabel})`;
         if (chrome.slotKind === 'conflict') busyTitle = 'Conflict — click for details';
         else if (chrome.slotKind === 'request') busyTitle = 'Borrow request — click for details';
         let useClickableBusyCell = !requestView || requestBusyClickable;
@@ -2481,28 +2544,218 @@ function exportVisibleTimetable(format) {
     showToast('Excel exported.');
   }
 }
-function exportCurriculumHistoryAcademicYear() {
+/** Excel export for the curriculum tables currently shown (year filter, academic year filter, department scope). */
+function exportCurriculumTableCsv() {
   if (state.page !== 'curriculum') return;
-  let ay = normalizeAcademicYearInput(state.curriculumHistoryAyFilter) || DEFAULT_ACADEMIC_YEAR;
-  let scope = state.currentUser?.role === 'admin'
-    ? state.schedules
-    : state.schedules.filter(s => s.dept === state.currentUser?.dept);
-  if (state.currentUser?.role === 'admin' && (state.curriculumDeptFilter || 'all') !== 'all') {
-    scope = scope.filter(s => s.dept === state.curriculumDeptFilter);
+  mergeMissingCurriculumRowsInto(state.curriculum);
+  let u = state.currentUser;
+  let termAy = normalizeAcademicYearInput(state.termAcademicYear) || DEFAULT_ACADEMIC_YEAR;
+  let curriculumAyFilter = normalizeAcademicYearInput(state.curriculumAcademicYearFilter) || termAy;
+  let chairDept = u?.role === 'chairperson' ? u.dept : '';
+  if (state.curriculumYearFilter !== 'all' && !SCHEDULE_FORM_YEARS.includes(state.curriculumYearFilter)) state.curriculumYearFilter = 'all';
+  if (u?.role === 'admin' && state.curriculumDeptFilter !== 'all' && !DEPARTMENTS.some(d => d.id === state.curriculumDeptFilter)) {
+    state.curriculumDeptFilter = 'all';
   }
-  let rows = scope.filter(s => scheduleAcademicYearForFilter(s) === ay);
+  let rows = state.curriculum.filter(c => {
+    if (chairDept && curriculumFilterDept(c) !== chairDept) return false;
+    if (u?.role === 'admin') {
+      let df = state.curriculumDeptFilter || 'all';
+      if (df !== 'all' && curriculumFilterDept(c) !== df) return false;
+    }
+    if (state.curriculumYearFilter !== 'all' && curriculumFilterYear(c) !== state.curriculumYearFilter) return false;
+    if (curriculumAcademicYearForFilter(c) !== curriculumAyFilter) return false;
+    return true;
+  });
   if (!rows.length) {
-    showToast('No historical schedules to export for this academic year.');
+    showToast('No curriculum rows to export for this filter.');
+    return;
+  }
+  let sorted = rows.slice().sort((a, b) => {
+    let oa = curriculumFilterSemester(a) === '1st Semester' ? 0 : 1;
+    let ob = curriculumFilterSemester(b) === '1st Semester' ? 0 : 1;
+    if (oa !== ob) return oa - ob;
+    return String(a.courseCode || '').localeCompare(String(b.courseCode || ''), undefined, { sensitivity: 'base' });
+  });
+  let head = ['Academic Year', 'Department', 'Year', 'Semester', 'Code', 'Subject', 'Lec', 'Lab', 'Units', 'Hours'];
+  let body = sorted.map(c => {
+    let d = getDept(curriculumFilterDept(c));
+    let lecN = Number(c.lecUnits);
+    let labN = Number(c.labUnits);
+    let lecS = Number.isFinite(lecN) ? String(lecN) : '';
+    let labS = Number.isFinite(labN) ? String(labN) : '';
+    let units = '';
+    if (c.units != null && Number.isFinite(Number(c.units))) units = String(Number(c.units));
+    else if (lecS || labS) units = String((Number.isFinite(lecN) ? lecN : 0) + (Number.isFinite(labN) ? labN : 0));
+    let hours = '';
+    if (Number.isFinite(Number(c.requiredHours))) hours = String(Number(c.requiredHours));
+    else {
+      let lecH = Number.isFinite(lecN) ? lecN : 0;
+      let labH = Number.isFinite(labN) ? labN * 3 : 0;
+      if (lecH > 0 || labH > 0) hours = String(lecH + labH);
+      else if (Number.isFinite(Number(c.units)) && Number(c.units) > 0) hours = String(Number(c.units));
+    }
+    return [
+      curriculumAyFilter,
+      d?.code || curriculumFilterDept(c) || '',
+      curriculumFilterYear(c),
+      curriculumFilterSemester(c),
+      c.courseCode || '',
+      c.subjectName || '',
+      lecS,
+      labS,
+      units,
+      hours,
+    ];
+  });
+  let rowsHtml = [head, ...body]
+    .map(
+      (row, idx) =>
+        `<tr>${row
+          .map(v => {
+            let tag = idx === 0 ? 'th' : 'td';
+            return `<${tag}>${escapeHtml(v == null ? '' : String(v))}</${tag}>`;
+          })
+          .join('')}</tr>`,
+    )
+    .join('');
+  let deptSlug =
+    u?.role === 'admin'
+      ? (state.curriculumDeptFilter || 'all') === 'all'
+        ? 'all'
+        : getDept(state.curriculumDeptFilter)?.code || state.curriculumDeptFilter
+      : getDept(chairDept)?.code || chairDept || 'dept';
+  let yearSlug = String(state.curriculumYearFilter || 'all').replace(/\s+/g, '-');
+  let html = `<!DOCTYPE html><html><head><meta charset="utf-8"><style>
+      @page { size: A4 portrait; margin: 0.45in; }
+      body{font-family:Arial,sans-serif;margin:0;padding:20px;background:#fff;color:#111;}
+      .sheet{max-width:780pt;margin:0 auto}
+      table{border-collapse:collapse;width:100%;table-layout:fixed}
+      th,td{border:1px solid #b7b7b7;padding:6px 7px;font-size:11px;line-height:1.25;vertical-align:middle}
+      th{font-weight:700;text-align:center;background:#f2f2f2}
+      td{text-align:left;word-break:break-word}
+    </style></head><body><div class="sheet"><table>${rowsHtml}</table></div></body></html>`;
+  let fname = `curriculum-${deptSlug}-${yearSlug}-${curriculumAyFilter.replace(/[^0-9-]+/g, '-')}.xls`;
+  downloadTextFile(fname, html, 'application/vnd.ms-excel;charset=utf-8;');
+  showToast('Excel exported.');
+}
+
+function scheduleExportWizardYearChoices() {
+  let presets = typeof termAcademicYearOptions === 'function' ? termAcademicYearOptions() : [];
+  let custom = Array.isArray(state.termAcademicYearCustomOptions) ? state.termAcademicYearCustomOptions : [];
+  let set = new Set([...presets, ...custom].map(normalizeAcademicYearInput).filter(Boolean));
+  for (let s of state.schedules) set.add(scheduleAcademicYearForFilter(s));
+  set.add(normalizeAcademicYearInput(state.termAcademicYear) || DEFAULT_ACADEMIC_YEAR);
+  return [...set].filter(Boolean).sort((a, b) => String(a).localeCompare(String(b)));
+}
+function normalizeScheduleExportFilterTypes(raw) {
+  let list = Array.isArray(raw) ? raw : typeof raw === 'string' ? [raw] : [];
+  let allowed = ['all', 'faculty', 'room', 'section'];
+  let out = [...new Set(list.filter(v => allowed.includes(v)))];
+  if (!out.length) return ['all'];
+  if (out.includes('all') && out.length > 1) out = out.filter(v => v !== 'all');
+  return out.length ? out : ['all'];
+}
+function scheduleExportWizardDetailIds(filterType, u) {
+  if (filterType === 'all') return ['__all__'];
+  if (filterType === 'faculty') {
+    let profs = u?.role === 'admin' ? state.professors : state.professors.filter(p => p.dept === u?.dept);
+    return profs.map(p => p.id).filter(Boolean);
+  }
+  if (filterType === 'room') return roomsSourceForApp().map(r => r.id).filter(Boolean);
+  if (filterType === 'section') {
+    let source = u?.role === 'chairperson' && u?.dept ? state.schedules.filter(s => s.dept === u.dept) : state.schedules;
+    let set = new Set(source.map(s => String(s.section || '').trim()).filter(Boolean));
+    return [...set].sort((a, b) => a.localeCompare(b, undefined, { numeric: true, sensitivity: 'base' }));
+  }
+  return [];
+}
+function ensureScheduleExportWizardDetailValue(filterType, current, u) {
+  if (filterType === 'all') return '__all__';
+  let ids = scheduleExportWizardDetailIds(filterType, u);
+  if (current && ids.includes(current)) return current;
+  return ids[0] || '';
+}
+function scheduleExportWizardDetailLabel(filterType) {
+  if (filterType === 'all') return '';
+  if (filterType === 'faculty') return 'Faculty member';
+  if (filterType === 'room') return 'Classroom';
+  if (filterType === 'section') return 'Section';
+  return 'Selection';
+}
+function buildScheduleExportWizardDetailOptions(filterType, u, selected) {
+  if (filterType === 'all') {
+    return `<option value="__all__" ${selected === '__all__' ? 'selected' : ''}>All schedules (this year and semester)</option>`;
+  }
+  if (filterType === 'faculty') {
+    let profs =
+      u?.role === 'admin'
+        ? [...state.professors].sort((a, b) => a.name.localeCompare(b.name))
+        : [...state.professors].filter(p => p.dept === u?.dept).sort((a, b) => a.name.localeCompare(b.name));
+    if (!profs.length) return '<option value="">— No faculty in scope —</option>';
+    return profs.map(p => `<option value="${escapeHtml(p.id)}" ${selected === p.id ? 'selected' : ''}>${escapeHtml(p.name)}</option>`).join('');
+  }
+  if (filterType === 'room') {
+    let rooms = roomsSourceForApp().slice().sort((a, b) => a.name.localeCompare(b.name, undefined, { numeric: true, sensitivity: 'base' }));
+    if (!rooms.length) return '<option value="">— No rooms —</option>';
+    return rooms.map(r => `<option value="${escapeHtml(r.id)}" ${selected === r.id ? 'selected' : ''}>${escapeHtml(r.name)}</option>`).join('');
+  }
+  if (filterType === 'section') {
+    let sections = scheduleExportWizardDetailIds('section', u);
+    if (!sections.length) return '<option value="">— No sections —</option>';
+    return sections.map(sec => `<option value="${escapeHtml(sec)}" ${selected === sec ? 'selected' : ''}>${escapeHtml(sec)}</option>`).join('');
+  }
+  return '';
+}
+function sortSchedulesExportStable(scheds) {
+  let copy = scheds.slice();
+  let deptKey = s => (getDept(s.dept)?.name || s.dept || '').toLowerCase();
+  let profKey = s => professorDisplayLine(s).toLowerCase();
+  copy.sort(
+    (a, b) =>
+      deptKey(a).localeCompare(deptKey(b)) ||
+      String(a.section || '').localeCompare(String(b.section || '')) ||
+      profKey(a).localeCompare(profKey(b)) ||
+      String(a.timeStart || '').localeCompare(String(b.timeStart || '')),
+  );
+  return copy;
+}
+function runScheduleExport(ay, semRaw, selectedTypes, details, closeModalAfterExport = false) {
+  let u = state.currentUser;
+  if (!selectedTypes.includes('all')) {
+    for (let t of selectedTypes) {
+      if (!details[t]) {
+        showToast(`Select a value for the ${t} filter.`);
+        return;
+      }
+    }
+  }
+  let pool = state.schedules.filter(s => scheduleAcademicYearForFilter(s) === ay);
+  if (semRaw !== 'both') pool = pool.filter(s => (s.schSem || '').trim() === semRaw);
+  if (u?.role === 'chairperson') pool = pool.filter(s => s.dept === u.dept);
+  if (!selectedTypes.includes('all')) {
+    if (selectedTypes.includes('faculty')) {
+      pool = pool.filter(s => s.professorId === details.faculty);
+    }
+    if (selectedTypes.includes('room')) {
+      pool = pool.filter(s => scheduleMatchesRoomFilter(s, details.room));
+    }
+    if (selectedTypes.includes('section')) {
+      pool = pool.filter(s => String(s.section || '').trim() === details.section);
+    }
+  }
+  pool = sortSchedulesExportStable(pool);
+  if (!pool.length) {
+    showToast('No schedules match this export.');
     return;
   }
   let head = ['Academic Year', 'Semester', 'Department', 'Section', 'Subject Code', 'Subject Name', 'Professor', 'Room', 'Days', 'Time Start', 'Time End'];
-  let body = rows.map(s => {
+  let body = pool.map(s => {
     let sub = getSubject(s.subjectId);
     let dept = getDept(s.dept);
     return [
       scheduleAcademicYearForFilter(s),
       s.schSem || '',
-      dept?.code || s.dept || '',
+      dept?.name || s.dept || '',
       s.section || '',
       sub?.code || '',
       sub?.name || '',
@@ -2514,9 +2767,87 @@ function exportCurriculumHistoryAcademicYear() {
     ];
   });
   let csv = [head, ...body].map(r => r.map(csvEscape).join(',')).join('\r\n');
-  let fname = `curriculum-history-${ay.replace(/[^0-9-]+/g, '-')}.csv`;
+  let semSlug = semRaw === 'both' ? 'both-semesters' : String(semRaw).replace(/\s+/g, '-');
+  let filterSlug = selectedTypes.join('-');
+  let fname = `schedule-export-${filterSlug}-${ay.replace(/[^0-9-]+/g, '-')}-${semSlug}.csv`;
   downloadTextFile(fname, csv, 'text/csv;charset=utf-8;');
-  showToast('Historical schedule exported.');
+  showToast('Schedule exported.');
+  if (closeModalAfterExport) {
+    state.modal = null;
+    render();
+  }
+}
+function runScheduleExportFromWizard() {
+  if (state.modal?.type !== 'scheduleExportWizard') return;
+  let ay = normalizeAcademicYearInput(document.getElementById('sew_academic_year')?.value || '') || DEFAULT_ACADEMIC_YEAR;
+  let semRaw = document.getElementById('sew_semester')?.value || 'both';
+  let selectedTypes = normalizeScheduleExportFilterTypes(
+    [...document.querySelectorAll('#modalBackdrop .sew-filter-checkbox:checked')].map(el => el.value),
+  );
+  let details = {
+    faculty: document.getElementById('sew_filter_detail_faculty')?.value || '',
+    room: document.getElementById('sew_filter_detail_room')?.value || '',
+    section: document.getElementById('sew_filter_detail_section')?.value || '',
+  };
+  runScheduleExport(ay, semRaw, selectedTypes, details, true);
+}
+function renderScheduleExportWizardBody() {
+  let m = state.modal || {};
+  let u = state.currentUser;
+  let aySel = normalizeAcademicYearInput(m.exportAy) || DEFAULT_ACADEMIC_YEAR;
+  let semSel = m.exportSem || '1st Semester';
+  if (!['1st Semester', '2nd Semester', 'both'].includes(semSel)) semSel = '1st Semester';
+  let selectedTypes = normalizeScheduleExportFilterTypes(m.exportFilterTypes || m.exportFilterType || 'all');
+  let detailState = m.exportFilterDetails && typeof m.exportFilterDetails === 'object' ? m.exportFilterDetails : {};
+  let fdFaculty = ensureScheduleExportWizardDetailValue('faculty', detailState.faculty || '', u);
+  let fdRoom = ensureScheduleExportWizardDetailValue('room', detailState.room || '', u);
+  let fdSection = ensureScheduleExportWizardDetailValue('section', detailState.section || '', u);
+  let years = scheduleExportWizardYearChoices();
+  if (!years.includes(aySel)) years.push(aySel);
+  years.sort((a, b) => String(a).localeCompare(String(b)));
+  let yearOpts = years.map(y => `<option value="${escapeHtml(y)}" ${y === aySel ? 'selected' : ''}>${escapeHtml(y)}</option>`).join('');
+  let semOpts = [
+    ['1st Semester', '1st Semester'],
+    ['2nd Semester', '2nd Semester'],
+    ['both', 'Both semesters'],
+  ]
+    .map(([v, lab]) => `<option value="${escapeHtml(v)}" ${semSel === v ? 'selected' : ''}>${escapeHtml(lab)}</option>`)
+    .join('');
+  let typeButtons = [
+    ['all', 'All'],
+    ['faculty', 'Faculty'],
+    ['room', 'Classroom'],
+    ['section', 'Section'],
+  ]
+    .map(([v, lab]) => {
+      let id = `sew_filter_${v}`;
+      let on = selectedTypes.includes(v);
+      return `<input type="checkbox" class="day-checkbox sew-filter-checkbox" id="${id}" value="${escapeHtml(v)}" ${on ? 'checked' : ''}><label class="day-label" for="${id}">${escapeHtml(lab)}</label>`;
+    })
+    .join('');
+  let showAll = selectedTypes.includes('all');
+  let detailHint = showAll
+    ? 'Exports every schedule row that matches the academic year and semester above.'
+    : 'Only rows matching all selected filters are included.';
+  let detailFields = showAll
+    ? ''
+    : `
+      ${selectedTypes.includes('faculty') ? `<div class="form-group"><label class="form-label" for="sew_filter_detail_faculty">${escapeHtml(scheduleExportWizardDetailLabel('faculty'))}</label><select class="form-select" id="sew_filter_detail_faculty" name="sew_filter_detail_faculty" aria-label="${escapeHtml(scheduleExportWizardDetailLabel('faculty'))}" required>${buildScheduleExportWizardDetailOptions('faculty', u, fdFaculty)}</select></div>` : ''}
+      ${selectedTypes.includes('room') ? `<div class="form-group"><label class="form-label" for="sew_filter_detail_room">${escapeHtml(scheduleExportWizardDetailLabel('room'))}</label><select class="form-select" id="sew_filter_detail_room" name="sew_filter_detail_room" aria-label="${escapeHtml(scheduleExportWizardDetailLabel('room'))}" required>${buildScheduleExportWizardDetailOptions('room', u, fdRoom)}</select></div>` : ''}
+      ${selectedTypes.includes('section') ? `<div class="form-group"><label class="form-label" for="sew_filter_detail_section">${escapeHtml(scheduleExportWizardDetailLabel('section'))}</label><select class="form-select" id="sew_filter_detail_section" name="sew_filter_detail_section" aria-label="${escapeHtml(scheduleExportWizardDetailLabel('section'))}" required>${buildScheduleExportWizardDetailOptions('section', u, fdSection)}</select></div>` : ''}
+    `;
+  return `<div class="schedule-export-wizard">
+    <div class="form-grid schedule-export-wizard-grid">
+      <div class="form-group"><label class="form-label" for="sew_academic_year">Academic year</label><select class="form-select" id="sew_academic_year" name="sew_academic_year" aria-label="Academic year" required>${yearOpts}</select></div>
+      <div class="form-group"><label class="form-label" for="sew_semester">Semester</label><select class="form-select" id="sew_semester" name="sew_semester" aria-label="Semester" required>${semOpts}</select></div>
+      <div class="form-group">
+        <span class="form-label">Filter by</span>
+        <div class="days-check schedule-export-filter-check">${typeButtons}</div>
+      </div>
+      ${detailFields}
+    </div>
+    <p class="form-hint schedule-export-wizard-hint">${escapeHtml(detailHint)}</p>
+  </div>`;
 }
 
 function normalizeRequestTimetableFilters() {
@@ -2732,8 +3063,17 @@ function renderCurriculum() {
   let u = state.currentUser;
   let canMutateCurriculum = canUserMutateCurriculum(u);
   let termAy = normalizeAcademicYearInput(state.termAcademicYear) || DEFAULT_ACADEMIC_YEAR;
+  let curriculumAyFilter = normalizeAcademicYearInput(state.curriculumAcademicYearFilter) || termAy;
   let chairDept = u?.role === 'chairperson' ? u.dept : '';
-  if (!SCHEDULE_FORM_YEARS.includes(state.curriculumYearFilter)) state.curriculumYearFilter = '1st Year';
+  if (state.curriculumYearFilter !== 'all' && !SCHEDULE_FORM_YEARS.includes(state.curriculumYearFilter)) state.curriculumYearFilter = 'all';
+  let ayPresets = typeof termAcademicYearOptions === 'function' ? termAcademicYearOptions() : [];
+  let ayCustom = Array.isArray(state.termAcademicYearCustomOptions) ? state.termAcademicYearCustomOptions : [];
+  let aySet = new Set([...ayPresets, ...ayCustom].map(normalizeAcademicYearInput).filter(Boolean));
+  for (let c of state.curriculum) aySet.add(curriculumAcademicYearForFilter(c));
+  aySet.add(termAy);
+  let curriculumAyOptions = [...aySet].filter(Boolean).sort((a, b) => String(a).localeCompare(String(b)));
+  if (!curriculumAyOptions.includes(curriculumAyFilter)) curriculumAyFilter = termAy;
+  state.curriculumAcademicYearFilter = curriculumAyFilter;
   if (u?.role === 'admin' && state.curriculumDeptFilter !== 'all' && !DEPARTMENTS.some(d => d.id === state.curriculumDeptFilter)) {
     state.curriculumDeptFilter = 'all';
   }
@@ -2743,13 +3083,33 @@ function renderCurriculum() {
       let df = state.curriculumDeptFilter || 'all';
       if (df !== 'all' && curriculumFilterDept(c) !== df) return false;
     }
-    if (curriculumFilterYear(c) !== state.curriculumYearFilter) return false;
-    if (curriculumAcademicYearForFilter(c) !== termAy) return false;
+    if (state.curriculumYearFilter !== 'all' && curriculumFilterYear(c) !== state.curriculumYearFilter) return false;
+    if (curriculumAcademicYearForFilter(c) !== curriculumAyFilter) return false;
     return true;
   });
-  let curriculumSubhead = canMutateCurriculum
-    ? 'Add course and subject entries by department, year, and semester. Filter the list below.'
-    : 'View-only: browse entries by department, year, and semester. Chairs and administrators add and update curriculum rows.';
+  let yearFilterOpts = [['all', 'All Years'], ...SCHEDULE_FORM_YEARS.map(y => [y, y])].map(([y, rawLabel]) => {
+    let label = rawLabel === 'all'
+      ? 'All Years'
+      : rawLabel === '1st Year'
+        ? 'First Year'
+        : rawLabel === '2nd Year'
+          ? 'Second Year'
+          : rawLabel === '3rd Year'
+            ? 'Third Year'
+            : rawLabel === '4th Year'
+              ? 'Fourth Year'
+              : rawLabel;
+    return `<option value="${escapeHtml(y)}" ${state.curriculumYearFilter === y ? 'selected' : ''}>${escapeHtml(label)}</option>`;
+  }).join('');
+  let academicYearFilterOpts = curriculumAyOptions
+    .map(ay => `<option value="${escapeHtml(ay)}" ${curriculumAyFilter === ay ? 'selected' : ''}>${escapeHtml(ay)}</option>`)
+    .join('');
+  let curriculumToolbar = `<div class="curriculum-toolbar-block">
+    <div class="curriculum-toolbar-main curriculum-toolbar-year-only">
+      <select class="filter-select curriculum-filter-select curriculum-year-filter-select" id="curriculumYearFilter" aria-label="Curriculum year">${yearFilterOpts}</select>
+      <select class="filter-select curriculum-filter-select curriculum-year-filter-select" id="curriculumAcademicYearFilter" aria-label="Curriculum academic year">${academicYearFilterOpts}</select>
+    </div>
+  </div>`;
   let actionsCol = canMutateCurriculum ? '<col class="curriculum-col-actions" />' : '';
   let actionsTh = canMutateCurriculum
     ? '<th scope="col" class="curriculum-th-actions" aria-label="Actions"></th>'
@@ -2783,42 +3143,12 @@ function renderCurriculum() {
       </div>
     </div>`;
   }
-  let scheduleScope = state.currentUser?.role === 'admin'
-    ? state.schedules
-    : state.schedules.filter(s => s.dept === state.currentUser?.dept);
-  if (u?.role === 'admin' && (state.curriculumDeptFilter || 'all') !== 'all') {
-    scheduleScope = scheduleScope.filter(s => s.dept === state.curriculumDeptFilter);
-  }
-  let historyAyOptions = curriculumHistoryAcademicYearOptions(scheduleScope, state.curriculumHistoryAyFilter || termAy);
-  if (!historyAyOptions.includes(state.curriculumHistoryAyFilter)) {
-    state.curriculumHistoryAyFilter = historyAyOptions[0] || termAy;
-  }
-  let historyAy = normalizeAcademicYearInput(state.curriculumHistoryAyFilter) || termAy;
-  let historyRows = scheduleScope.filter(s => scheduleAcademicYearForFilter(s) === historyAy);
-  let historyAySelect = `<select class="filter-select curriculum-filter-select" id="curriculumHistoryAyFilter" aria-label="Historical schedule academic year">${historyAyOptions.map(ay => `<option value="${escapeHtml(ay)}" ${historyAy === ay ? 'selected' : ''}>${escapeHtml(ay)}</option>`).join('')}</select>`;
   return `
     <div class="curriculum-panel">
+      ${curriculumToolbar}
       <div class="curriculum-sem-grid">
         ${curriculumSemTable('First Semester', rowsFirstSem)}
         ${curriculumSemTable('Second Semester', rowsSecondSem)}
-      </div>
-    </div>
-    <div class="curriculum-panel curriculum-history-panel">
-      <div class="curriculum-history-head">
-        <div>
-          <div class="card-title card-title-with-icon">${icon('calendar', 18)} Previous Academic Year Schedule </div>
-          <div class="curriculum-history-subhead">View saved schedules from current/previous academic years. Export the selected academic year only.</div>
-        </div>
-        <div class="curriculum-history-actions">${historyAySelect}<button type="button" class="btn btn-outline btn-sm" id="curriculumHistoryExportBtn">${icon('fileText', 16)} Export</button></div>
-      </div>
-      <div class="table-wrap curriculum-table-wrap">
-        <table class="curriculum-history-table">
-          <thead><tr><th>Academic Year</th><th>Semester</th><th>Subject</th><th>Section</th><th>Professor</th><th>Room</th><th>Days</th><th>Time</th></tr></thead>
-          <tbody>
-            ${historyRows.map(s => { let sub = getSubject(s.subjectId); return `<tr><td>${escapeHtml(scheduleAcademicYearForFilter(s))}</td><td>${escapeHtml(s.schSem || '—')}</td><td>${escapeHtml(sub?.code || '—')} — ${escapeHtml(sub?.name || '')}</td><td>${escapeHtml(s.section || '—')}</td><td>${escapeHtml(professorDisplayLine(s))}</td><td>${escapeHtml(roomDisplayLineFromPick(s.roomId, s.roomOtherName))}</td><td>${escapeHtml((s.days || []).map(d => d.slice(0, 3)).join(', '))}</td><td>${escapeHtml(fmt12(s.timeStart))}–${escapeHtml(fmt12(s.timeEnd))}</td></tr>`; }).join('')}
-          </tbody>
-        </table>
-        ${historyRows.length === 0 ? '<div class="curriculum-empty">No historical schedules for this academic year.</div>' : ''}
       </div>
     </div>
   `;
@@ -2851,13 +3181,30 @@ function renderModal() {
     return modalWrap('Create Schedule', renderScheduleForm(), schedFooter, 'modal-schedule', 'Conflicts are detected automatically before saving');
   }
   if (type === 'viewSchedule') {
-    let vsMode = state.modal.viewScheduleMode || 'view';
     let isDean = state.currentUser?.role === 'admin';
     const delBtn = `<button type="button" class="btn btn-danger" data-delschedid="${escapeHtml(data.id)}">Delete schedule</button>`;
     const editBtn = `<button type="button" class="btn btn-secondary" id="vsEditScheduleBtn">Edit schedule</button>`;
     const editFooter = `<button type="button" class="btn btn-secondary" id="vsCancelEditBtn">Cancel</button><button type="button" class="btn btn-primary" id="modalSaveBtn">Save changes</button>`;
-    const vsFooter = isDean ? '' : (vsMode === 'view' ? `${editBtn}${delBtn}` : editFooter);
-    return modalWrap('Schedule Details', renderViewSchedule(data), vsFooter, 'modal-view-schedule');
+    const closeOnly = `<button type="button" class="btn btn-secondary" id="modalClose2">Close</button>`;
+    let chairCanMutate = scheduleMutableByCurrentChair(data);
+    let vsMode = state.modal.viewScheduleMode || 'view';
+    if (!isDean && !chairCanMutate && vsMode === 'edit') {
+      state.modal.viewScheduleMode = 'view';
+      vsMode = 'view';
+    }
+    let vsFooter;
+    if (isDean) {
+      vsFooter = '';
+    } else if (!chairCanMutate) {
+      vsFooter = closeOnly;
+    } else {
+      vsFooter = vsMode === 'view' ? `${editBtn}${delBtn}` : editFooter;
+    }
+    let vsSubtitle =
+      !isDean && !chairCanMutate && state.currentUser?.role === 'chairperson'
+        ? 'View only — only the department that created this schedule can edit or delete it.'
+        : '';
+    return modalWrap('Schedule Details', renderViewSchedule(data), vsFooter, 'modal-view-schedule', vsSubtitle);
   }
   if(type==='addSubject') return modalWrap(data?.id?'Edit Subject':'Add Subject',renderSubjectForm(data));
   if(type==='addProfessor') return modalWrap(data?.id?'Edit Professor':'Add Professor',renderProfessorForm(data));
@@ -2873,6 +3220,16 @@ function renderModal() {
   if (type === 'newRequest') {
     const reqFooter = `<button class="btn btn-secondary" id="modalClose2">Cancel</button><button class="btn btn-primary" id="modalSaveBtn">Submit Request</button>`;
     return modalWrap('Request a room', renderRequestForm(), reqFooter, 'modal-request', 'Borrow a room from another department');
+  }
+  if (type === 'scheduleExportWizard') {
+    const sewFooter = `<button type="button" class="btn btn-secondary" id="modalClose2">Cancel</button><button type="button" class="btn btn-primary" id="scheduleExportWizardConfirmBtn">${icon('fileText', 16)} Export</button>`;
+    return modalWrap(
+      'Export schedule',
+      renderScheduleExportWizardBody(),
+      sewFooter,
+      'modal-schedule-export-wizard',
+      'Select academic year, semester, and how to organize the export.',
+    );
   }
   if (type === 'dashboardConflicts') {
     let step = state.modal.step || 'list';
@@ -3076,7 +3433,9 @@ function renderViewSchedule(d) {
     let deptLine = dept
       ? `<div class="vs-dept-readout"><span class="badge-dept ${dept.id}">${escapeHtml(dept.code)}</span> ${escapeHtml(dept.name)}</div>`
       : '—';
+    let ayRead = escapeHtml(normalizeAcademicYearInput(d.schAy) || DEFAULT_ACADEMIC_YEAR);
     return `<div class="schedule-form-wrapper view-schedule-form view-schedule-readonly">
+      <div class="form-group full vs-ay-readout-top"><label class="form-label">Academic Year</label><div class="vs-readonly">${ayRead}</div></div>
       <div class="form-group full"><label class="form-label">Department</label><div class="vs-readonly">${deptLine}</div></div>
       <div class="schedule-form-inline-row">
         <div class="form-group"><label class="form-label">Year</label><div class="vs-readonly">${escapeHtml(d.schYear || '—')}</div></div>
@@ -3085,10 +3444,6 @@ function renderViewSchedule(d) {
       <div class="schedule-form-inline-row schedule-form-row-sem-subject">
         <div class="form-group"><label class="form-label">Semester</label><div class="vs-readonly">${escapeHtml(d.schSem || '—')}</div></div>
         <div class="form-group"><label class="form-label">Subject</label><div class="vs-readonly">${subLine}</div></div>
-      </div>
-      <div class="schedule-form-inline-row">
-        <div class="form-group"><label class="form-label">Academic Year</label><div class="vs-readonly">${escapeHtml(normalizeAcademicYearInput(d.schAy) || DEFAULT_ACADEMIC_YEAR)}</div></div>
-        <div class="form-group"></div>
       </div>
       <div class="schedule-form-inline-row">
         <div class="form-group"><label class="form-label">Set</label><div class="vs-readonly">${d.setLabel ? escapeHtml(d.setLabel) : 'None'}</div></div>
@@ -3138,8 +3493,12 @@ function renderViewSchedule(d) {
     : `<div class="vs-dept-readout">${dept ? `<span class="badge-dept ${dept.id}">${escapeHtml(dept.code)}</span> ${escapeHtml(dept.name)}` : '—'}</div><input type="hidden" id="vs_dept" value="${escapeHtml(d.dept)}">`;
   let vsSectionSelect = `<select class="form-select" id="vs_section"><option value="">Select section...</option>${secOpts}${secLegacyOpt}</select>`;
   let vsSubjectSelect = `<select class="form-select" id="vs_subject"><option value="">Select subject</option>${subOpts}${subLegacyOpt}</select>`;
+  let ayVal = normalizeAcademicYearInput(d.schAy) || DEFAULT_ACADEMIC_YEAR;
+  let ayReadEdit = escapeHtml(ayVal);
   return `<div id="vsConflictAlert"></div>
   <div class="schedule-form-wrapper view-schedule-form">
+    <div class="form-group full vs-ay-readout-top"><label class="form-label">Academic Year</label><div class="vs-readonly">${ayReadEdit}</div></div>
+    <input type="hidden" id="vs_ay" name="vs_ay" value="${escapeHtml(ayVal)}">
     <div class="form-group full"><label class="form-label" for="vs_dept">Department</label>${deptControl}</div>
     <div class="schedule-form-inline-row">
       <div class="form-group"><label class="form-label" for="vs_year">Year</label>${scheduleYearSelectHtml('vs_year', d.schYear || '')}</div>
@@ -3148,10 +3507,6 @@ function renderViewSchedule(d) {
     <div class="schedule-form-inline-row schedule-form-row-sem-subject">
       <div class="form-group"><label class="form-label" for="vs_sem">Semester</label>${scheduleSemSelectHtml('vs_sem', d.schSem || '')}</div>
       <div class="form-group"><label class="form-label" for="vs_subject">Subject</label>${vsSubjectSelect}</div>
-    </div>
-    <div class="schedule-form-inline-row">
-      <div class="form-group"><label class="form-label" for="vs_ay">Academic Year</label><input class="form-input" id="vs_ay" value="${escapeHtml(normalizeAcademicYearInput(d.schAy) || DEFAULT_ACADEMIC_YEAR)}" placeholder="2025-2026"></div>
-      <div class="form-group"></div>
     </div>
     <div class="schedule-form-inline-row">
       <div class="form-group"><label class="form-label" for="vs_set" id="vs_set_label">Set</label>${setInput}</div>
@@ -3470,6 +3825,7 @@ function bindPage(){
   document.getElementById('vsEditScheduleBtn')?.addEventListener('click', () => {
     if (state.modal?.type !== 'viewSchedule') return;
     if (isDean) return;
+    if (!scheduleMutableByCurrentChair(state.modal.data)) return;
     state.modal.viewScheduleMode = 'edit';
     render();
   });
@@ -3569,6 +3925,7 @@ function bindPage(){
       if (!draft?.id) return;
       let idx = state.schedules.findIndex(x => x.id === draft.id);
       if (idx < 0) return;
+      if (!scheduleMutableByCurrentChair(state.schedules[idx])) return;
       let deptVal = document.getElementById('vs_dept')?.value || draft.dept;
       let days = [...document.querySelectorAll('#modalBackdrop [id^="vsday_"]:checked')].map(c => c.value);
       let profId = document.getElementById('vs_professor')?.value || '';
@@ -3957,6 +4314,8 @@ function bindPage(){
   });
   document.querySelectorAll('[data-delschedid]').forEach(el=>el.addEventListener('click', async ()=>{
     if (isDean) return;
+    let delTarget = state.schedules.find(x => x.id === el.dataset.delschedid);
+    if (!scheduleMutableByCurrentChair(delTarget)) return;
     if (!window.confirm(MSG_CONFIRM_PERM_DELETE_SCHEDULE)) return;
     if (hasSupabaseClient()) {
       const { error } = await window.cenSupabase.from('schedules').delete().eq('id', el.dataset.delschedid);
@@ -4060,14 +4419,82 @@ function bindPage(){
     state.curriculum=state.curriculum.filter(c=>c.id!==el.dataset.delcrow);showToast('Row removed');render();
   }));
   document.getElementById('curriculumDeptFilter')?.addEventListener('change',e=>{state.curriculumDeptFilter=e.target.value;render();});
-  document.getElementById('curriculumYearFilter')?.addEventListener('change',e=>{state.curriculumYearFilter=e.target.value;render();});
-  document.getElementById('topbarCurriculumYearFilter')?.addEventListener('change',e=>{state.curriculumYearFilter=e.target.value || '1st Year';render();});
-  document.getElementById('curriculumSemFilter')?.addEventListener('change',e=>{state.curriculumSemFilter=e.target.value;render();});
-  document.getElementById('curriculumHistoryAyFilter')?.addEventListener('change', e => {
-    state.curriculumHistoryAyFilter = normalizeAcademicYearInput(e.target.value || '') || DEFAULT_ACADEMIC_YEAR;
+  document.getElementById('curriculumYearFilter')?.addEventListener('change', e => {
+    state.curriculumYearFilter = e.target.value || 'all';
     render();
   });
-  document.getElementById('curriculumHistoryExportBtn')?.addEventListener('click', exportCurriculumHistoryAcademicYear);
+  document.getElementById('curriculumAcademicYearFilter')?.addEventListener('change', e => {
+    state.curriculumAcademicYearFilter = normalizeAcademicYearInput(e.target.value || '') || DEFAULT_ACADEMIC_YEAR;
+    render();
+  });
+  document.getElementById('curriculumExportBtn')?.addEventListener('click', () => {
+    if (state.page !== 'curriculum') return;
+    exportCurriculumTableCsv();
+  });
+  document.getElementById('scheduleExportWizardConfirmBtn')?.addEventListener('click', () => runScheduleExportFromWizard());
+  let sewPanel = document.getElementById('modalPanel');
+  if (sewPanel?.classList.contains('modal-schedule-export-wizard')) {
+    function syncScheduleExportWizardStateFromDom() {
+      if (state.modal?.type !== 'scheduleExportWizard') return;
+      let ay =
+        normalizeAcademicYearInput(document.getElementById('sew_academic_year')?.value || '') || DEFAULT_ACADEMIC_YEAR;
+      let sem = document.getElementById('sew_semester')?.value || '1st Semester';
+      if (!['1st Semester', '2nd Semester', 'both'].includes(sem)) sem = '1st Semester';
+      let selectedTypes = normalizeScheduleExportFilterTypes(
+        [...document.querySelectorAll('#modalBackdrop .sew-filter-checkbox:checked')].map(el => el.value),
+      );
+      let details = {
+        faculty: ensureScheduleExportWizardDetailValue(
+          'faculty',
+          document.getElementById('sew_filter_detail_faculty')?.value || '',
+          state.currentUser,
+        ),
+        room: ensureScheduleExportWizardDetailValue(
+          'room',
+          document.getElementById('sew_filter_detail_room')?.value || '',
+          state.currentUser,
+        ),
+        section: ensureScheduleExportWizardDetailValue(
+          'section',
+          document.getElementById('sew_filter_detail_section')?.value || '',
+          state.currentUser,
+        ),
+      };
+      state.modal = { ...state.modal, exportAy: ay, exportSem: sem, exportFilterTypes: selectedTypes, exportFilterDetails: details };
+    }
+    sewPanel.querySelectorAll('.sew-filter-checkbox').forEach(cb =>
+      cb.addEventListener('change', e => {
+        if (!(e.target instanceof HTMLInputElement)) return;
+        let v = e.target.value;
+        if (v === 'all' && e.target.checked) {
+          sewPanel.querySelectorAll('.sew-filter-checkbox').forEach(x => {
+            if (x !== e.target) x.checked = false;
+          });
+        } else if (v !== 'all' && e.target.checked) {
+          let allCb = sewPanel.querySelector('#sew_filter_all');
+          if (allCb) allCb.checked = false;
+        }
+        if (![...sewPanel.querySelectorAll('.sew-filter-checkbox')].some(x => x.checked)) {
+          let allCb = sewPanel.querySelector('#sew_filter_all');
+          if (allCb) allCb.checked = true;
+        }
+        syncScheduleExportWizardStateFromDom();
+        render();
+      }),
+    );
+    ['sew_filter_detail_faculty', 'sew_filter_detail_room', 'sew_filter_detail_section'].forEach(id => {
+      document.getElementById(id)?.addEventListener('change', () => {
+        syncScheduleExportWizardStateFromDom();
+      });
+    });
+    document.getElementById('sew_academic_year')?.addEventListener('change', () => {
+      syncScheduleExportWizardStateFromDom();
+    });
+    document.getElementById('sew_semester')?.addEventListener('change', () => {
+      syncScheduleExportWizardStateFromDom();
+    });
+  }
+  document.getElementById('curriculumSemFilter')?.addEventListener('change',e=>{state.curriculumSemFilter=e.target.value;render();});
   function syncCurriculumUnitsTotal() {
     let lecEl = document.getElementById('cc_lecUnits');
     let labEl = document.getElementById('cc_labUnits');
