@@ -54,6 +54,8 @@ const PAGE_TO_HTML = {
   requests: 'request.html',
   curriculum: 'curriculum.html',
   section: 'curriculum.html',
+  room: 'curriculum.html',
+  forms: 'curriculum.html',
   faculty: 'faculty.html',
   accounts: 'accounts.html',
   account: 'account.html',
@@ -235,9 +237,11 @@ function pageHref(pageId) {
 }
 
 function resolveInitialPage() {
-  const allowed = ['dashboard', 'schedule', 'requests', 'curriculum', 'section', 'faculty', 'accounts', 'account'];
+  const allowed = ['dashboard', 'schedule', 'requests', 'curriculum', 'section', 'room', 'forms', 'faculty', 'accounts', 'account'];
   const file = (location.pathname.split('/').pop() || '').toLowerCase();
   if (file === 'curriculum.html' && (location.hash || '').toLowerCase() === '#section') return 'section';
+  if (file === 'curriculum.html' && (location.hash || '').toLowerCase() === '#room') return 'room';
+  if (file === 'curriculum.html' && (location.hash || '').toLowerCase() === '#forms') return 'forms';
   if (typeof window.CEN_PAGE === 'string' && allowed.includes(window.CEN_PAGE)) return window.CEN_PAGE;
   return HTML_TO_PAGE[file] || 'dashboard';
 }
@@ -252,7 +256,21 @@ function syncPageFromLocationHash() {
     }
     return;
   }
-  if (state.page === 'section') {
+  if (h === '#room') {
+    if (state.page !== 'room') {
+      state.page = 'room';
+      render();
+    }
+    return;
+  }
+  if (h === '#forms') {
+    if (state.page !== 'forms') {
+      state.page = 'forms';
+      render();
+    }
+    return;
+  }
+  if (state.page === 'section' || state.page === 'room' || state.page === 'forms') {
     state.page = 'curriculum';
     render();
   }
@@ -370,6 +388,7 @@ let state = {
   currentUser: null,
   page: 'dashboard',
   sidebarOpen: false,
+  utilitiesNavOpen: false,
   modal: null,
   toast: null,
   filterMode: 'department',
@@ -1974,7 +1993,7 @@ function scrollToHashFragmentIfAny() {
 }
 
 function getPageTitle() {
-  let titles={dashboard:'Dashboard',schedule:'Timetable Schedule',requests:'Room Requests',curriculum:'Curriculum',section:'Section',faculty:'Faculty',accounts:'Accounts',account:'My Account'};
+  let titles={dashboard:'Dashboard',schedule:'Timetable Schedule',requests:'Room Requests',curriculum:'Curriculum',section:'Section',room:'Room',forms:'Forms',faculty:'Faculty',accounts:'Accounts',account:'My Account'};
   return titles[state.page]||'Dashboard';
 }
 
@@ -1983,10 +2002,21 @@ function renderSidebar() {
   let pendingIn = pendingRequestsForUser();
   let nav = (id, icn, label, extra = '') =>
     `<a href="${pageHref(id)}" class="nav-item ${state.page === id ? 'active' : ''}" ${id === 'requests' && pendingIn && (u?.role === 'chairperson' || u?.role === 'admin') ? `title="${pendingIn} pending room request(s)"` : ''}><span class="nav-icon">${icon(icn, 18)}</span>${label}${extra}</a>`;
-  let sectionNav =
-    u.role === 'admin' || u.role === 'chairperson'
-      ? `<a href="${pageHref('section')}#section" class="nav-item ${state.page === 'section' ? 'active' : ''}"><span class="nav-icon">${icon('book', 18)}</span>Section</a>`
-      : '';
+  let curriculumNav = (u.role === 'admin' || u.role === 'chairperson') ? nav('curriculum', 'book', 'Curriculum') : '';
+  let isUtilitiesOpen = !!state.utilitiesNavOpen;
+  let utilitiesNav = u.role === 'admin'
+    ? `
+      <a href="#" id="utilitiesNavToggle" class="nav-item ${state.page === 'section' || state.page === 'room' || state.page === 'forms' ? 'active' : ''}" aria-expanded="${isUtilitiesOpen ? 'true' : 'false'}">
+        <span class="nav-icon">${icon('settings', 18)}</span>Utilities
+        <span style="margin-left:auto;font-weight:700;display:inline-block;transform:${isUtilitiesOpen ? 'rotate(90deg)' : 'none'};transform-origin:center;">&gt;</span>
+      </a>
+      ${isUtilitiesOpen ? `
+      <a href="${pageHref('section')}#section" class="nav-item ${state.page === 'section' ? 'active' : ''}" style="padding-left:42px;">Section</a>
+      <a href="${pageHref('room')}#room" class="nav-item ${state.page === 'room' ? 'active' : ''}" style="padding-left:42px;">Room</a>
+      <a href="${pageHref('forms')}#forms" class="nav-item ${state.page === 'forms' ? 'active' : ''}" style="padding-left:42px;">Forms</a>
+      ` : ''}
+    `
+    : '';
   let requestsExtra = '';
   if ((u?.role === 'chairperson' || u?.role === 'admin') && pendingIn > 0) {
     requestsExtra = `<span class="badge nav-requests-badge" aria-label="${pendingIn} pending room requests">${pendingIn}</span>`;
@@ -2002,8 +2032,8 @@ function renderSidebar() {
       ${nav('schedule','calendar','Schedule')}
       ${u.role === 'chairperson' || u.role === 'admin' ? nav('requests', 'refresh', 'Requests', requestsExtra) : ''}
       <div class="nav-section-label" style="margin-top:8px">Manage</div>
-      ${(u.role==='admin'||u.role==='chairperson')?nav('curriculum','book','Curriculum'):''}
-      ${sectionNav}
+      ${utilitiesNav}
+      ${curriculumNav}
       ${u.role==='admin'?nav('faculty','users','Faculty'):''}
       ${u.role==='admin'?nav('accounts','settings','Accounts'):''}
       ${u.role==='chairperson'?nav('account','user','My Account'):''}
@@ -2019,6 +2049,8 @@ function renderPage() {
     case 'requests': return renderRequests();
     case 'curriculum': return renderCurriculum();
     case 'section': return renderSectionPage();
+    case 'room': return renderRoomPage();
+    case 'forms': return renderFormsPage();
     case 'faculty': return renderFaculty();
     case 'accounts': return renderAccounts();
     case 'account': return renderMyAccount();
@@ -3177,9 +3209,9 @@ function renderCurriculum() {
     if (curriculumAcademicYearForFilter(c) !== curriculumAyFilter) return false;
     return true;
   });
-  let yearFilterOpts = [['all', 'All Years'], ...SCHEDULE_FORM_YEARS.map(y => [y, y])].map(([y, rawLabel]) => {
+  let yearFilterOpts = [['all', 'All Year Levels'], ...SCHEDULE_FORM_YEARS.map(y => [y, y])].map(([y, rawLabel]) => {
     let label = rawLabel === 'all'
-      ? 'All Years'
+      ? 'All Year Levels'
       : rawLabel === '1st Year'
         ? 'First Year'
         : rawLabel === '2nd Year'
@@ -3287,7 +3319,7 @@ function renderSectionPage() {
   if (state.sectionYearFilter !== 'all' && !SCHEDULE_FORM_YEARS.includes(state.sectionYearFilter)) state.sectionYearFilter = 'all';
   let rows = sectionRowsForUser();
   if (state.sectionYearFilter !== 'all') rows = rows.filter(r => r.year === state.sectionYearFilter);
-  let yearOpts = [['all', 'All Years'], ...SCHEDULE_FORM_YEARS.map(y => [y, y])]
+  let yearOpts = [['all', 'All Year Levels'], ...SCHEDULE_FORM_YEARS.map(y => [y, y])]
     .map(([v, lab]) => `<option value="${escapeHtml(v)}" ${state.sectionYearFilter === v ? 'selected' : ''}>${escapeHtml(lab)}</option>`)
     .join('');
   return `<div class="page-header"><div><h2>Section</h2></div><button class="btn btn-primary" id="addSectionBtn">${icon('plus', 16)} Add Section</button></div>
@@ -3299,6 +3331,14 @@ function renderSectionPage() {
         ${rows.map(r => `<tr><td>${escapeHtml(getDept(r.dept)?.code || r.dept)} — ${escapeHtml(getDept(r.dept)?.name || '')}</td><td>${escapeHtml(r.year)}</td><td>${escapeHtml(r.section)}</td><td><button class="btn btn-outline btn-sm" data-editsection="${escapeHtml(r.dept)}::${escapeHtml(r.section)}">Edit</button> <button class="btn btn-danger btn-sm" data-delsection="${escapeHtml(r.dept)}::${escapeHtml(r.section)}">Delete</button></td></tr>`).join('')}
       </tbody></table></div>
     </div></div>`;
+}
+
+function renderRoomPage() {
+  return `<div class="card"><div class="card-body"></div></div>`;
+}
+
+function renderFormsPage() {
+  return `<div class="card"><div class="card-body"></div></div>`;
 }
 
 function renderFaculty() {
@@ -3846,6 +3886,11 @@ function bindGlobal(){
   document.getElementById('themeToggleBtn')?.addEventListener('click',()=>{toggleAppTheme();render();});
   document.getElementById('hamburger')?.addEventListener('click',()=>{state.sidebarOpen=!state.sidebarOpen;render();});
   document.getElementById('overlay')?.addEventListener('click',()=>{state.sidebarOpen=false;render();});
+  document.getElementById('utilitiesNavToggle')?.addEventListener('click', e => {
+    e.preventDefault();
+    state.utilitiesNavOpen = !state.utilitiesNavOpen;
+    render();
+  });
   document.getElementById('modalBackdrop')?.addEventListener('click',e=>{
     if (e.target === e.currentTarget) { state.modal = null; render(); }
   });
