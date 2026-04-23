@@ -79,6 +79,10 @@ const CURRICULUM_FORM_SEMS = ['1st Semester', '2nd Semester', 'Midyear'];
 const CURRICULUM_PAGE_SEMS = ['1st Semester', '2nd Semester'];
 const DEFAULT_ACADEMIC_YEAR = '2025-2026';
 const TERM_AY_OTHER_VALUE = '__other__';
+const SECTION_SAMPLES_BY_DEPT_BASE =
+  typeof SECTION_SAMPLES_BY_DEPT !== 'undefined' && SECTION_SAMPLES_BY_DEPT
+    ? JSON.parse(JSON.stringify(SECTION_SAMPLES_BY_DEPT))
+    : {};
 /** Top-of-page context shown on Schedule/Curriculum and used for page-level semester filtering. */
 const TERM_HEADER_SEMS = ['1st Semester', '2nd Semester'];
 function normalizeAcademicYearInput(v) {
@@ -1090,7 +1094,12 @@ function mergeSectionOptions(deptIds) {
   const ids = Array.isArray(deptIds) ? deptIds : [deptIds];
   const fromSched = [...new Set(state.schedules.filter(s => ids.includes(s.dept)).map(s => String(s.section)))];
   const samples = [];
-  ids.forEach(id => { const arr = SECTION_SAMPLES_BY_DEPT[id]; if (arr) samples.push(...arr); });
+  ids.forEach(id => {
+    const arr = SECTION_SAMPLES_BY_DEPT[id];
+    if (arr) samples.push(...arr);
+    const baseArr = SECTION_SAMPLES_BY_DEPT_BASE[id];
+    if (baseArr) samples.push(...baseArr);
+  });
   // Keep legacy IE first-year section visible even if sample data is stale in cache.
   if (ids.includes('ie')) samples.push('BSIE IGK');
   return [...new Set([...fromSched, ...samples].map(s => String(s || '').trim()).filter(Boolean))]
@@ -1473,6 +1482,60 @@ function curriculumSubjectHasLabUnits(dept, year, sem, subjectId, ay) {
   let lab = Number(raw);
   return Number.isFinite(lab) && lab > 0;
 }
+function curriculumSubjectAllowedHours(dept, year, sem, subjectId, ay) {
+  let row = curriculumRowForScheduleSubject(dept, year, sem, subjectId, ay);
+  if (!row) return null;
+  let lec = Number(row.lecUnits != null ? row.lecUnits : row.lec_units);
+  let lab = Number(row.labUnits != null ? row.labUnits : row.lab_units);
+  if (Number.isFinite(lec) || Number.isFinite(lab)) {
+    return computedCurriculumHoursFromUnits(Number.isFinite(lec) ? lec : 0, Number.isFinite(lab) ? lab : 0);
+  }
+  let h = Number(row.requiredHours != null ? row.requiredHours : row.required_hours);
+  if (Number.isFinite(h) && h > 0) return h;
+  return null;
+}
+function scheduleWeeklyHoursFromEntry(entry) {
+  let start = parseTimeToMinutes(entry?.timeStart);
+  let end = parseTimeToMinutes(entry?.timeEnd);
+  if (!Number.isFinite(start) || !Number.isFinite(end) || end <= start) return 0;
+  let dayCount = Array.isArray(entry?.days) ? entry.days.length : 0;
+  return ((end - start) / 60) * dayCount;
+}
+function formatHoursValue(n) {
+  let x = Number(n);
+  if (!Number.isFinite(x)) return '0';
+  let rounded = Math.round(x * 100) / 100;
+  if (Math.abs(rounded - Math.round(rounded)) < 1e-9) return String(Math.round(rounded));
+  return String(rounded);
+}
+function scheduledWeeklyHoursForSubjectSlot(entry, excludeScheduleId = null) {
+  let ay = normalizeAcademicYearInput(entry?.schAy) || DEFAULT_ACADEMIC_YEAR;
+  let section = String(entry?.section || '').trim();
+  let total = 0;
+  for (let s of state.schedules) {
+    if (!s) continue;
+    if (excludeScheduleId && s.id === excludeScheduleId) continue;
+    if (s.dept !== entry.dept) continue;
+    if ((s.schYear || '').trim() !== (entry.schYear || '').trim()) continue;
+    if ((s.schSem || '').trim() !== (entry.schSem || '').trim()) continue;
+    if ((normalizeAcademicYearInput(s.schAy) || DEFAULT_ACADEMIC_YEAR) !== ay) continue;
+    if (s.subjectId !== entry.subjectId) continue;
+    if (String(s.section || '').trim() !== section) continue;
+    total += scheduleWeeklyHoursFromEntry(s);
+  }
+  return total;
+}
+function validateEntryHoursWithinCurriculum(entry, excludeScheduleId = null) {
+  let allowed = curriculumSubjectAllowedHours(entry.dept, entry.schYear, entry.schSem, entry.subjectId, entry.schAy);
+  if (!(Number.isFinite(allowed) && allowed > 0)) return null;
+  let proposed = scheduleWeeklyHoursFromEntry(entry);
+  let existing = scheduledWeeklyHoursForSubjectSlot(entry, excludeScheduleId);
+  let total = existing + proposed;
+  if (total > allowed + 1e-9) {
+    return `Total scheduled hours exceed curriculum hours: existing ${formatHoursValue(existing)} + new ${formatHoursValue(proposed)} = ${formatHoursValue(total)} (allowed ${formatHoursValue(allowed)}).`;
+  }
+  return null;
+}
 const MSG_SET_REQUIRED_FOR_LAB = 'This subject has lab units in Curriculum. Choose Set A or Set B.';
 /** Set is enabled only for lab subjects (curriculum lab units > 0). Otherwise disabled and cleared. */
 function updateScheduleSetFieldRequirement(labelEl, selectEl, contextComplete, hasLabUnits) {
@@ -1565,12 +1628,10 @@ function initCreateScheduleCurriculumCascade() {
     subEl.innerHTML = '<option value="">Select subject...</option>' + subjects.map(s => `<option value="${escapeHtml(s.id)}" ${selectedId === s.id ? 'selected' : ''}>${escapeHtml(s.code)} — ${escapeHtml(s.name)}</option>`).join('');
   }
   function fillSectionSelect(sections, selectedSection) {
-    let dl = document.getElementById('f_section_list');
-    if (dl) {
-      dl.innerHTML = sections.map(sec => `<option value="${escapeHtml(sec)}"></option>`).join('');
-    }
     let pick = selectedSection || secEl.value || '';
-    secEl.value = pick;
+    let opts = sections.map(sec => `<option value="${escapeHtml(sec)}" ${pick === sec ? 'selected' : ''}>${escapeHtml(sec)}</option>`).join('');
+    let legacy = pick && !sections.includes(pick) ? `<option value="${escapeHtml(pick)}" selected>${escapeHtml(pick)}</option>` : '';
+    secEl.innerHTML = `<option value="">Select section...</option>${opts}${legacy}`;
   }
 
   function rebuildAll() {
@@ -1582,7 +1643,7 @@ function initCreateScheduleCurriculumCascade() {
       sEl.disabled = true;
       subEl.innerHTML = '<option value="">Select subject...</option>';
       subEl.disabled = true;
-      secEl.value = '';
+      secEl.innerHTML = '<option value="">Select section...</option>';
       secEl.disabled = true;
       refreshCreateScheduleSetLabUi();
       return;
@@ -1690,8 +1751,8 @@ function timeDuration(s, e) {
   let diff = end - start;
   if (diff <= 0) return 1;
   let slots = Math.ceil(diff / 30);
-  // UI expectation: when an end time lands on :30, color includes that row label.
-  if (end % 60 === 30) slots += 1;
+  // UI expectation: end label row is included in the colored block.
+  slots += 1;
   return Math.max(1, slots);
 }
 function pendingRequestsForUser() {
@@ -3462,7 +3523,7 @@ function renderScheduleForm() {
     ${deptRow}
     <div class="schedule-form-inline-row">
       <div class="form-group"><label class="form-label" for="f_year">Year ${req}</label><select class="form-select" id="f_year"><option value="">Select year...</option></select></div>
-      <div class="form-group"><label class="form-label" for="f_section">Section ${req}</label><input class="form-input" id="f_section" list="f_section_list" placeholder="Select or type section..." value="${escapeHtml(defSec || '')}"><datalist id="f_section_list">${secOpts}${secLegacyOpt}</datalist></div>
+      <div class="form-group"><label class="form-label" for="f_section">Section ${req}</label><select class="form-select" id="f_section"><option value="">Select section...</option>${secOpts}${secLegacyOpt}</select></div>
     </div>
     <div class="schedule-form-inline-row schedule-form-row-sem-subject">
       <div class="form-group"><label class="form-label" for="f_sem">Semester ${req}</label><select class="form-select" id="f_sem"><option value="">Select semester...</option></select></div>
@@ -3567,10 +3628,10 @@ function renderViewSchedule(d) {
   let roomOpts = roomList.map(r => `<option value="${escapeHtml(r.id)}" ${d.roomId === r.id ? 'selected' : ''}>${escapeHtml(r.name)}</option>`).join('')
     + `<option value="${ROOM_OTHER_ID}" ${d.roomId === ROOM_OTHER_ID ? 'selected' : ''}>Others:</option>`;
   let secChoices = mergeSectionOptions([listDept]);
-  let secOpts = secChoices.map(sec => `<option value="${escapeHtml(sec)}"></option>`).join('');
+  let secOpts = secChoices.map(sec => `<option value="${escapeHtml(sec)}" ${String(d.section) === sec ? 'selected' : ''}>${escapeHtml(sec)}</option>`).join('');
   let secLegacyOpt =
     d.section && !secChoices.includes(String(d.section))
-      ? `<option value="${escapeHtml(d.section)}"></option>`
+      ? `<option value="${escapeHtml(d.section)}" selected>${escapeHtml(d.section)}</option>`
       : '';
   let deptOpts = DEPARTMENTS.map(x => `<option value="${x.id}" ${d.dept === x.id ? 'selected' : ''}>${escapeHtml(x.code)} — ${escapeHtml(x.name)}</option>`).join('');
   let timeStartOpts = timetableTimeStartChoices().map(t => `<option value="${t}" ${d.timeStart === t ? 'selected' : ''}>${fmt12(t)}</option>`).join('');
@@ -3581,7 +3642,7 @@ function renderViewSchedule(d) {
   let deptControl = isAdmin
     ? `<select class="form-select" id="vs_dept">${deptOpts}</select>`
     : `<div class="vs-dept-readout">${dept ? `<span class="badge-dept ${dept.id}">${escapeHtml(dept.code)}</span> ${escapeHtml(dept.name)}` : '—'}</div><input type="hidden" id="vs_dept" value="${escapeHtml(d.dept)}">`;
-  let vsSectionSelect = `<input class="form-input" id="vs_section" list="vs_section_list" placeholder="Select or type section..." value="${escapeHtml(d.section || '')}"><datalist id="vs_section_list">${secOpts}${secLegacyOpt}</datalist>`;
+  let vsSectionSelect = `<select class="form-select" id="vs_section"><option value="">Select section...</option>${secOpts}${secLegacyOpt}</select>`;
   let vsSubjectSelect = `<select class="form-select" id="vs_subject"><option value="">Select subject</option>${subOpts}${subLegacyOpt}</select>`;
   let ayVal = normalizeAcademicYearInput(d.schAy) || DEFAULT_ACADEMIC_YEAR;
   let ayReadEdit = escapeHtml(ayVal);
@@ -4088,6 +4149,11 @@ function bindPage(){
         showFormValidationBanner('vsConflictAlert', 'Choose a subject listed in Curriculum for the selected year and semester.');
         return;
       }
+      let hoursErrEdit = validateEntryHoursWithinCurriculum(entry, draft.id);
+      if (hoursErrEdit) {
+        showFormValidationBanner('vsConflictAlert', hoursErrEdit);
+        return;
+      }
       if (curriculumSubjectHasLabUnits(entry.dept, entry.schYear, entry.schSem, entry.subjectId, entry.schAy) && !((entry.setLabel || '').trim())) {
         showFormValidationBanner('vsConflictAlert', MSG_SET_REQUIRED_FOR_LAB);
         return;
@@ -4162,6 +4228,11 @@ function bindPage(){
       }
       if (!subjectAllowedByCurriculum(entryDept, entry.schYear, entry.schSem, entry.subjectId, entry.schAy)) {
         showFormValidationBanner('conflictAlert', 'Choose a subject listed in Curriculum for the selected year and semester.');
+        return;
+      }
+      let hoursErrAdd = validateEntryHoursWithinCurriculum(entry);
+      if (hoursErrAdd) {
+        showFormValidationBanner('conflictAlert', hoursErrAdd);
         return;
       }
       if (curriculumSubjectHasLabUnits(entryDept, entry.schYear, entry.schSem, entry.subjectId, entry.schAy) && !setV) {
@@ -4357,6 +4428,20 @@ function bindPage(){
       }
       if (!subjectAllowedByCurriculum(state.currentUser.dept, schYear, schSem, subId, schAy)) {
         showFormValidationBanner('rqFormAlert', 'Choose a subject listed in Curriculum for the selected year and semester.');
+        return;
+      }
+      let hoursErrReq = validateEntryHoursWithinCurriculum({
+        dept: state.currentUser.dept,
+        schYear,
+        schSem,
+        subjectId: subId,
+        schAy,
+        timeStart,
+        timeEnd,
+        days,
+      });
+      if (hoursErrReq) {
+        showFormValidationBanner('rqFormAlert', hoursErrReq);
         return;
       }
       if (curriculumSubjectHasLabUnits(state.currentUser.dept, schYear, schSem, subId, schAy) && !setV) {
@@ -4818,13 +4903,9 @@ function bindPage(){
     if (!secEl || !deptId) return;
     let selected = secEl.value;
     let sections = sectionOptionsForDeptYear([deptId], year);
-    let secListEl = document.getElementById('vs_section_list');
-    if (secListEl) {
-      secListEl.innerHTML = sections.map(s => `<option value="${escapeHtml(s)}"></option>`).join('');
-    }
-    if (selected && !sections.includes(selected)) {
-      secEl.value = selected;
-    }
+    let opts = sections.map(s => `<option value="${escapeHtml(s)}" ${selected === s ? 'selected' : ''}>${escapeHtml(s)}</option>`).join('');
+    let legacy = selected && !sections.includes(selected) ? `<option value="${escapeHtml(selected)}" selected>${escapeHtml(selected)}</option>` : '';
+    secEl.innerHTML = `<option value="">Select section...</option>${opts}${legacy}`;
     let sem = document.getElementById('vs_sem')?.value || '';
     let ay = normalizeAcademicYearInput(document.getElementById('vs_ay')?.value || state.termAcademicYear) || DEFAULT_ACADEMIC_YEAR;
     let subEl = document.getElementById('vs_subject');
