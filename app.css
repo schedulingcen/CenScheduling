@@ -161,6 +161,123 @@
   overflow: visible;
 }
 
+.dashboard-summary-card {
+  overflow: visible;
+}
+.dashboard-summary-card-header {
+  flex-wrap: nowrap;
+  gap: 12px;
+  align-items: center;
+}
+.dashboard-summary-card-header .card-title {
+  flex: 1;
+  min-width: 0;
+}
+.dashboard-summary-header-right {
+  display: inline-flex;
+  flex-direction: row;
+  align-items: center;
+  gap: 10px;
+  flex-wrap: nowrap;
+  flex-shrink: 0;
+}
+.dashboard-summary-day-select {
+  width: auto;
+  min-width: 118px;
+  max-width: 160px;
+}
+.dashboard-summary-view-all-btn {
+  flex-shrink: 0;
+  white-space: nowrap;
+}
+@media (max-width: 520px) {
+  .dashboard-summary-card-header {
+    flex-wrap: wrap;
+  }
+  .dashboard-summary-header-right {
+    width: 100%;
+    justify-content: flex-start;
+  }
+}
+.dashboard-summary-table {
+  width: max-content;
+  min-width: 100%;
+  border-collapse: collapse;
+  font-size: 11px;
+}
+.dashboard-summary-table th,
+.dashboard-summary-table td {
+  border: 1px solid var(--border-ui);
+  padding: 4px 5px;
+  vertical-align: middle;
+  text-align: center;
+  box-sizing: border-box;
+}
+.dashboard-summary-room-th {
+  background: var(--table-header-bg);
+  font-weight: 700;
+  color: var(--text-primary);
+  white-space: nowrap;
+}
+.dashboard-summary-corner {
+  background: var(--table-header-bg);
+  font-weight: 700;
+  color: var(--text-primary);
+  white-space: nowrap;
+  position: sticky;
+  left: 0;
+  z-index: 3;
+  min-width: 104px;
+  box-shadow: 1px 0 0 var(--border-ui);
+}
+.dashboard-summary-time-th {
+  background: var(--table-header-bg);
+  font-weight: 800;
+  color: var(--text-primary);
+  white-space: nowrap;
+  min-width: 104px;
+  font-variant-numeric: tabular-nums;
+}
+.dashboard-summary-table tbody th.dashboard-summary-time-th {
+  position: sticky;
+  left: 0;
+  z-index: 2;
+  background: var(--surface);
+  box-shadow: 1px 0 0 var(--border-ui);
+  min-width: 104px;
+}
+.dashboard-summary-room-th {
+  min-width: 72px;
+  max-width: 140px;
+  line-height: 1.2;
+}
+.dashboard-summary-empty {
+  background: var(--surface);
+  min-height: 28px;
+}
+.dashboard-summary-slot-close {
+  background: var(--table-header-bg);
+  opacity: 0.55;
+  min-height: 14px;
+}
+.dashboard-summary-busy {
+  cursor: pointer;
+  vertical-align: middle !important;
+  padding: 6px 4px !important;
+  border-radius: 2px;
+}
+.dashboard-summary-busy:hover {
+  filter: brightness(0.97);
+  box-shadow: inset 0 0 0 1px rgba(0, 0, 0, 0.08);
+}
+.dashboard-summary-cell-inner {
+  display: flex;
+  flex-direction: column;
+  justify-content: center;
+  gap: 2px;
+  min-height: 100%;
+}
+
 .card-header {
   padding: 16px 20px;
   border-bottom: 1px solid var(--border-ui);
@@ -210,7 +327,10 @@
 
 .timetable-scroll {
   overflow-x: auto;
+  overflow-y: visible;
   max-width: 100%;
+  width: 100%;
+  -webkit-overflow-scrolling: touch;
 }
 :root {
   --red: #7F1919;
@@ -419,6 +539,11 @@ body { font-family: var(--font); background: var(--page-bg); color: var(--text-p
   min-width: 170px;
   max-width: 220px;
   flex: 0 0 auto;
+}
+.curriculum-topbar-dept {
+  min-width: 200px;
+  max-width: 280px;
+  flex: 1 1 180px;
 }
 .topbar-term-center {
   flex: 1;
@@ -671,7 +796,21 @@ html[data-theme="dark"] .btn-schedule-clear-all:hover {
   line-height: 1.35;
 }
 .filter-select option { color: var(--text-primary); background: var(--input-bg); }
-.timetable-scroll { overflow-x: auto; border-radius: 0 0 12px 12px; }
+.timetable-scroll {
+  overflow-x: auto;
+  overflow-y: visible;
+  border-radius: 0 0 12px 12px;
+  -webkit-overflow-scrolling: touch;
+}
+/* Wider than viewport → scroll sideways; still fills narrow screens. */
+.timetable-scroll .timetable-schedule {
+  width: max-content;
+  min-width: 100%;
+}
+.timetable-schedule .timetable-time-col,
+.timetable-schedule .timetable-time-col-header {
+  font-weight: 800;
+}
 #printArea[data-print-title]::before { display: none; content: ''; }
 .timetable-grid { display: grid; grid-template-columns: 70px repeat(5, 1fr); min-width: 700px; border-top: 1px solid var(--border-ui); }
 .timetable-header { background: var(--table-header-bg); padding: 10px 6px; text-align: center; font-size: 12px; font-weight: 700; border-bottom: 2px solid var(--border-ui); position: sticky; top: 0; }
@@ -1111,6 +1250,12 @@ html[data-theme="dark"] #requestRoomTimetableArea .timetable-slot-empty:hover {
 .badge-status.pending { background: var(--orange-light); color: #92400E; }
 .badge-status.approved { background: var(--green-light); color: #166534; }
 .table-wrap { background: var(--surface); border-radius: 12px; border: 1px solid var(--border-ui); overflow: hidden; }
+/* Allow horizontal scroll for wide timetables (dashboard summary). */
+.table-wrap.dashboard-summary-wrap {
+  overflow-x: auto;
+  overflow-y: visible;
+  -webkit-overflow-scrolling: touch;
+}
 table { width: 100%; border-collapse: collapse; }
 th { background: var(--table-header-bg); padding: 10px 16px; text-align: left; font-size: 11px; font-weight: 700; text-transform: uppercase; color: var(--text-muted); border-bottom: 1px solid var(--border-ui); }
 td { padding: 12px 16px; border-bottom: 1px solid var(--border-ui); font-size: 13px; color: var(--text-primary); }
@@ -1341,6 +1486,10 @@ td { padding: 12px 16px; border-bottom: 1px solid var(--border-ui); font-size: 1
     width: 100%;
     max-width: 100%;
   }
+  .curriculum-topbar-dept {
+    width: 100%;
+    max-width: 100%;
+  }
   .curriculum-filter-row {
     grid-template-columns: 1fr;
   }
@@ -1435,7 +1584,7 @@ html[data-theme="dark"] .borrow-tag { background: #2a2a38; }
   .timetable-schedule .timetable-time-col-header {
     text-align: center !important;
     width: 95px !important;
-    font-weight: 700 !important;
+    font-weight: 800 !important;
     background: #fff !important;
   }
   #printArea[data-print-title]::before {

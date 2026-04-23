@@ -148,13 +148,32 @@ function rememberCustomAcademicYear(ay) {
 function renderTopbarCenter() {
   if (state.page === 'curriculum') {
     let u = state.currentUser;
-    let deptName = u?.dept ? (getDept(u.dept)?.name || '') : '';
-    let title = deptName ? `Curriculum of ${deptName}` : 'Curriculum';
+    let deptFilter = state.curriculumDeptFilter || 'all';
+    let title = 'Curriculum';
+    if (u?.role === 'admin') {
+      if (deptFilter !== 'all') {
+        let dn = getDept(deptFilter)?.name || '';
+        if (dn) title = `Curriculum of ${dn}`;
+      }
+    } else if (u?.dept) {
+      let deptName = getDept(u.dept)?.name || '';
+      if (deptName) title = `Curriculum of ${deptName}`;
+    }
     let yearOpts = SCHEDULE_FORM_YEARS.map(y => {
       let label = y === '1st Year' ? 'First Year' : y;
       return `<option value="${escapeHtml(y)}" ${state.curriculumYearFilter === y ? 'selected' : ''}>${escapeHtml(label)}</option>`;
     }).join('');
-    return `<div class="curriculum-topbar-left"><div class="page-title page-title-curriculum-left">${escapeHtml(title)}</div><select class="filter-select curriculum-topbar-year" id="topbarCurriculumYearFilter" aria-label="Year filter">${yearOpts}</select></div>`;
+    let deptSelect = '';
+    if (u?.role === 'admin') {
+      let deptOpts =
+        `<option value="all" ${deptFilter === 'all' ? 'selected' : ''}>All departments</option>` +
+        DEPARTMENTS.map(
+          d =>
+            `<option value="${escapeHtml(d.id)}" ${deptFilter === d.id ? 'selected' : ''}>${escapeHtml(d.code)} — ${escapeHtml(d.name)}</option>`,
+        ).join('');
+      deptSelect = `<select class="filter-select curriculum-topbar-dept" id="curriculumDeptFilter" aria-label="Department filter">${deptOpts}</select>`;
+    }
+    return `<div class="curriculum-topbar-left"><div class="page-title page-title-curriculum-left">${escapeHtml(title)}</div>${deptSelect}<select class="filter-select curriculum-topbar-year" id="topbarCurriculumYearFilter" aria-label="Year filter">${yearOpts}</select></div>`;
   }
   let termPages = ['schedule', 'curriculum', 'requests'];
   if (!termPages.includes(state.page)) {
@@ -204,9 +223,9 @@ function mergeMissingCurriculumRowsInto(arr) {
   }
 }
 
-/** Only department chairs may add, edit, or delete curriculum rows (CEN Dean is view-only on Curriculum). */
+/** Department chairs and administrators may add, edit, or delete curriculum rows. */
 function canUserMutateCurriculum(u) {
-  return !!(u && u.role === 'chairperson');
+  return !!(u && (u.role === 'chairperson' || u.role === 'admin'));
 }
 
 function curriculumFilterDept(c) {
@@ -287,6 +306,9 @@ function hydratePersistedData() {
     if (o.requestTimetableDept != null) state.requestTimetableDept = o.requestTimetableDept;
     if (o.requestTimetableRoom != null) state.requestTimetableRoom = o.requestTimetableRoom;
     if (o.curriculumHistoryAyFilter != null) state.curriculumHistoryAyFilter = o.curriculumHistoryAyFilter;
+    if (o.dashboardSummaryDay != null && typeof o.dashboardSummaryDay === 'string' && DAYS_WITH_SATURDAY.includes(o.dashboardSummaryDay)) {
+      state.dashboardSummaryDay = o.dashboardSummaryDay;
+    }
   } catch (e) { /* ignore */ }
 }
 
@@ -332,6 +354,7 @@ function persistAppData() {
       requestTimetableDept: state.requestTimetableDept,
       requestTimetableRoom: state.requestTimetableRoom,
       curriculumHistoryAyFilter: state.curriculumHistoryAyFilter,
+      dashboardSummaryDay: state.dashboardSummaryDay,
     })
   );
 }
@@ -367,6 +390,7 @@ let state = {
   requestTimetableDept: 'ie',
   requestTimetableRoom: '',
   curriculumHistoryAyFilter: DEFAULT_ACADEMIC_YEAR,
+  dashboardSummaryDay: 'Monday',
 };
 let nextId = 100;
 const genId = () => `id_${Date.now().toString(36)}_${Math.random().toString(36).slice(2, 10)}`;
@@ -950,9 +974,8 @@ function computedCurriculumHoursFromUnits(lecUnits, labUnits) {
   let labH = Number.isFinite(lab) ? lab * 3 : 0;
   return lecH + labH;
 }
-function fmt12(t) { let [h,m]=t.split(':').map(Number); return `${h%12||12}:${String(m).padStart(2,'0')} ${h>=12?'PM':'AM'}`; }
-/** Display slot start as 7:30, 8:00, … (every row of the timetable time column). */
-function fmtSlot24(t) { let [h,m]=t.split(':').map(Number); return `${h}:${String(m).padStart(2,'0')}`; }
+/** Display time as 12-hour clock (no AM/PM), e.g. 7:30, 12:00 — for timetables, summaries, forms. */
+function fmt12(t) { let [h,m]=t.split(':').map(Number); return `${h % 12 || 12}:${String(m).padStart(2, '0')}`; }
 function slotEndFromRow(row) {
   if (row + 1 < timeSlots.length) return timeSlots[row + 1];
   let [h, m] = timeSlots[row].split(':').map(Number);
@@ -1779,7 +1802,7 @@ function render() {
       <div class="sidebar ${state.sidebarOpen?'open':''}" id="sidebar">${renderSidebar()}</div>
       <div class="overlay ${state.sidebarOpen?'show':''}" id="overlay"></div>
       <div class="main">
-        <div class="topbar"><span class="hamburger" id="hamburger" role="button" tabindex="0" aria-label="Open menu">${icon('menu', 22)}</span>${renderTopbarCenter()}<div class="topbar-actions"><button type="button" class="btn btn-outline btn-sm theme-toggle" id="themeToggleBtn" aria-label="${document.documentElement.dataset.theme === 'dark' ? 'Switch to light mode' : 'Switch to dark mode'}">${document.documentElement.dataset.theme === 'dark' ? icon('sun', 18) : icon('moon', 18)}</button>${state.page==='schedule'&&state.currentUser?.role!=='admin'?`<button type="button" class="btn btn-schedule-clear-all btn-sm" id="clearAllSchedulesBtn">Clear All</button><button type="button" class="btn btn-primary btn-sm btn-schedule-add-pill" id="addSchedBtn">${icon('plus', 16)} Add Schedule</button>`:''}${state.page==='curriculum'&&state.currentUser?.role==='chairperson'?`<button type="button" class="btn btn-primary btn-sm" id="addCurriculumBtn">${icon('plus', 16)} Add Subject</button>`:''}${state.page==='requests'&&state.currentUser?.role==='chairperson'?`<button class="btn btn-primary btn-sm" id="requestRoomTopBtn">${icon('plus', 16)} Create a Request</button>`:''}</div></div>
+        <div class="topbar"><span class="hamburger" id="hamburger" role="button" tabindex="0" aria-label="Open menu">${icon('menu', 22)}</span>${renderTopbarCenter()}<div class="topbar-actions"><button type="button" class="btn btn-outline btn-sm theme-toggle" id="themeToggleBtn" aria-label="${document.documentElement.dataset.theme === 'dark' ? 'Switch to light mode' : 'Switch to dark mode'}">${document.documentElement.dataset.theme === 'dark' ? icon('sun', 18) : icon('moon', 18)}</button>${state.page==='schedule'&&state.currentUser?.role!=='admin'?`<button type="button" class="btn btn-schedule-clear-all btn-sm" id="clearAllSchedulesBtn">Clear All</button><button type="button" class="btn btn-primary btn-sm btn-schedule-add-pill" id="addSchedBtn">${icon('plus', 16)} Add Schedule</button>`:''}${state.page==='curriculum'&&(state.currentUser?.role==='chairperson'||state.currentUser?.role==='admin')?`<button type="button" class="btn btn-primary btn-sm" id="addCurriculumBtn">${icon('plus', 16)} Add Subject</button>`:''}${state.page==='requests'&&state.currentUser?.role==='chairperson'?`<button class="btn btn-primary btn-sm" id="requestRoomTopBtn">${icon('plus', 16)} Create a Request</button>`:''}</div></div>
         <div class="content">${renderPage()}</div>
       </div>
     </div>
@@ -1866,6 +1889,14 @@ function renderDashboard() {
     ? 0
     : state.requests.filter(r => r.status === 'pending' && r.toDept === u.dept && requestMatchesCurrentTerm(r, term)).length;
   let statIc = 'stat-icon dashboard-stat-icon';
+  let summaryDay = state.dashboardSummaryDay || 'Monday';
+  if (!DAYS_WITH_SATURDAY.includes(summaryDay)) summaryDay = 'Monday';
+  state.dashboardSummaryDay = summaryDay;
+  let summaryScheds = dashboardSchedulesForConflictScope();
+  let dayOpts = DAYS_WITH_SATURDAY.map(
+    d => `<option value="${escapeHtml(d)}" ${summaryDay === d ? 'selected' : ''}>${escapeHtml(d)}</option>`,
+  ).join('');
+  let summaryGrid = renderDashboardRoomSummaryGrid(summaryScheds, summaryDay);
   return `
     <div class="stats-grid">
       <button type="button" class="stat-card stat-card--clickable" id="dashboardConflictsBtn" aria-label="View list of schedule conflicts">
@@ -1878,7 +1909,16 @@ function renderDashboard() {
         <div class="${statIc}">${icon('inbox', 24)}</div><div><div class="stat-num">${pendingCount}</div><div class="stat-label">Pending Requests</div></div>
       </a>
     </div>
-    <div class="card"><div class="card-header"><div class="card-title card-title-with-icon">${icon('calendar', 18)} Recent Schedules</div><a href="${pageHref('schedule')}" class="btn btn-outline btn-sm">View All →</a></div><div class="table-wrap"><table><thead><tr><th>Subject</th><th>Section</th><th>Professor</th><th>Room</th><th>Days</th><th>Time</th></tr></thead><tbody>${myScheds.slice(0,5).map(s=>{let sub=getSubject(s.subjectId);return `<tr><td><strong>${sub?.code}</strong><br><span style="font-size:11px">${sub?.name}</span></td><td>${s.section}</td><td>${escapeHtml(professorDisplayLine(s))}</td><td>${escapeHtml(roomDisplayLineFromPick(s.roomId, s.roomOtherName))}</td><td>${s.days.map(d=>d.slice(0,3)).join(',')}</td><td>${fmt12(s.timeStart)}–${fmt12(s.timeEnd)}</td></tr>`;}).join('')}</tbody></table>${myScheds.length===0?'<div class="empty-state">No schedules yet</div>':''}</div></div>
+    <div class="card dashboard-summary-card">
+      <div class="card-header dashboard-summary-card-header">
+        <div class="card-title card-title-with-icon">${icon('calendar', 18)} Schedule Summary</div>
+        <div class="dashboard-summary-header-right">
+          <select class="filter-select dashboard-summary-day-select" id="dashboardSummaryDay" aria-label="Schedule summary day">${dayOpts}</select>
+          <a href="${pageHref('schedule')}" class="btn btn-outline btn-sm dashboard-summary-view-all-btn">View All</a>
+        </div>
+      </div>
+      <div class="table-wrap dashboard-summary-wrap">${summaryGrid}</div>
+    </div>
   `;
 }
 
@@ -2072,7 +2112,7 @@ function renderTimetableGrid(scheds, gridOpts) {
   });
   
   // Build HTML table (more reliable than CSS Grid for timetable)
-  let html = '<table class="timetable-table timetable-schedule" style="width:100%; border-collapse: collapse;">';
+  let html = '<table class="timetable-table timetable-schedule" style="min-width:100%;width:max-content;border-collapse:collapse;">';
   
   // Header row
   html += '<thead><tr>';
@@ -2147,20 +2187,22 @@ function renderTimetableGrid(scheds, gridOpts) {
   
   // Add some CSS for the table
   const style = document.createElement('style');
-  if (!document.querySelector('#timetable-table-style')) {
-    style.id = 'timetable-table-style';
+  if (!document.querySelector('#timetable-table-style-v2')) {
+    document.querySelector('#timetable-table-style')?.remove();
+    style.id = 'timetable-table-style-v2';
     style.textContent = `
       .timetable-schedule .timetable-time-col,
       .timetable-schedule .timetable-time-col-header {
         text-align: center;
         vertical-align: middle;
-        width: 92px;
+        width: 104px;
         padding: 8px 6px;
         border: 1px solid var(--border-ui);
         background: var(--table-header-bg);
-        font-family: var(--mono);
+        font-family: inherit;
         font-size: 11px;
-        font-weight: 600;
+        font-weight: 800;
+        font-variant-numeric: tabular-nums;
         color: var(--text-primary);
         white-space: nowrap;
       }
@@ -2197,6 +2239,117 @@ function renderTimetableGrid(scheds, gridOpts) {
     document.head.appendChild(style);
   }
   
+  return html;
+}
+
+/** All CEN engineering rooms (every program in `DEPARTMENTS`), stable name order. */
+function engineeringRoomsForDashboardSummary() {
+  let ids = new Set(DEPARTMENTS.map(d => d.id));
+  return roomsSourceForApp()
+    .filter(r => r && ids.has(r.dept))
+    .slice()
+    .sort((a, b) => a.name.localeCompare(b.name, undefined, { sensitivity: 'base' }));
+}
+/** Section line for summary cells: "BSCE I GA" style when data uses compact labels. */
+function dashboardSummarySectionLine(s) {
+  let sec = (s.section || '').trim().toUpperCase();
+  if (!sec) return '—';
+  let m = sec.match(/^(BSCPE|BSEE|BSCE|BSME|BSECE|BSIE)([IVX]+)([A-Z]+)$/);
+  if (m) return `${m[1]} ${m[2]} ${m[3]}`;
+  return sec;
+}
+/** Instructor line: compact uppercase e.g. C.JARABESE */
+function dashboardSummaryProfLine(s) {
+  if (s.professorId === PROFESSOR_OTHER_ID) return (s.professorOtherName || '—').trim().toUpperCase() || '—';
+  let p = getProfessor(s.professorId);
+  if (p?.short) return p.short.replace(/\s+/g, '').toUpperCase();
+  return (professorDisplayLine(s) || '—').toUpperCase();
+}
+function buildDashboardSummaryCellInner(s, sub, chrome) {
+  let line1 = dashboardSummarySectionLine(s);
+  let line2 = sub?.code || '—';
+  let line3 = dashboardSummaryProfLine(s);
+  let subStyle =
+    chrome.innerStyles?.subStyle || 'font-weight:700;font-size:10px;text-align:center;line-height:1.25;color:var(--chip-text-primary, #111);';
+  let lineStyle =
+    chrome.innerStyles?.lineStyle || 'font-size:10px;text-align:center;line-height:1.25;color:var(--chip-text-secondary, #333);';
+  return `<div class="dashboard-summary-cell-inner"><div style="${subStyle}">${escapeHtml(line1)}</div><div style="${lineStyle}">${escapeHtml(line2)}</div><div style="${lineStyle}">${escapeHtml(line3)}</div></div>`;
+}
+/**
+ * Room × time grid for dashboard (matches schedule summary layout: TIME / ROOMS header).
+ */
+function renderDashboardRoomSummaryGrid(scheds, day) {
+  let roomList = engineeringRoomsForDashboardSummary();
+  if (!roomList.length) {
+    return '<div class="empty-state">No rooms configured for engineering programs.</div>';
+  }
+  let { conflictSinceById, conflictIds } = syncConflictHighlightsAndIds();
+  let cols = roomList.length;
+  let rows = timeSlots.length;
+  let grid = Array(rows)
+    .fill(null)
+    .map(() => Array(cols).fill(null));
+  let dayScheds = scheds.filter(s => Array.isArray(s.days) && s.days.includes(day) && s.roomId && s.roomId !== ROOM_OTHER_ID);
+  dayScheds.forEach(s => {
+    let col = roomList.findIndex(r => r.id === s.roomId);
+    if (col < 0) return;
+    let startRow = timeToRow(s.timeStart);
+    let duration = timeDuration(s.timeStart, s.timeEnd);
+    if (startRow < 0 || duration < 1) return;
+    if (grid[startRow][col]) return;
+    let sub = getSubject(s.subjectId);
+    grid[startRow][col] = { schedule: s, sub, duration };
+  });
+  let html =
+    '<table class="dashboard-summary-table"><thead><tr><th class="dashboard-summary-corner" scope="col">TIME</th>';
+  roomList.forEach(r => {
+    html += `<th scope="col" class="dashboard-summary-room-th">${escapeHtml(r.name.toUpperCase())}</th>`;
+  });
+  html += '</tr></thead><tbody>';
+  for (let row = 0; row < rows; row++) {
+    const time = timeSlots[row];
+    const isDayCloseRow = time === TIMETABLE_DAY_CLOSE;
+    html += '<tr>';
+    html += `<th scope="row" class="dashboard-summary-time-th">${escapeHtml(fmt12(time))}</th>`;
+    for (let col = 0; col < cols; col++) {
+      if (isDayCloseRow) {
+        let isPartOfRowspan = false;
+        for (let r = row - 1; r >= 0 && !isPartOfRowspan; r--) {
+          const prevCell = grid[r][col];
+          if (prevCell && r + prevCell.duration > row) isPartOfRowspan = true;
+        }
+        if (!isPartOfRowspan) {
+          html += '<td class="dashboard-summary-slot-close"></td>';
+        }
+        continue;
+      }
+      const cell = grid[row][col];
+      if (cell && row === timeToRow(cell.schedule.timeStart)) {
+        const s = cell.schedule;
+        const sub = cell.sub;
+        const rowspan = cell.duration;
+        const chrome = timetableSlotChrome(s, conflictSinceById, conflictIds);
+        const bg = chrome.bg;
+        const border = chrome.border;
+        const bl = chrome.borderLeftWidth || 3;
+        const dataPal = ` data-tt-fill="${escapeHtml(chrome.bg)}" data-tt-border="${escapeHtml(chrome.border)}"`;
+        html += `<td rowspan="${rowspan}" class="dashboard-summary-busy" data-schedid="${escapeHtml(s.id)}"${dataPal} title="View schedule" style="background:${bg};border-left:${bl}px solid ${border};">`;
+        html += buildDashboardSummaryCellInner(s, sub, chrome);
+        html += '</td>';
+      } else if (!cell || row !== timeToRow(cell.schedule.timeStart)) {
+        let isPartOfRowspan = false;
+        for (let r = row - 1; r >= 0 && !isPartOfRowspan; r--) {
+          const prevCell = grid[r][col];
+          if (prevCell && r + prevCell.duration > row) isPartOfRowspan = true;
+        }
+        if (!isPartOfRowspan) {
+          html += '<td class="dashboard-summary-empty"></td>';
+        }
+      }
+    }
+    html += '</tr>';
+  }
+  html += '</tbody></table>';
   return html;
 }
 
@@ -2334,6 +2487,9 @@ function exportCurriculumHistoryAcademicYear() {
   let scope = state.currentUser?.role === 'admin'
     ? state.schedules
     : state.schedules.filter(s => s.dept === state.currentUser?.dept);
+  if (state.currentUser?.role === 'admin' && (state.curriculumDeptFilter || 'all') !== 'all') {
+    scope = scope.filter(s => s.dept === state.curriculumDeptFilter);
+  }
   let rows = scope.filter(s => scheduleAcademicYearForFilter(s) === ay);
   if (!rows.length) {
     showToast('No historical schedules to export for this academic year.');
@@ -2469,7 +2625,7 @@ function renderRequests() {
                   <div class="request-icon">${icon('building', 20)}</div>
                   <div class="request-info">
                     <div class="request-title">${room?.name || 'Unknown Room'} — ${r.section}</div>
-                    <div class="request-meta">From: <span class="badge-dept ${r.fromDept}">${from?.code || '?'}</span> · ${sub?.code || '?'} · ${r.professorId ? escapeHtml(professorDisplayLineFromPick(r.professorId, r.professorOtherName)) + ' · ' : ''}${r.days.map(d => d.slice(0, 3)).join(', ')} ${fmtSlot24(r.timeStart)}–${fmtSlot24(r.timeEnd)}</div>
+                    <div class="request-meta">From: <span class="badge-dept ${r.fromDept}">${from?.code || '?'}</span> · ${sub?.code || '?'} · ${r.professorId ? escapeHtml(professorDisplayLineFromPick(r.professorId, r.professorOtherName)) + ' · ' : ''}${r.days.map(d => d.slice(0, 3)).join(', ')} ${fmt12(r.timeStart)}–${fmt12(r.timeEnd)}</div>
                     ${r.reason ? `<div class="request-meta request-reason" style="margin-top: 4px; font-style: italic;">${icon('fileText', 14)} "${escapeHtml(r.reason)}"</div>` : ''}
                     <div class="request-meta" style="margin-top: 4px;">Requested: ${r.created}</div>
                   </div>
@@ -2505,7 +2661,7 @@ function renderRequests() {
                   <div class="request-icon">${icon('refresh', 20)}</div>
                   <div class="request-info">
                     <div class="request-title">${room?.name || 'Unknown Room'} from <span class="badge-dept ${r.toDept}">${to?.code || '?'}</span></div>
-                    <div class="request-meta">${sub?.code || '?'} · ${r.section} · ${r.professorId ? escapeHtml(professorDisplayLineFromPick(r.professorId, r.professorOtherName)) + ' · ' : ''}${r.days.map(d => d.slice(0, 3)).join(', ')} ${fmtSlot24(r.timeStart)}–${fmtSlot24(r.timeEnd)}</div>
+                    <div class="request-meta">${sub?.code || '?'} · ${r.section} · ${r.professorId ? escapeHtml(professorDisplayLineFromPick(r.professorId, r.professorOtherName)) + ' · ' : ''}${r.days.map(d => d.slice(0, 3)).join(', ')} ${fmt12(r.timeStart)}–${fmt12(r.timeEnd)}</div>
                     <div style="margin-top: 6px;"><span class="badge-status ${r.status}">${r.status.charAt(0).toUpperCase() + r.status.slice(1)}</span></div>
                   </div>
                 </div>
@@ -2566,7 +2722,7 @@ function renderCurriculumForm(d, opts) {
     <div class="form-group full"><label class="form-label" for="cc_dept">Department</label><select class="form-select" id="cc_dept" ${deptDis}>${deptOpts}</select></div>
     <div class="form-grid curriculum-form-year-sem"><div class="form-group"><label class="form-label" for="cc_year">Year</label><select class="form-select" id="cc_year" ${dis}><option value="">Select year...</option>${yearOpts}${ySel}</select></div><div class="form-group"><label class="form-label" for="cc_semester">Semester</label><select class="form-select" id="cc_semester" ${dis}><option value="">Select semester...</option>${semOpts}${sSel}</select></div></div>
     <div class="form-group full"><label class="form-label" for="cc_ay">Academic Year</label><input class="form-input" id="cc_ay" value="${escapeHtml(ayVal)}" placeholder="2025-2026" ${roInp}></div>
-    <div class="form-grid curriculum-form-code-subject"><div class="form-group"><label class="form-label" for="cc_courseCode">Course code</label><input class="form-input" id="cc_courseCode" placeholder="e.g. IE 100" value="${escapeHtml(d.courseCode || '')}" ${roInp}></div><div class="form-group"><label class="form-label" for="cc_subject">Subject</label><input class="form-input" id="cc_subject" placeholder="Subject title" value="${escapeHtml(d.subjectName || '')}" ${roInp}></div></div>
+    <div class="form-grid curriculum-form-code-subject"><div class="form-group"><label class="form-label" for="cc_courseCode">Code</label><input class="form-input" id="cc_courseCode" placeholder="e.g. IE 100" value="${escapeHtml(d.courseCode || '')}" ${roInp}></div><div class="form-group"><label class="form-label" for="cc_subject">Subject</label><input class="form-input" id="cc_subject" placeholder="Subject title" value="${escapeHtml(d.subjectName || '')}" ${roInp}></div></div>
     <div class="form-grid curriculum-form-units"><div class="form-group"><label class="form-label" for="cc_lecUnits">Lec (units)</label><input class="form-input" id="cc_lecUnits" type="number" min="0" max="12" step="1" value="${escapeHtml(String(lecV))}" ${roInp}></div><div class="form-group"><label class="form-label" for="cc_labUnits">Lab (units)</label><input class="form-input" id="cc_labUnits" type="number" min="0" max="12" step="1" value="${escapeHtml(String(labV))}" ${roInp}></div><div class="form-group"><label class="form-label" for="cc_units_total">Total unit/s</label><input class="form-input" id="cc_units_total" type="text" readonly tabindex="-1" value="${escapeHtml(String(totV))}" aria-live="polite"></div><div class="form-group"><label class="form-label" for="cc_hours">Hours</label><input class="form-input" id="cc_hours" type="number" min="0" max="40" step="0.5" value="${escapeHtml(String(hoursV))}" ${roInp}></div></div>
   </div><input type="hidden" id="cc_edit_id" value="${escapeHtml(d.id || '')}">`;
 }
@@ -2578,27 +2734,30 @@ function renderCurriculum() {
   let termAy = normalizeAcademicYearInput(state.termAcademicYear) || DEFAULT_ACADEMIC_YEAR;
   let chairDept = u?.role === 'chairperson' ? u.dept : '';
   if (!SCHEDULE_FORM_YEARS.includes(state.curriculumYearFilter)) state.curriculumYearFilter = '1st Year';
+  if (u?.role === 'admin' && state.curriculumDeptFilter !== 'all' && !DEPARTMENTS.some(d => d.id === state.curriculumDeptFilter)) {
+    state.curriculumDeptFilter = 'all';
+  }
   let rows = state.curriculum.filter(c => {
     if (chairDept && curriculumFilterDept(c) !== chairDept) return false;
+    if (u?.role === 'admin') {
+      let df = state.curriculumDeptFilter || 'all';
+      if (df !== 'all' && curriculumFilterDept(c) !== df) return false;
+    }
     if (curriculumFilterYear(c) !== state.curriculumYearFilter) return false;
     if (curriculumAcademicYearForFilter(c) !== termAy) return false;
     return true;
   });
   let curriculumSubhead = canMutateCurriculum
     ? 'Add course and subject entries by department, year, and semester. Filter the list below.'
-    : 'View-only: browse entries by department, year, and semester. Department chairs add and update curriculum rows.';
-  let actionsCol = canMutateCurriculum || u?.role === 'admin' ? '<col class="curriculum-col-actions" />' : '';
+    : 'View-only: browse entries by department, year, and semester. Chairs and administrators add and update curriculum rows.';
+  let actionsCol = canMutateCurriculum ? '<col class="curriculum-col-actions" />' : '';
   let actionsTh = canMutateCurriculum
     ? '<th scope="col" class="curriculum-th-actions" aria-label="Actions"></th>'
-    : u?.role === 'admin'
-      ? '<th scope="col" class="curriculum-th-actions" aria-label="View"></th>'
-      : '';
+    : '';
   let rowCells = c =>
     canMutateCurriculum
       ? `<td class="curriculum-td-actions"><button type="button" class="btn btn-outline btn-sm" data-editcrow="${escapeHtml(c.id)}">Edit</button><button type="button" class="btn btn-danger btn-sm" data-delcrow="${escapeHtml(c.id)}">Delete</button></td>`
-      : u?.role === 'admin'
-        ? `<td class="curriculum-td-actions"><button type="button" class="btn btn-outline btn-sm" data-viewcrow="${escapeHtml(c.id)}">View</button></td>`
-        : '';
+      : '';
   let rowsFirstSem = rows.filter(c => curriculumFilterSemester(c) === '1st Semester');
   let rowsSecondSem = rows.filter(c => curriculumFilterSemester(c) === '2nd Semester');
   function curriculumSemTable(title, semRows) {
@@ -2615,7 +2774,7 @@ function renderCurriculum() {
             <col class="curriculum-col-hours" />
             ${actionsCol}
           </colgroup>
-          <thead><tr><th scope="col">Course code</th><th scope="col">Subject</th><th scope="col" class="curriculum-th-num">Lec</th><th scope="col" class="curriculum-th-num">Lab</th><th scope="col" class="curriculum-th-num">Unit/s</th><th scope="col" class="curriculum-th-hours">Hours</th>${actionsTh}</tr></thead>
+          <thead><tr><th scope="col">Code</th><th scope="col">Subject</th><th scope="col" class="curriculum-th-num">Lec</th><th scope="col" class="curriculum-th-num">Lab</th><th scope="col" class="curriculum-th-num">Unit/s</th><th scope="col" class="curriculum-th-hours">Hours</th>${actionsTh}</tr></thead>
           <tbody>
             ${semRows.map(c => `<tr><td>${escapeHtml(c.courseCode)}</td><td class="curriculum-td-subj">${escapeHtml(c.subjectName)}</td><td class="curriculum-td-num">${curriculumColLec(c)}</td><td class="curriculum-td-num">${curriculumColLab(c)}</td><td class="curriculum-td-num">${curriculumColTotal(c)}</td><td class="curriculum-td-hours">${curriculumRequiredHours(c)}</td>${rowCells(c)}</tr>`).join('')}
           </tbody>
@@ -2627,6 +2786,9 @@ function renderCurriculum() {
   let scheduleScope = state.currentUser?.role === 'admin'
     ? state.schedules
     : state.schedules.filter(s => s.dept === state.currentUser?.dept);
+  if (u?.role === 'admin' && (state.curriculumDeptFilter || 'all') !== 'all') {
+    scheduleScope = scheduleScope.filter(s => s.dept === state.curriculumDeptFilter);
+  }
   let historyAyOptions = curriculumHistoryAcademicYearOptions(scheduleScope, state.curriculumHistoryAyFilter || termAy);
   if (!historyAyOptions.includes(state.curriculumHistoryAyFilter)) {
     state.curriculumHistoryAyFilter = historyAyOptions[0] || termAy;
@@ -2937,8 +3099,8 @@ function renderViewSchedule(d) {
         <div class="form-group"><label class="form-label">Room</label><div class="vs-readonly">${escapeHtml(roomDisplayLineFromPick(d.roomId, d.roomOtherName))}</div></div>
       </div>
       <div class="schedule-form-inline-row">
-        <div class="form-group"><label class="form-label">Time start</label><div class="vs-readonly">${escapeHtml(fmtSlot24(d.timeStart))}</div></div>
-        <div class="form-group"><label class="form-label">Time end</label><div class="vs-readonly">${escapeHtml(fmtSlot24(d.timeEnd))}</div></div>
+        <div class="form-group"><label class="form-label">Time start</label><div class="vs-readonly">${escapeHtml(fmt12(d.timeStart))}</div></div>
+        <div class="form-group"><label class="form-label">Time end</label><div class="vs-readonly">${escapeHtml(fmt12(d.timeEnd))}</div></div>
       </div>
     </div>`;
   }
@@ -3186,7 +3348,7 @@ function openModal(modalState) {
   state.sidebarOpen = false;
   if (modalState?.type === 'addCurriculum' && !canUserMutateCurriculum(state.currentUser)) {
     if (!modalState.data?.id) {
-      showToast('Curriculum is view-only for the dean. Department chairs add or edit rows.');
+      showToast('You can only view curriculum. Chairs and administrators add or edit rows.');
       return;
     }
     state.modal = { type: 'addCurriculum', data: { ...modalState.data } };
@@ -3300,6 +3462,11 @@ function bindPage(){
   }
   document.querySelectorAll('#printArea [data-schedid]').forEach(bindScheduleCellOpenDetails);
   document.querySelectorAll('#requestRoomTimetableArea [data-schedid]').forEach(bindScheduleCellOpenDetails);
+  document.querySelectorAll('.dashboard-summary-wrap [data-schedid]').forEach(bindScheduleCellOpenDetails);
+  document.getElementById('dashboardSummaryDay')?.addEventListener('change', e => {
+    state.dashboardSummaryDay = e.target.value;
+    render();
+  });
   document.getElementById('vsEditScheduleBtn')?.addEventListener('click', () => {
     if (state.modal?.type !== 'viewSchedule') return;
     if (isDean) return;
