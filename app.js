@@ -256,6 +256,17 @@ function resolveInitialPage() {
   if (typeof window.CEN_PAGE === 'string' && allowed.includes(window.CEN_PAGE)) return window.CEN_PAGE;
   return HTML_TO_PAGE[file] || 'dashboard';
 }
+/** Keep browser URL clean (root only) while preserving the current SPA view. */
+function forceRootUrlInAddressBar() {
+  try {
+    let p = (location.pathname || '').toLowerCase();
+    if (!p.endsWith('.html')) return;
+    if (!window.history || typeof window.history.replaceState !== 'function') return;
+    window.history.replaceState(window.history.state || {}, '', '/');
+  } catch (e) {
+    /* ignore */
+  }
+}
 function syncPageFromLocationHash() {
   const file = (location.pathname.split('/').pop() || '').toLowerCase();
   if (file !== 'curriculum.html') return;
@@ -5956,6 +5967,7 @@ function showFormValidationBanner(containerId, message) {
 // Init
 initAppTheme();
 state.page = resolveInitialPage();
+forceRootUrlInAddressBar();
 if (sessionStorage.getItem('cen_user') && hasSupabaseClient()) {
   syncCoreDataFromSupabase().finally(() => {
     render();
