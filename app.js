@@ -77,8 +77,8 @@ const SCHEDULE_FORM_YEARS = ['1st Year', '2nd Year', '3rd Year', '4th Year'];
 const SCHEDULE_FORM_SEMS = ['1st Semester', '2nd Semester'];
 /** Semester ordering for schedule cascade & curriculum rows that still use Midyear in data. */
 const CURRICULUM_FORM_SEMS = ['1st Semester', '2nd Semester', 'Midyear'];
-/** Curriculum page semester dropdowns (filters + Add Subject modal) — 1st / 2nd only. */
-const CURRICULUM_PAGE_SEMS = ['1st Semester', '2nd Semester'];
+/** Curriculum page semester dropdowns (filters + Add Subject modal). */
+const CURRICULUM_PAGE_SEMS = ['1st Semester', '2nd Semester', 'Midyear'];
 const DEFAULT_ACADEMIC_YEAR = '2025-2026';
 const TERM_AY_OTHER_VALUE = '__other__';
 const SECTION_SAMPLES_BY_DEPT_BASE =
@@ -149,19 +149,7 @@ function rememberCustomAcademicYear(ay) {
 }
 function renderTopbarCenter() {
   if (state.page === 'curriculum') {
-    let u = state.currentUser;
-    let deptFilter = state.curriculumDeptFilter || 'all';
-    let deptSelect = '';
-    if (u?.role === 'admin') {
-      let deptOpts =
-        `<option value="all" ${deptFilter === 'all' ? 'selected' : ''}>All departments</option>` +
-        DEPARTMENTS.map(
-          d =>
-            `<option value="${escapeHtml(d.id)}" ${deptFilter === d.id ? 'selected' : ''}>${escapeHtml(d.code)} — ${escapeHtml(d.name)}</option>`,
-        ).join('');
-      deptSelect = `<select class="filter-select curriculum-topbar-dept" id="curriculumDeptFilter" aria-label="Department filter">${deptOpts}</select>`;
-    }
-    return `<div class="curriculum-topbar-left"><div class="page-title page-title-curriculum-left">${escapeHtml(curriculumTopbarDegreeTitle())}</div>${deptSelect}</div>`;
+    return `<div class="curriculum-topbar-left"><div class="page-title page-title-curriculum-left">${escapeHtml(curriculumTopbarDegreeTitle())}</div></div>`;
   }
   let termPages = ['schedule', 'curriculum', 'requests'];
   if (!termPages.includes(state.page)) {
@@ -230,6 +218,26 @@ function curriculumFilterSemester(c) {
   let s = (c.semester || '').trim();
   if (s) return s;
   return (CURRICULUM_DATA?.find(b => b.id === c.id)?.semester || '').trim();
+}
+/** Curriculum toolbar value: two main semesters only (excludes Midyear in the data filter). */
+const CURRICULUM_SEM_FILTER_FIRST_AND_SECOND = 'First and Second Semester';
+function migrateCurriculumSemFilterStored(sf) {
+  if (sf === '1st and 2nd Semester') return CURRICULUM_SEM_FILTER_FIRST_AND_SECOND;
+  return sf;
+}
+function curriculumRowMatchesSemesterFilter(c, sf) {
+  sf = migrateCurriculumSemFilterStored(sf || '') || CURRICULUM_SEM_FILTER_FIRST_AND_SECOND;
+  if (sf === 'all') return true;
+  if (sf === CURRICULUM_SEM_FILTER_FIRST_AND_SECOND) {
+    let sem = curriculumFilterSemester(c);
+    return sem === '1st Semester' || sem === '2nd Semester';
+  }
+  return curriculumFilterSemester(c) === sf;
+}
+function curriculumSemFilterEffective() {
+  let v = state.curriculumSemFilter;
+  if (v == null || v === '') return CURRICULUM_SEM_FILTER_FIRST_AND_SECOND;
+  return migrateCurriculumSemFilterStored(v);
 }
 
 function pageHref(pageId) {
@@ -321,8 +329,7 @@ function hydratePersistedData() {
     if (o.curriculumDeptFilter != null) state.curriculumDeptFilter = o.curriculumDeptFilter;
     if (o.curriculumYearFilter != null) state.curriculumYearFilter = o.curriculumYearFilter;
     if (o.curriculumAcademicYearFilter != null) state.curriculumAcademicYearFilter = o.curriculumAcademicYearFilter;
-    if (o.curriculumSemFilter != null) state.curriculumSemFilter = o.curriculumSemFilter;
-    if (state.curriculumSemFilter === 'Midyear') state.curriculumSemFilter = 'all';
+    if (o.curriculumSemFilter != null) state.curriculumSemFilter = migrateCurriculumSemFilterStored(o.curriculumSemFilter);
     if (o.termSemester != null) state.termSemester = o.termSemester;
     if (o.termAcademicYear != null) state.termAcademicYear = o.termAcademicYear;
     if (o.termAcademicYearCustom != null) state.termAcademicYearCustom = o.termAcademicYearCustom;
@@ -333,6 +340,10 @@ function hydratePersistedData() {
     if (o.requestTimetableDept != null) state.requestTimetableDept = o.requestTimetableDept;
     if (o.requestTimetableRoom != null) state.requestTimetableRoom = o.requestTimetableRoom;
     if (o.sectionYearFilter != null) state.sectionYearFilter = o.sectionYearFilter;
+    if (o.sectionDeptFilter != null) state.sectionDeptFilter = o.sectionDeptFilter;
+    if (o.sectionAcademicYearFilter != null) {
+      state.sectionAcademicYearFilter = normalizeAcademicYearInput(o.sectionAcademicYearFilter) || DEFAULT_ACADEMIC_YEAR;
+    }
     if (o.dashboardSummaryDay != null && typeof o.dashboardSummaryDay === 'string' && DAYS_WITH_SATURDAY.includes(o.dashboardSummaryDay)) {
       state.dashboardSummaryDay = o.dashboardSummaryDay;
     }
@@ -382,6 +393,8 @@ function persistAppData() {
       requestTimetableDept: state.requestTimetableDept,
       requestTimetableRoom: state.requestTimetableRoom,
       sectionYearFilter: state.sectionYearFilter,
+      sectionDeptFilter: state.sectionDeptFilter,
+      sectionAcademicYearFilter: state.sectionAcademicYearFilter,
       dashboardSummaryDay: state.dashboardSummaryDay,
     })
   );
@@ -410,7 +423,9 @@ let state = {
   curriculumDeptFilter: 'all',
   curriculumYearFilter: 'all',
   curriculumAcademicYearFilter: DEFAULT_ACADEMIC_YEAR,
-  curriculumSemFilter: 'all',
+  curriculumSemFilter: CURRICULUM_SEM_FILTER_FIRST_AND_SECOND,
+  /** When set, that semester table (`curriculum-*-first` etc.) is in inline edit mode. */
+  curriculumTableEditId: null,
   termSemester: '1st Semester',
   termAcademicYear: DEFAULT_ACADEMIC_YEAR,
   termAcademicYearCustom: '',
@@ -421,6 +436,8 @@ let state = {
   requestTimetableRoom: '',
   dashboardSummaryDay: 'Monday',
   sectionYearFilter: 'all',
+  sectionDeptFilter: 'all',
+  sectionAcademicYearFilter: DEFAULT_ACADEMIC_YEAR,
 };
 let nextId = 100;
 const genId = () => `id_${Date.now().toString(36)}_${Math.random().toString(36).slice(2, 10)}`;
@@ -980,10 +997,7 @@ function curriculumTopbarDegreeTitle() {
   let aySuffix = ` (AY ${ay})`;
   if (!u) return `Curriculum${aySuffix}`;
   if (u.role === 'admin') {
-    let df = state.curriculumDeptFilter || 'all';
-    if (df === 'all') return `Curriculum — All departments${aySuffix}`;
-    let d = getDept(df);
-    return d ? `Curriculum of BS ${d.name}${aySuffix}` : `Curriculum${aySuffix}`;
+    return `Curriculum — All departments${aySuffix}`;
   }
   if (u.dept) {
     let d = getDept(u.dept);
@@ -1028,12 +1042,206 @@ function curriculumRequiredHours(c) {
   if (Number.isFinite(total) && total > 0) return escapeHtml(String(total));
   return '—';
 }
+/** Numeric required weekly hours for a curriculum row (same rules as {@link curriculumRequiredHours}). */
+function curriculumRowRequiredHoursNumber(c) {
+  let lec = Number(c.lecUnits);
+  let lab = Number(c.labUnits);
+  let lecH = Number.isFinite(lec) ? lec : 0;
+  let labH = Number.isFinite(lab) ? lab * 3 : 0;
+  if (Number.isFinite(lec) || Number.isFinite(lab)) return lecH + labH;
+  let rh = Number(c.requiredHours);
+  if (Number.isFinite(rh) && rh >= 0) return rh;
+  let total = Number(c.units);
+  if (Number.isFinite(total) && total > 0) return total;
+  return null;
+}
+/** Banner text for curriculum year blocks (formal document style). */
+function curriculumYearBlockBannerLabel(yearKey) {
+  let y = String(yearKey || '').trim();
+  let map = { '1st Year': 'FIRST YEAR', '2nd Year': 'SECOND YEAR', '3rd Year': 'THIRD YEAR', '4th Year': 'FOURTH YEAR' };
+  return map[y] || y.toUpperCase();
+}
+/** Subject master IDs whose codes match this curriculum row (same rules as schedule subject picker). */
+function subjectIdsForCurriculumRow(c) {
+  let dept = curriculumFilterDept(c);
+  if (!dept) return new Set();
+  let cc = normalizeSubjectCode(curriculumCodeFromRow(c));
+  if (!cc) return new Set();
+  let expanded = expandNormalizedCodesForDept(dept, cc);
+  let out = new Set();
+  for (let s of subjectsSourceForCreateSchedule()) {
+    if ((s.dept || '') !== dept) continue;
+    if (expanded.has(normalizeSubjectCode(s.code))) out.add(s.id);
+  }
+  return out;
+}
+/** Total weekly hours already on the timetable for this catalog row (all sections), same scope as subject code matching. */
+function curriculumScheduledWeeklyHoursTotalForRow(c, ayFilter) {
+  let dept = curriculumFilterDept(c);
+  let year = curriculumFilterYear(c);
+  let sem = curriculumFilterSemester(c);
+  let ay = normalizeAcademicYearInput(ayFilter) || DEFAULT_ACADEMIC_YEAR;
+  let subjectIds = subjectIdsForCurriculumRow(c);
+  if (!subjectIds.size) return null;
+  let total = 0;
+  for (let s of state.schedules) {
+    if (!s || (s.dept || '') !== dept) continue;
+    if ((s.schYear || '').trim() !== year) continue;
+    if ((s.schSem || '').trim() !== sem) continue;
+    if (scheduleAcademicYearForFilter(s) !== ay) continue;
+    if (!s.subjectId || !subjectIds.has(s.subjectId)) continue;
+    total += scheduleWeeklyHoursFromEntry(s);
+  }
+  return total;
+}
+/** Remaining hours to schedule, or a “Scheduled” pill when complete (see `.curriculum-sched-badge--scheduled`). */
+function curriculumScheduledHoursCellHtml(c, ayFilter) {
+  let subjectIds = subjectIdsForCurriculumRow(c);
+  if (!subjectIds.size) return '<span class="curriculum-sched-empty">—</span>';
+  let required = curriculumRowRequiredHoursNumber(c);
+  if (required == null || !Number.isFinite(required) || required <= 0) return '<span class="curriculum-sched-empty">—</span>';
+  let scheduled = curriculumScheduledWeeklyHoursTotalForRow(c, ayFilter);
+  if (scheduled == null || !Number.isFinite(scheduled)) scheduled = 0;
+  let remaining = Math.max(0, required - scheduled);
+  if (remaining < 0.01) {
+    return '<span class="curriculum-sched-badge curriculum-sched-badge--scheduled">Scheduled</span>';
+  }
+  return `<span class="curriculum-sched-remaining">${escapeHtml(formatHoursValue(remaining))} hours</span>`;
+}
 function computedCurriculumHoursFromUnits(lecUnits, labUnits) {
   let lec = Number(lecUnits);
   let lab = Number(labUnits);
   let lecH = Number.isFinite(lec) ? lec : 0;
   let labH = Number.isFinite(lab) ? lab * 3 : 0;
   return lecH + labH;
+}
+/** Read inline curriculum table inputs and upsert all rows (same semester block). */
+async function commitCurriculumTableInlineSave(tableId) {
+  if (!tableId || state.curriculumTableEditId !== tableId) return;
+  if (!canUserMutateCurriculum(state.currentUser)) return;
+  let root = document.getElementById(tableId);
+  if (!root) return;
+  let tbody = root.querySelector('tbody');
+  if (!tbody) return;
+  let updates = [];
+  for (let tr of tbody.querySelectorAll('tr')) {
+    let firstInp = tr.querySelector('.curriculum-inline-input');
+    if (!firstInp) continue;
+    let rid = firstInp.dataset.cdId;
+    if (!rid) continue;
+    let fields = {};
+    tr.querySelectorAll('.curriculum-inline-input').forEach(inp => {
+      fields[inp.dataset.cdField] = inp.value;
+    });
+    let orig = state.curriculum.find(c => c.id === rid);
+    if (!orig) continue;
+    let courseCode = (fields.courseCode || '').trim();
+    let subjectName = (fields.subjectName || '').trim();
+    if (!courseCode || !subjectName) {
+      showToast('Each row must have a code and subject.');
+      return;
+    }
+    let lecU = parseInt(fields.lecUnits, 10);
+    let labU = parseInt(fields.labUnits, 10);
+    let lecUnits = Number.isFinite(lecU) ? lecU : 0;
+    let labUnits = Number.isFinite(labU) ? labU : 0;
+    let unitU = parseInt(fields.units, 10);
+    let units = Number.isFinite(unitU) ? unitU : lecUnits + labUnits;
+    let hoursU = parseFloat(fields.requiredHours);
+    let requiredHours = Number.isFinite(hoursU) ? hoursU : computedCurriculumHoursFromUnits(lecUnits, labUnits);
+    updates.push({
+      ...orig,
+      courseCode,
+      subjectName,
+      lecUnits,
+      labUnits,
+      units,
+      requiredHours,
+      subjectCode: (courseCode || '').replace(/\s+/g, '') || orig.subjectCode || '',
+      courseName: subjectName,
+    });
+  }
+  if (!updates.length) {
+    state.curriculumTableEditId = null;
+    render();
+    return;
+  }
+  if (!window.confirm(`Save ${updates.length} curriculum row(s) in this table?`)) return;
+  if (hasSupabaseClient()) {
+    const { error } = await upsertCurriculumDb(updates);
+    if (error) {
+      window.alert(`Unable to save curriculum in Supabase: ${error.message}`);
+      return;
+    }
+  }
+  for (let row of updates) {
+    let i = state.curriculum.findIndex(c => c.id === row.id);
+    if (i >= 0) state.curriculum[i] = row;
+    if (Number.isFinite(Number(row.requiredHours))) rememberCurriculumRequiredHours(row.id, row.requiredHours);
+  }
+  state.curriculumTableEditId = null;
+  showToast('Curriculum saved');
+  render();
+}
+/** Save one inline-edited curriculum row (same semester table); keeps table in edit mode. */
+async function commitCurriculumTableInlineSaveRow(tableId, rowId) {
+  if (!tableId || !rowId || state.curriculumTableEditId !== tableId) return;
+  if (!canUserMutateCurriculum(state.currentUser)) return;
+  let root = document.getElementById(tableId);
+  if (!root) return;
+  let tr = null;
+  for (let r of root.querySelectorAll('tbody tr')) {
+    let firstInp = r.querySelector('.curriculum-inline-input');
+    if (firstInp && firstInp.dataset.cdId === rowId) {
+      tr = r;
+      break;
+    }
+  }
+  if (!tr) return;
+  let fields = {};
+  tr.querySelectorAll('.curriculum-inline-input').forEach(inp => {
+    fields[inp.dataset.cdField] = inp.value;
+  });
+  let orig = state.curriculum.find(c => c.id === rowId);
+  if (!orig) return;
+  let courseCode = (fields.courseCode || '').trim();
+  let subjectName = (fields.subjectName || '').trim();
+  if (!courseCode || !subjectName) {
+    showToast('Each row must have a code and subject.');
+    return;
+  }
+  let lecU = parseInt(fields.lecUnits, 10);
+  let labU = parseInt(fields.labUnits, 10);
+  let lecUnits = Number.isFinite(lecU) ? lecU : 0;
+  let labUnits = Number.isFinite(labU) ? labU : 0;
+  let unitU = parseInt(fields.units, 10);
+  let units = Number.isFinite(unitU) ? unitU : lecUnits + labUnits;
+  let hoursU = parseFloat(fields.requiredHours);
+  let requiredHours = Number.isFinite(hoursU) ? hoursU : computedCurriculumHoursFromUnits(lecUnits, labUnits);
+  let updated = {
+    ...orig,
+    courseCode,
+    subjectName,
+    lecUnits,
+    labUnits,
+    units,
+    requiredHours,
+    subjectCode: (courseCode || '').replace(/\s+/g, '') || orig.subjectCode || '',
+    courseName: subjectName,
+  };
+  if (!window.confirm(MSG_CONFIRM_SAVE_CURRICULUM_EDIT)) return;
+  if (hasSupabaseClient()) {
+    const { error } = await upsertCurriculumDb([updated]);
+    if (error) {
+      window.alert(`Unable to save curriculum in Supabase: ${error.message}`);
+      return;
+    }
+  }
+  let i = state.curriculum.findIndex(c => c.id === rowId);
+  if (i >= 0) state.curriculum[i] = updated;
+  if (Number.isFinite(Number(updated.requiredHours))) rememberCurriculumRequiredHours(updated.id, updated.requiredHours);
+  showToast('Row saved');
+  render();
 }
 /** Display time as 12-hour clock (no AM/PM), e.g. 7:30, 12:00 — for timetables, summaries, forms. */
 function fmt12(t) { let [h,m]=t.split(':').map(Number); return `${h % 12 || 12}:${String(m).padStart(2, '0')}`; }
@@ -1979,7 +2187,7 @@ function render() {
       <div class="sidebar ${state.sidebarOpen?'open':''}" id="sidebar">${renderSidebar()}</div>
       <div class="overlay ${state.sidebarOpen?'show':''}" id="overlay"></div>
       <div class="main">
-        <div class="topbar"><span class="hamburger" id="hamburger" role="button" tabindex="0" aria-label="Open menu">${icon('menu', 22)}</span>${renderTopbarCenter()}<div class="topbar-actions"><button type="button" class="btn btn-outline btn-sm theme-toggle" id="themeToggleBtn" aria-label="${document.documentElement.dataset.theme === 'dark' ? 'Switch to light mode' : 'Switch to dark mode'}">${document.documentElement.dataset.theme === 'dark' ? icon('sun', 18) : icon('moon', 18)}</button>${state.page==='schedule'&&state.currentUser?.role!=='admin'?`<button type="button" class="btn btn-schedule-clear-all btn-sm" id="clearAllSchedulesBtn">Clear All</button><button type="button" class="btn btn-primary btn-sm btn-schedule-add-pill" id="addSchedBtn">${icon('plus', 16)} Add Schedule</button>`:''}${state.page==='curriculum'&&(state.currentUser?.role==='chairperson'||state.currentUser?.role==='admin')?`<button type="button" class="btn btn-outline btn-sm curriculum-export-btn" id="curriculumExportBtn">${icon('fileText', 16)} Export</button><button type="button" class="btn btn-primary btn-sm" id="addCurriculumBtn">${icon('plus', 16)} Add Subject</button>`:''}${state.page==='requests'&&state.currentUser?.role==='chairperson'?`<button class="btn btn-primary btn-sm" id="requestRoomTopBtn">${icon('plus', 16)} Create a Request</button>`:''}</div></div>
+        <div class="topbar"><span class="hamburger" id="hamburger" role="button" tabindex="0" aria-label="Open menu">${icon('menu', 22)}</span>${renderTopbarCenter()}<div class="topbar-actions"><button type="button" class="btn btn-outline btn-sm theme-toggle" id="themeToggleBtn" aria-label="${document.documentElement.dataset.theme === 'dark' ? 'Switch to light mode' : 'Switch to dark mode'}">${document.documentElement.dataset.theme === 'dark' ? icon('sun', 18) : icon('moon', 18)}</button>${state.page==='section'&&(state.currentUser?.role==='chairperson'||state.currentUser?.role==='admin')?`<button type="button" class="btn btn-primary btn-sm btn-schedule-add-pill" id="addSectionBtn">${icon('plus', 16)} Add Section</button>`:''}${state.page==='schedule'&&state.currentUser?.role!=='admin'?`<button type="button" class="btn btn-schedule-clear-all btn-sm" id="clearAllSchedulesBtn">Clear All</button><button type="button" class="btn btn-primary btn-sm btn-schedule-add-pill" id="addSchedBtn">${icon('plus', 16)} Add Schedule</button>`:''}${state.page==='curriculum'&&(state.currentUser?.role==='chairperson'||state.currentUser?.role==='admin')?`<button type="button" class="btn btn-outline btn-sm curriculum-export-btn" id="curriculumExportBtn">${icon('fileText', 16)} Export</button><button type="button" class="btn btn-primary btn-sm" id="addCurriculumBtn">${icon('plus', 16)} Add Subject</button>`:''}${state.page==='requests'&&state.currentUser?.role==='chairperson'?`<button class="btn btn-primary btn-sm" id="requestRoomTopBtn">${icon('plus', 16)} Create a Request</button>`:''}</div></div>
         <div class="content">${renderPage()}</div>
       </div>
     </div>
@@ -2021,8 +2229,8 @@ function renderSidebar() {
   let isUtilitiesOpen = !!state.utilitiesNavOpen;
   let utilitiesNav = u.role === 'admin'
     ? `
-      <a href="#" id="utilitiesNavToggle" class="nav-item ${state.page === 'section' || state.page === 'room' || state.page === 'forms' ? 'active' : ''}" aria-expanded="${isUtilitiesOpen ? 'true' : 'false'}">
-        <span class="nav-icon">${icon('settings', 18)}</span>Utilities
+      <a href="#" id="utilitiesNavToggle" class="nav-item ${state.page === 'section' || state.page === 'room' || state.page === 'forms' ? 'active' : ''}" aria-expanded="${isUtilitiesOpen ? 'true' : 'false'}" aria-label="Records">
+        <span class="nav-icon">${icon('settings', 18)}</span>Records
         <span style="margin-left:auto;font-weight:700;display:inline-block;transform:${isUtilitiesOpen ? 'rotate(90deg)' : 'none'};transform-origin:center;">&gt;</span>
       </a>
       ${isUtilitiesOpen ? `
@@ -2683,7 +2891,7 @@ function exportVisibleTimetable(format) {
     showToast('Excel exported.');
   }
 }
-/** Excel export for the curriculum tables currently shown (year filter, academic year filter, department scope). */
+/** Excel export for the curriculum tables currently shown (semester, year level, academic year filters). */
 function exportCurriculumTableCsv() {
   if (state.page !== 'curriculum') return;
   mergeMissingCurriculumRowsInto(state.curriculum);
@@ -2692,26 +2900,28 @@ function exportCurriculumTableCsv() {
   let curriculumAyFilter = normalizeAcademicYearInput(state.curriculumAcademicYearFilter) || termAy;
   let chairDept = u?.role === 'chairperson' ? u.dept : '';
   if (state.curriculumYearFilter !== 'all' && !SCHEDULE_FORM_YEARS.includes(state.curriculumYearFilter)) state.curriculumYearFilter = 'all';
-  if (u?.role === 'admin' && state.curriculumDeptFilter !== 'all' && !DEPARTMENTS.some(d => d.id === state.curriculumDeptFilter)) {
-    state.curriculumDeptFilter = 'all';
-  }
   let rows = state.curriculum.filter(c => {
     if (chairDept && curriculumFilterDept(c) !== chairDept) return false;
-    if (u?.role === 'admin') {
-      let df = state.curriculumDeptFilter || 'all';
-      if (df !== 'all' && curriculumFilterDept(c) !== df) return false;
-    }
     if (state.curriculumYearFilter !== 'all' && curriculumFilterYear(c) !== state.curriculumYearFilter) return false;
     if (curriculumAcademicYearForFilter(c) !== curriculumAyFilter) return false;
+    let sf = curriculumSemFilterEffective();
+    if (!curriculumRowMatchesSemesterFilter(c, sf)) return false;
     return true;
   });
   if (!rows.length) {
     showToast('No curriculum rows to export for this filter.');
     return;
   }
+  function curriculumExportSemOrder(sem) {
+    let s = String(sem || '').trim();
+    if (s === '1st Semester') return 0;
+    if (s === '2nd Semester') return 1;
+    if (s === 'Midyear') return 2;
+    return 3;
+  }
   let sorted = rows.slice().sort((a, b) => {
-    let oa = curriculumFilterSemester(a) === '1st Semester' ? 0 : 1;
-    let ob = curriculumFilterSemester(b) === '1st Semester' ? 0 : 1;
+    let oa = curriculumExportSemOrder(curriculumFilterSemester(a));
+    let ob = curriculumExportSemOrder(curriculumFilterSemester(b));
     if (oa !== ob) return oa - ob;
     return String(a.courseCode || '').localeCompare(String(b.courseCode || ''), undefined, { sensitivity: 'base' });
   });
@@ -2755,12 +2965,7 @@ function exportCurriculumTableCsv() {
           .join('')}</tr>`,
     )
     .join('');
-  let deptSlug =
-    u?.role === 'admin'
-      ? (state.curriculumDeptFilter || 'all') === 'all'
-        ? 'all'
-        : getDept(state.curriculumDeptFilter)?.code || state.curriculumDeptFilter
-      : getDept(chairDept)?.code || chairDept || 'dept';
+  let deptSlug = u?.role === 'admin' ? 'all' : getDept(chairDept)?.code || chairDept || 'dept';
   let yearSlug = String(state.curriculumYearFilter || 'all').replace(/\s+/g, '-');
   let html = `<!DOCTYPE html><html><head><meta charset="utf-8"><style>
       @page { size: A4 portrait; margin: 0.45in; }
@@ -3235,17 +3440,12 @@ function renderCurriculum() {
   let curriculumAyOptions = [...aySet].filter(Boolean).sort((a, b) => String(a).localeCompare(String(b)));
   if (!curriculumAyOptions.includes(curriculumAyFilter)) curriculumAyFilter = termAy;
   state.curriculumAcademicYearFilter = curriculumAyFilter;
-  if (u?.role === 'admin' && state.curriculumDeptFilter !== 'all' && !DEPARTMENTS.some(d => d.id === state.curriculumDeptFilter)) {
-    state.curriculumDeptFilter = 'all';
-  }
   let rows = state.curriculum.filter(c => {
     if (chairDept && curriculumFilterDept(c) !== chairDept) return false;
-    if (u?.role === 'admin') {
-      let df = state.curriculumDeptFilter || 'all';
-      if (df !== 'all' && curriculumFilterDept(c) !== df) return false;
-    }
     if (state.curriculumYearFilter !== 'all' && curriculumFilterYear(c) !== state.curriculumYearFilter) return false;
     if (curriculumAcademicYearForFilter(c) !== curriculumAyFilter) return false;
+    let sf = curriculumSemFilterEffective();
+    if (!curriculumRowMatchesSemesterFilter(c, sf)) return false;
     return true;
   });
   let yearFilterOpts = [['all', 'All Year Levels'], ...SCHEDULE_FORM_YEARS.map(y => [y, y])].map(([y, rawLabel]) => {
@@ -3265,27 +3465,104 @@ function renderCurriculum() {
   let academicYearFilterOpts = curriculumAyOptions
     .map(ay => `<option value="${escapeHtml(ay)}" ${curriculumAyFilter === ay ? 'selected' : ''}>${escapeHtml(ay)}</option>`)
     .join('');
+  let semFilterVal = curriculumSemFilterEffective();
+  let semFilterOpts = [
+    ['all', 'All Semester'],
+    ['1st Semester', 'First Semester'],
+    ['2nd Semester', 'Second Semester'],
+    [CURRICULUM_SEM_FILTER_FIRST_AND_SECOND, 'First and Second Semester'],
+    ['Midyear', 'Midyear'],
+  ]
+    .map(
+      ([v, lab]) =>
+        `<option value="${escapeHtml(v)}" ${semFilterVal === v ? 'selected' : ''}>${escapeHtml(lab)}</option>`,
+    )
+    .join('');
   let curriculumToolbar = `<div class="curriculum-toolbar-block">
-    <div class="curriculum-toolbar-main curriculum-toolbar-year-only">
-      <select class="filter-select curriculum-filter-select curriculum-year-filter-select" id="curriculumYearFilter" aria-label="Curriculum year">${yearFilterOpts}</select>
-      <select class="filter-select curriculum-filter-select curriculum-year-filter-select" id="curriculumAcademicYearFilter" aria-label="Curriculum academic year">${academicYearFilterOpts}</select>
+    <div class="curriculum-toolbar-filters">
+      <div class="curriculum-filter-field curriculum-filter-field--inline">
+        <select class="filter-select curriculum-filter-select curriculum-toolbar-filter-select" id="curriculumSemFilter" aria-label="Semester filter">${semFilterOpts}</select>
+      </div>
+      <div class="curriculum-filter-field curriculum-filter-field--inline">
+        <select class="filter-select curriculum-filter-select curriculum-toolbar-filter-select" id="curriculumYearFilter" aria-label="Year level filter">${yearFilterOpts}</select>
+      </div>
+      <div class="curriculum-filter-field curriculum-filter-field--inline">
+        <select class="filter-select curriculum-filter-select curriculum-toolbar-filter-select" id="curriculumAcademicYearFilter" aria-label="Academic year filter">${academicYearFilterOpts}</select>
+      </div>
     </div>
   </div>`;
-  let actionsCol = canMutateCurriculum ? '<col class="curriculum-col-actions" />' : '';
-  let actionsTh = canMutateCurriculum
-    ? '<th scope="col" class="curriculum-th-actions" aria-label="Actions"></th>'
-    : '';
-  let rowCells = c =>
-    canMutateCurriculum
-      ? `<td class="curriculum-td-actions"><button type="button" class="btn btn-outline btn-sm" data-editcrow="${escapeHtml(c.id)}">Edit</button><button type="button" class="btn btn-danger btn-sm" data-delcrow="${escapeHtml(c.id)}">Delete</button></td>`
-      : '';
-  let rowsFirstSem = rows.filter(c => curriculumFilterSemester(c) === '1st Semester');
-  let rowsSecondSem = rows.filter(c => curriculumFilterSemester(c) === '2nd Semester');
+  let schedCol = '<col class="curriculum-col-sched" />';
+  let schedTh = '<th scope="col" class="curriculum-th-sched">Remaining hours</th>';
+  let rowSched = c => `<td class="curriculum-td-sched">${curriculumScheduledHoursCellHtml(c, curriculumAyFilter)}</td>`;
+  function sortCurriculumRowsForTable(list) {
+    return list.slice().sort((a, b) => String(a.courseCode || '').localeCompare(String(b.courseCode || ''), undefined, { sensitivity: 'base' }));
+  }
+  if (!rows.length) {
+    return `
+    <div class="curriculum-panel">
+      ${curriculumToolbar}
+      <div class="curriculum-years-stack">
+        <div class="curriculum-empty curriculum-empty-panel">No curriculum rows match these filters.</div>
+      </div>
+    </div>`;
+  }
   function curriculumSemTable(title, semRows, id) {
+    let sorted = sortCurriculumRowsForTable(semRows);
+    let isEditing = !!(canMutateCurriculum && state.curriculumTableEditId === id);
+    let bannerButtons = '';
+    if (canMutateCurriculum && (sorted.length > 0 || isEditing)) {
+      if (isEditing) {
+        bannerButtons = `<div class="curriculum-sem-banner-actions">
+          <button type="button" class="btn btn-sm curriculum-banner-cancel-btn" data-curriculum-table-cancel="">Cancel</button>
+        </div>`;
+      } else {
+        bannerButtons = `<button type="button" class="btn btn-sm curriculum-banner-edit-btn" data-curriculum-table-edit="${escapeHtml(id)}">Edit</button>`;
+      }
+    }
+    let bannerInner = `<span class="curriculum-sem-banner-title">${escapeHtml(title)}</span>${bannerButtons}`;
+    let headColspan = isEditing ? 8 : 7;
+    let bannerRow = `<tr><th colspan="${headColspan}" class="curriculum-th-sem-banner curriculum-th-sem-banner--full${canMutateCurriculum ? ' curriculum-th-sem-banner--toolbar' : ''}" scope="colgroup"><div class="curriculum-sem-banner-inner">${bannerInner}</div></th></tr>`;
+    let actionsHead = isEditing
+      ? '<th scope="col" class="curriculum-th-actions-head" aria-label="Row actions"></th>'
+      : '';
+    let actionsCol = isEditing ? '<col class="curriculum-col-actions" />' : '';
+    let columnHeadRow = `<tr><th scope="col">Code</th><th scope="col">Subject</th><th scope="col" class="curriculum-th-num">Lec</th><th scope="col" class="curriculum-th-num">Lab</th><th scope="col" class="curriculum-th-num">Unit/s</th><th scope="col" class="curriculum-th-hours">Hours</th>${schedTh}${actionsHead}</tr>`;
+    function numericHoursDefault(c) {
+      let lec = Number(c.lecUnits);
+      let lab = Number(c.labUnits);
+      let lecH = Number.isFinite(lec) ? lec : 0;
+      let labH = Number.isFinite(lab) ? lab * 3 : 0;
+      if (Number.isFinite(lec) || Number.isFinite(lab)) return String(lecH + labH);
+      if (Number.isFinite(Number(c.requiredHours))) return String(Number(c.requiredHours));
+      let u = Number(c.units);
+      if (Number.isFinite(u) && u > 0) return String(u);
+      return '';
+    }
+    function renderBodyRow(c) {
+      if (!isEditing) {
+        return `<tr><td>${escapeHtml(c.courseCode)}</td><td class="curriculum-td-subj">${escapeHtml(c.subjectName)}</td><td class="curriculum-td-num">${curriculumColLec(c)}</td><td class="curriculum-td-num">${curriculumColLab(c)}</td><td class="curriculum-td-num">${curriculumColTotal(c)}</td><td class="curriculum-td-hours">${curriculumRequiredHours(c)}</td>${rowSched(c)}</tr>`;
+      }
+      let lecN = c.lecUnits != null && Number.isFinite(Number(c.lecUnits)) ? String(Number(c.lecUnits)) : '';
+      let labN = c.labUnits != null && Number.isFinite(Number(c.labUnits)) ? String(Number(c.labUnits)) : '';
+      let unitN = '';
+      if (c.units != null && Number.isFinite(Number(c.units))) unitN = String(Number(c.units));
+      else if (lecN !== '' || labN !== '') unitN = String((parseInt(lecN, 10) || 0) + (parseInt(labN, 10) || 0));
+      let hrs = numericHoursDefault(c);
+      return `<tr>
+        <td><input type="text" class="form-input curriculum-inline-input" data-cd-id="${escapeHtml(c.id)}" data-cd-field="courseCode" value="${escapeHtml(c.courseCode || '')}" autocomplete="off" /></td>
+        <td class="curriculum-td-subj"><input type="text" class="form-input curriculum-inline-input" data-cd-id="${escapeHtml(c.id)}" data-cd-field="subjectName" value="${escapeHtml(c.subjectName || '')}" autocomplete="off" /></td>
+        <td class="curriculum-td-num"><input type="number" min="0" max="12" step="1" class="form-input curriculum-inline-input curriculum-inline-input--num" data-cd-id="${escapeHtml(c.id)}" data-cd-field="lecUnits" value="${escapeHtml(lecN)}" /></td>
+        <td class="curriculum-td-num"><input type="number" min="0" max="12" step="1" class="form-input curriculum-inline-input curriculum-inline-input--num" data-cd-id="${escapeHtml(c.id)}" data-cd-field="labUnits" value="${escapeHtml(labN)}" /></td>
+        <td class="curriculum-td-num"><input type="number" min="0" max="24" step="1" class="form-input curriculum-inline-input curriculum-inline-input--num" data-cd-id="${escapeHtml(c.id)}" data-cd-field="units" value="${escapeHtml(unitN)}" /></td>
+        <td class="curriculum-td-hours"><input type="number" min="0" max="60" step="0.5" class="form-input curriculum-inline-input curriculum-inline-input--num" data-cd-id="${escapeHtml(c.id)}" data-cd-field="requiredHours" value="${escapeHtml(hrs)}" /></td>
+        <td class="curriculum-td-sched">${curriculumScheduledHoursCellHtml(c, curriculumAyFilter)}</td>
+        <td class="curriculum-td-inline-actions"><div class="curriculum-inline-action-buttons"><button type="button" class="curriculum-inline-btn curriculum-inline-btn--delete" data-delcrow="${escapeHtml(c.id)}">Delete</button><button type="button" class="curriculum-inline-btn curriculum-inline-btn--save" data-curriculum-row-save="${escapeHtml(id)}" data-cd-id="${escapeHtml(c.id)}">Save</button></div></td>
+      </tr>`;
+    }
+    let tableExtraClass = isEditing ? ' curriculum-doc-table--inline-edit' : '';
     return `<div class="curriculum-sem-col" id="${escapeHtml(id)}">
-      <div class="curriculum-sem-title">${escapeHtml(title)}</div>
       <div class="table-wrap curriculum-table-wrap">
-        <table class="curriculum-table">
+        <table class="curriculum-table curriculum-doc-table${tableExtraClass}${canMutateCurriculum ? '' : ' curriculum-table--readonly'}">
           <colgroup>
             <col class="curriculum-col-cc" />
             <col class="curriculum-col-subj" />
@@ -3293,23 +3570,85 @@ function renderCurriculum() {
             <col class="curriculum-col-lab" />
             <col class="curriculum-col-unit-total" />
             <col class="curriculum-col-hours" />
+            ${schedCol}
             ${actionsCol}
           </colgroup>
-          <thead><tr><th scope="col">Code</th><th scope="col">Subject</th><th scope="col" class="curriculum-th-num">Lec</th><th scope="col" class="curriculum-th-num">Lab</th><th scope="col" class="curriculum-th-num">Unit/s</th><th scope="col" class="curriculum-th-hours">Hours</th>${actionsTh}</tr></thead>
+          <thead>${bannerRow}${columnHeadRow}</thead>
           <tbody>
-            ${semRows.map(c => `<tr><td>${escapeHtml(c.courseCode)}</td><td class="curriculum-td-subj">${escapeHtml(c.subjectName)}</td><td class="curriculum-td-num">${curriculumColLec(c)}</td><td class="curriculum-td-num">${curriculumColLab(c)}</td><td class="curriculum-td-num">${curriculumColTotal(c)}</td><td class="curriculum-td-hours">${curriculumRequiredHours(c)}</td>${rowCells(c)}</tr>`).join('')}
+            ${sorted.map(c => renderBodyRow(c)).join('')}
           </tbody>
         </table>
-        ${semRows.length === 0 ? '<div class="curriculum-empty">No subjects for this semester.</div>' : ''}
+        ${sorted.length === 0 ? '<div class="curriculum-empty">No subjects for this semester.</div>' : ''}
       </div>
     </div>`;
   }
+  let yearsToRender =
+    state.curriculumYearFilter !== 'all' ? [state.curriculumYearFilter] : [...SCHEDULE_FORM_YEARS];
+  let showMainTwoCols = semFilterVal !== 'Midyear';
+  let showFirstCol =
+    semFilterVal === 'all' ||
+    semFilterVal === '1st Semester' ||
+    semFilterVal === CURRICULUM_SEM_FILTER_FIRST_AND_SECOND;
+  let showSecondCol =
+    semFilterVal === 'all' ||
+    semFilterVal === '2nd Semester' ||
+    semFilterVal === CURRICULUM_SEM_FILTER_FIRST_AND_SECOND;
+  let semGridClass =
+    showFirstCol && showSecondCol ? '' : ' curriculum-sem-grid--single';
+  let editTableId = state.curriculumTableEditId || '';
+  let yearBlocksHtml = yearsToRender
+    .map(yr => {
+      let slug = yr.replace(/\s+/g, '-');
+      let firstId = `curriculum-${slug}-first`;
+      let secondId = `curriculum-${slug}-second`;
+      let midId = `curriculum-${slug}-mid`;
+      let yearRows = rows.filter(c => curriculumFilterYear(c) === yr);
+      let firstRows = yearRows.filter(c => curriculumFilterSemester(c) === '1st Semester');
+      let secondRows = yearRows.filter(c => curriculumFilterSemester(c) === '2nd Semester');
+      let midRows = yearRows.filter(c => curriculumFilterSemester(c) === 'Midyear');
+      let left =
+        showMainTwoCols && showFirstCol ? curriculumSemTable('First Semester', firstRows, firstId) : '';
+      let right =
+        showMainTwoCols && showSecondCol ? curriculumSemTable('Second Semester', secondRows, secondId) : '';
+      let showMidBand = semFilterVal === 'Midyear' || semFilterVal === 'all';
+      let midBlock = showMidBand
+        ? `<div class="curriculum-midyear-band">${curriculumSemTable('Midyear', midRows, midId)}</div>`
+        : '';
+      if (editTableId === firstId) {
+        right = '';
+        midBlock = '';
+      } else if (editTableId === secondId) {
+        left = '';
+        midBlock = '';
+      } else if (editTableId === midId) {
+        left = '';
+        right = '';
+        if (!midBlock) {
+          midBlock = `<div class="curriculum-midyear-band">${curriculumSemTable('Midyear', midRows, midId)}</div>`;
+        }
+      }
+      let hasLeft = !!left;
+      let hasRight = !!right;
+      let useSingleTop = (hasLeft && !hasRight) || (!hasLeft && hasRight);
+      let topGrid =
+        hasLeft || hasRight
+          ? `<div class="curriculum-sem-grid${useSingleTop ? ' curriculum-sem-grid--single' : semGridClass}">${left || ''}${right || ''}</div>`
+          : '';
+      if (!topGrid && !midBlock) return '';
+      return `<section class="curriculum-year-block" aria-labelledby="curriculum-banner-${escapeHtml(slug)}">
+        <h3 class="curriculum-year-banner" id="curriculum-banner-${escapeHtml(slug)}">${escapeHtml(curriculumYearBlockBannerLabel(yr))}</h3>
+        <div class="curriculum-year-layers">
+          ${topGrid}
+          ${midBlock}
+        </div>
+      </section>`;
+    })
+    .join('');
   return `
     <div class="curriculum-panel">
       ${curriculumToolbar}
-      <div class="curriculum-sem-grid">
-        ${curriculumSemTable('First Semester', rowsFirstSem, 'curriculum-first-sem')}
-        ${curriculumSemTable('Second Semester', rowsSecondSem, 'curriculum-second-sem')}
+      <div class="curriculum-years-stack">
+        ${yearBlocksHtml || `<div class="curriculum-empty curriculum-empty-panel">No curriculum rows match these filters.</div>`}
       </div>
     </div>
   `;
@@ -3317,11 +3656,21 @@ function renderCurriculum() {
 
 function sectionRowsForUser() {
   let u = state.currentUser;
-  let deptIds = u?.role === 'admin' ? DEPARTMENTS.map(d => d.id) : [u?.dept].filter(Boolean);
+  let ayFilter = normalizeAcademicYearInput(state.sectionAcademicYearFilter) || DEFAULT_ACADEMIC_YEAR;
+  let deptIds;
+  if (u?.role === 'admin') {
+    let df = state.sectionDeptFilter || 'all';
+    deptIds = df === 'all' ? DEPARTMENTS.map(d => d.id) : [df].filter(Boolean);
+  } else {
+    deptIds = [u?.dept].filter(Boolean);
+  }
   let rows = [];
   for (let deptId of deptIds) {
+    if (!deptId) continue;
     let fromSamples = Array.isArray(SECTION_SAMPLES_BY_DEPT[deptId]) ? SECTION_SAMPLES_BY_DEPT[deptId] : [];
-    let fromSched = state.schedules.filter(s => s.dept === deptId).map(s => s.section);
+    let fromSched = state.schedules
+      .filter(s => s.dept === deptId && scheduleAcademicYearForFilter(s) === ayFilter)
+      .map(s => s.section);
     let all = [...new Set([...fromSamples, ...fromSched].map(s => String(s || '').trim()).filter(Boolean))];
     all.forEach(sec => rows.push({ dept: deptId, year: sectionYearFromLabel(sec) || '—', section: sec }));
   }
@@ -3356,16 +3705,69 @@ function renderSectionPage() {
     return '<div class="card"><div class="card-body">You do not have access to Sections.</div></div>';
   }
   if (state.sectionYearFilter !== 'all' && !SCHEDULE_FORM_YEARS.includes(state.sectionYearFilter)) state.sectionYearFilter = 'all';
+  if (u?.role === 'admin' && state.sectionDeptFilter !== 'all' && !DEPARTMENTS.some(d => d.id === state.sectionDeptFilter)) {
+    state.sectionDeptFilter = 'all';
+  }
+  let termAy = normalizeAcademicYearInput(state.termAcademicYear) || DEFAULT_ACADEMIC_YEAR;
+  let sectionAyFilter = normalizeAcademicYearInput(state.sectionAcademicYearFilter) || termAy;
+  let ayPresets = typeof termAcademicYearOptions === 'function' ? termAcademicYearOptions() : [];
+  let ayCustom = Array.isArray(state.termAcademicYearCustomOptions) ? state.termAcademicYearCustomOptions : [];
+  let aySet = new Set([...ayPresets, ...ayCustom].map(normalizeAcademicYearInput).filter(Boolean));
+  for (let s of state.schedules) aySet.add(scheduleAcademicYearForFilter(s));
+  aySet.add(termAy);
+  let sectionAyOptions = [...aySet].filter(Boolean).sort((a, b) => String(a).localeCompare(String(b)));
+  if (!sectionAyOptions.includes(sectionAyFilter)) sectionAyFilter = termAy;
+  state.sectionAcademicYearFilter = sectionAyFilter;
   let rows = sectionRowsForUser();
   if (state.sectionYearFilter !== 'all') rows = rows.filter(r => r.year === state.sectionYearFilter);
   let yearOpts = [['all', 'All Year Levels'], ...SCHEDULE_FORM_YEARS.map(y => [y, y])]
-    .map(([v, lab]) => `<option value="${escapeHtml(v)}" ${state.sectionYearFilter === v ? 'selected' : ''}>${escapeHtml(lab)}</option>`)
+    .map(([v, rawLabel]) => {
+      let lab =
+        v === 'all'
+          ? 'All Year Levels'
+          : rawLabel === '1st Year'
+            ? 'First Year'
+            : rawLabel === '2nd Year'
+              ? 'Second Year'
+              : rawLabel === '3rd Year'
+                ? 'Third Year'
+                : rawLabel === '4th Year'
+                  ? 'Fourth Year'
+                  : rawLabel;
+      return `<option value="${escapeHtml(v)}" ${state.sectionYearFilter === v ? 'selected' : ''}>${escapeHtml(lab)}</option>`;
+    })
     .join('');
-  return `<div class="page-header"><div><h2>Section</h2></div><button class="btn btn-primary" id="addSectionBtn">${icon('plus', 16)} Add Section</button></div>
+  let ayOpts = sectionAyOptions
+    .map(ay => `<option value="${escapeHtml(ay)}" ${sectionAyFilter === ay ? 'selected' : ''}>${escapeHtml(ay)}</option>`)
+    .join('');
+  let deptToolbarField = '';
+  if (u?.role === 'admin') {
+    let deptF = state.sectionDeptFilter || 'all';
+    let deptOpts =
+      `<option value="all" ${deptF === 'all' ? 'selected' : ''}>All departments</option>` +
+      DEPARTMENTS.map(
+        d =>
+          `<option value="${escapeHtml(d.id)}" ${deptF === d.id ? 'selected' : ''}>${escapeHtml(d.code)} — ${escapeHtml(d.name)}</option>`,
+      ).join('');
+    deptToolbarField = `<div class="curriculum-filter-field curriculum-filter-field--inline">
+        <select class="filter-select curriculum-filter-select curriculum-toolbar-filter-select" id="sectionDeptFilter" aria-label="Department filter">${deptOpts}</select>
+      </div>`;
+  }
+  let yearToolbarField = `<div class="curriculum-filter-field curriculum-filter-field--inline">
+      <select class="filter-select curriculum-filter-select curriculum-toolbar-filter-select" id="sectionYearFilter" aria-label="Year level filter">${yearOpts}</select>
+    </div>`;
+  let ayToolbarField = `<div class="curriculum-filter-field curriculum-filter-field--inline">
+      <select class="filter-select curriculum-filter-select curriculum-toolbar-filter-select" id="sectionAcademicYearFilter" aria-label="Academic year filter">${ayOpts}</select>
+    </div>`;
+  let sectionToolbar = `<div class="curriculum-toolbar-block">
+    <div class="curriculum-toolbar-filters">
+      ${deptToolbarField}
+      ${yearToolbarField}
+      ${ayToolbarField}
+    </div>
+  </div>`;
+  return `${sectionToolbar}
     <div class="card"><div class="card-body">
-      <div class="curriculum-toolbar-main" style="padding:0 0 10px;">
-        <select class="filter-select curriculum-year-filter-select" id="sectionYearFilter" aria-label="Section year filter">${yearOpts}</select>
-      </div>
       <div class="table-wrap"><table><thead><tr><th>Department</th><th>Year</th><th>Section</th><th>Actions</th></tr></thead><tbody>
         ${rows.map(r => `<tr><td>${escapeHtml(getDept(r.dept)?.code || r.dept)} — ${escapeHtml(getDept(r.dept)?.name || '')}</td><td>${escapeHtml(r.year)}</td><td>${escapeHtml(r.section)}</td><td><button class="btn btn-outline btn-sm" data-editsection="${escapeHtml(r.dept)}::${escapeHtml(r.section)}">Edit</button> <button class="btn btn-danger btn-sm" data-delsection="${escapeHtml(r.dept)}::${escapeHtml(r.section)}">Delete</button></td></tr>`).join('')}
       </tbody></table></div>
@@ -4689,6 +5091,30 @@ function bindPage(){
     render();
   }));
   document.getElementById('addCurriculumBtn')?.addEventListener('click',()=>{openModal({type:'addCurriculum',data:{}});});
+  document.querySelectorAll('[data-curriculum-table-edit]').forEach(btn =>
+    btn.addEventListener('click', () => {
+      if (!canUserMutateCurriculum(state.currentUser)) return;
+      let tid = btn.getAttribute('data-curriculum-table-edit');
+      if (tid) state.curriculumTableEditId = tid;
+      render();
+    }),
+  );
+  document.querySelectorAll('[data-curriculum-table-cancel]').forEach(btn =>
+    btn.addEventListener('click', () => {
+      state.curriculumTableEditId = null;
+      render();
+    }),
+  );
+  document.querySelectorAll('[data-curriculum-table-save]').forEach(btn =>
+    btn.addEventListener('click', () => {
+      void commitCurriculumTableInlineSave(btn.getAttribute('data-curriculum-table-save'));
+    }),
+  );
+  document.querySelectorAll('[data-curriculum-row-save]').forEach(btn =>
+    btn.addEventListener('click', () => {
+      void commitCurriculumTableInlineSaveRow(btn.getAttribute('data-curriculum-row-save'), btn.getAttribute('data-cd-id'));
+    }),
+  );
   document.querySelectorAll('[data-editcrow]').forEach(el=>el.addEventListener('click',()=>{
     if (!canUserMutateCurriculum(state.currentUser)) return;
     let c = state.curriculum.find(x => x.id === el.dataset.editcrow);
@@ -4710,17 +5136,26 @@ function bindPage(){
     }
     state.curriculum=state.curriculum.filter(c=>c.id!==el.dataset.delcrow);showToast('Row removed');render();
   }));
-  document.getElementById('curriculumDeptFilter')?.addEventListener('change',e=>{state.curriculumDeptFilter=e.target.value;render();});
   document.getElementById('curriculumYearFilter')?.addEventListener('change', e => {
     state.curriculumYearFilter = e.target.value || 'all';
+    state.curriculumTableEditId = null;
     render();
   });
   document.getElementById('curriculumAcademicYearFilter')?.addEventListener('change', e => {
     state.curriculumAcademicYearFilter = normalizeAcademicYearInput(e.target.value || '') || DEFAULT_ACADEMIC_YEAR;
+    state.curriculumTableEditId = null;
     render();
   });
   document.getElementById('sectionYearFilter')?.addEventListener('change', e => {
     state.sectionYearFilter = e.target.value || 'all';
+    render();
+  });
+  document.getElementById('sectionDeptFilter')?.addEventListener('change', e => {
+    state.sectionDeptFilter = e.target.value || 'all';
+    render();
+  });
+  document.getElementById('sectionAcademicYearFilter')?.addEventListener('change', e => {
+    state.sectionAcademicYearFilter = normalizeAcademicYearInput(e.target.value || '') || DEFAULT_ACADEMIC_YEAR;
     render();
   });
   document.getElementById('addSectionBtn')?.addEventListener('click', () => {
@@ -4819,7 +5254,11 @@ function bindPage(){
       syncScheduleExportWizardStateFromDom();
     });
   }
-  document.getElementById('curriculumSemFilter')?.addEventListener('change',e=>{state.curriculumSemFilter=e.target.value;render();});
+  document.getElementById('curriculumSemFilter')?.addEventListener('change', e => {
+    state.curriculumSemFilter = e.target.value;
+    state.curriculumTableEditId = null;
+    render();
+  });
   function syncCurriculumUnitsTotal() {
     let lecEl = document.getElementById('cc_lecUnits');
     let labEl = document.getElementById('cc_labUnits');

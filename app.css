@@ -476,6 +476,9 @@ body { font-family: var(--font); background: var(--page-bg); color: var(--text-p
   stroke: #7f1919;
 }
 .topbar-actions { display: flex; align-items: center; gap: 10px; flex-shrink: 0; }
+.topbar-actions .theme-toggle + .btn-schedule-add-pill {
+  margin-left: -2px;
+}
 .theme-toggle { padding: 6px 10px; }
 .app { display: flex; min-height: 100vh; }
 .sidebar {
@@ -1464,8 +1467,55 @@ td { padding: 12px 16px; border-bottom: 1px solid var(--border-ui); font-size: 1
   background: var(--surface);
 }
 .curriculum-toolbar-block {
-  padding: 6px 16px 2px;
+  padding: 12px 16px 14px;
   background: var(--surface);
+  border-bottom: 1px solid var(--border-ui);
+}
+.curriculum-toolbar-filters {
+  display: flex;
+  flex-wrap: wrap;
+  align-items: stretch;
+  gap: 14px;
+}
+.curriculum-filter-field--inline {
+  display: flex;
+  flex-direction: row;
+  align-items: center;
+  gap: 10px;
+  min-width: 0;
+}
+.curriculum-toolbar-filters .curriculum-filter-field--inline {
+  flex: 1 1 0;
+  min-width: 160px;
+}
+.curriculum-toolbar-filters .curriculum-toolbar-filter-select {
+  width: 100%;
+  min-width: 0;
+  max-width: none;
+  min-height: 38px;
+  height: 38px;
+  padding: 0 12px;
+  box-sizing: border-box;
+  font-size: 13px;
+  line-height: 1.2;
+  border-radius: 7px;
+  border: 1px solid #d1d5db;
+  background: #fff;
+  color: #1e293b;
+  box-shadow: none;
+}
+html[data-theme="dark"] .curriculum-toolbar-filters .curriculum-toolbar-filter-select {
+  border-color: var(--border-ui);
+  background: var(--input-bg);
+  color: var(--text-primary);
+}
+@media (max-width: 720px) {
+  .curriculum-toolbar-filters .curriculum-filter-field--inline {
+    flex: 1 1 100%;
+  }
+  .curriculum-toolbar-filters .curriculum-toolbar-filter-select {
+    width: 100%;
+  }
 }
 .curriculum-toolbar-main {
   display: flex;
@@ -1542,14 +1592,45 @@ td { padding: 12px 16px; border-bottom: 1px solid var(--border-ui); font-size: 1
   table-layout: fixed;
   width: 100%;
 }
-/* Column widths (sum 100%): balanced gutters like a compact sheet — actions not wider than two buttons need */
-.curriculum-table .curriculum-col-cc { width: 11%; }
-.curriculum-table .curriculum-col-subj { width: 39%; }
+/* Column widths (sum 100%): wider Subject; numerics + Remaining stay grouped to the right */
+.curriculum-table .curriculum-col-cc { width: 12%; }
+.curriculum-table .curriculum-col-subj { width: 34%; }
 .curriculum-table .curriculum-col-lec { width: 6%; }
 .curriculum-table .curriculum-col-lab { width: 6%; }
-.curriculum-table .curriculum-col-unit-total { width: 6%; }
+.curriculum-table .curriculum-col-unit-total { width: 8%; }
 .curriculum-table .curriculum-col-hours { width: 11%; }
-.curriculum-table .curriculum-col-actions { width: 21%; }
+.curriculum-table .curriculum-col-sched { width: 23%; }
+.curriculum-table.curriculum-table--readonly .curriculum-col-sched {
+  width: 23%;
+}
+.curriculum-table .curriculum-col-actions {
+  width: 11%;
+}
+.curriculum-doc-table--inline-edit .curriculum-col-subj {
+  width: 32%;
+}
+.curriculum-doc-table--inline-edit .curriculum-col-sched {
+  width: 27%;
+}
+.curriculum-doc-table--inline-edit .curriculum-col-cc {
+  width: 11%;
+}
+.curriculum-doc-table--inline-edit .curriculum-col-lec {
+  width: 6.5%;
+}
+.curriculum-doc-table--inline-edit .curriculum-col-lab {
+  width: 6.5%;
+}
+.curriculum-doc-table--inline-edit .curriculum-col-unit-total {
+  width: 8%;
+}
+.curriculum-doc-table--inline-edit .curriculum-col-hours {
+  width: 9%;
+}
+/* Fixed width: avoids a wide %-column + right-align gap before Delete/Save. */
+.curriculum-doc-table--inline-edit .curriculum-col-actions {
+  width: 184px;
+}
 .curriculum-table th,
 .curriculum-table td {
   vertical-align: middle;
@@ -1558,13 +1639,37 @@ td { padding: 12px 16px; border-bottom: 1px solid var(--border-ui); font-size: 1
 }
 .curriculum-table th:first-child,
 .curriculum-table td:first-child {
-  padding-left: 14px;
-  padding-right: 6px;
+  padding-left: 12px;
+  padding-right: 8px;
+  white-space: nowrap;
+}
+.curriculum-doc-table.curriculum-table:not(.curriculum-doc-table--inline-edit) tbody td:first-child {
+  overflow: hidden;
+  text-overflow: ellipsis;
+}
+.curriculum-doc-table--inline-edit tbody td:first-child {
+  white-space: normal;
 }
 .curriculum-table th:nth-child(2),
 .curriculum-table td.curriculum-td-subj {
-  padding-left: 6px;
-  padding-right: 10px;
+  padding-left: 8px;
+  padding-right: 8px;
+}
+/* Even horizontal gutters across the curriculum sheet */
+.curriculum-doc-table.curriculum-table > thead > tr > th,
+.curriculum-doc-table.curriculum-table > tbody > tr > td {
+  padding-left: 8px;
+  padding-right: 8px;
+}
+.curriculum-doc-table.curriculum-table > thead > tr > th:first-child,
+.curriculum-doc-table.curriculum-table > tbody > tr > td:first-child {
+  padding-left: 12px;
+  padding-right: 8px;
+}
+.curriculum-doc-table.curriculum-table > thead > tr > th:nth-child(2),
+.curriculum-doc-table.curriculum-table > tbody > tr > td.curriculum-td-subj {
+  padding-left: 8px;
+  padding-right: 8px;
 }
 .curriculum-table .curriculum-th-num,
 .curriculum-table .curriculum-td-num {
@@ -1578,23 +1683,177 @@ td { padding: 12px 16px; border-bottom: 1px solid var(--border-ui); font-size: 1
   white-space: nowrap;
   text-align: center;
 }
-.curriculum-table .curriculum-th-actions {
+.curriculum-table .curriculum-th-sem-banner {
+  background: var(--red);
+  color: #fff;
+  font-size: 13px;
+  font-weight: 700;
   text-align: left;
-  padding-left: 10px;
-  padding-right: 12px;
+  text-transform: none;
+  letter-spacing: 0.02em;
+  padding: 0;
+  vertical-align: middle;
+  border: none !important;
+  border-bottom: 1px solid rgba(0, 0, 0, 0.18) !important;
 }
-.curriculum-table .curriculum-td-actions {
+.curriculum-sem-banner-inner {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: 12px;
+  padding: 8px 12px;
+  min-height: 40px;
+  box-sizing: border-box;
+}
+.curriculum-sem-banner-title {
+  flex: 1;
+  min-width: 0;
+}
+.curriculum-banner-edit-btn {
+  flex-shrink: 0;
+  background: rgba(255, 255, 255, 0.18);
+  color: #fff !important;
+  border: 1px solid rgba(255, 255, 255, 0.55) !important;
+  font-weight: 600;
+}
+.curriculum-banner-edit-btn:hover {
+  background: rgba(255, 255, 255, 0.3);
+  border-color: #fff !important;
+}
+.curriculum-sem-banner-actions {
+  display: flex;
+  flex-wrap: wrap;
+  align-items: center;
+  gap: 8px;
+  flex-shrink: 0;
+}
+.curriculum-banner-save-btn {
+  background: #fff !important;
+  color: var(--red) !important;
+  border: 1px solid #fff !important;
+  font-weight: 700;
+}
+.curriculum-banner-save-btn:hover {
+  background: rgba(255, 255, 255, 0.92) !important;
+}
+.curriculum-banner-cancel-btn {
+  background: transparent !important;
+  color: #fff !important;
+  border: 1px solid rgba(255, 255, 255, 0.75) !important;
+  font-weight: 600;
+}
+.curriculum-banner-cancel-btn:hover {
+  background: rgba(255, 255, 255, 0.15) !important;
+}
+.curriculum-th-actions-head {
+  font-size: 0;
+  line-height: 0;
+  letter-spacing: 0;
+  text-align: right;
+  padding: 10px !important;
+  color: transparent;
+  background: var(--curriculum-col-head-bg, #f3f4f6);
+}
+.curriculum-td-inline-actions {
+  text-align: right;
+  vertical-align: middle;
+  padding: 8px 10px 8px 6px !important;
+}
+/* Inline edit: left-align in a narrow column so buttons sit next to Remaining hours. */
+.curriculum-doc-table--inline-edit .curriculum-th-actions-head {
   text-align: left;
+  padding: 10px 12px 10px 8px !important;
+}
+.curriculum-doc-table--inline-edit .curriculum-td-inline-actions {
+  text-align: left;
+  padding: 8px 12px 8px 8px !important;
+}
+.curriculum-inline-action-buttons {
+  display: inline-flex;
+  align-items: center;
+  justify-content: flex-start;
+  gap: 8px;
+  flex-wrap: nowrap;
+}
+/* Per-row edit actions: outline Delete + solid Save (maroon banner color). */
+.curriculum-inline-btn {
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  margin: 0;
+  padding: 6px 14px;
+  font-size: 12px;
+  font-weight: 700;
+  line-height: 1.2;
+  letter-spacing: 0.02em;
+  border-radius: 6px;
+  cursor: pointer;
+  font-family: inherit;
+  box-sizing: border-box;
   white-space: nowrap;
-  padding-left: 10px;
-  padding-right: 12px;
 }
-.curriculum-table .curriculum-td-actions .btn {
-  margin-left: 4px;
-  padding: 4px 7px;
+.curriculum-inline-btn--delete {
+  min-width: 76px;
+  border: 1px solid #7f1919;
+  background: transparent;
+  color: #7f1919;
 }
-.curriculum-table .curriculum-td-actions .btn:first-child {
-  margin-left: 0;
+.curriculum-inline-btn--delete:hover {
+  background: #f2e8e8;
+  color: #7f1919;
+  border-color: #7f1919;
+}
+.curriculum-inline-btn--delete:active {
+  opacity: 0.9;
+}
+.curriculum-inline-btn--save {
+  min-width: 64px;
+  border: 1px solid #7f1919;
+  background: #7f1919;
+  color: #fff !important;
+}
+.curriculum-inline-btn--save:hover {
+  filter: brightness(1.06);
+}
+.curriculum-inline-btn--save:active {
+  filter: brightness(0.96);
+}
+html[data-theme="dark"] .curriculum-inline-btn--delete {
+  background: transparent;
+  color: #e8c8c8;
+  border-color: #7f1919;
+}
+html[data-theme="dark"] .curriculum-inline-btn--delete:hover {
+  background: rgba(242, 232, 232, 0.14);
+  color: #fff;
+  border-color: #7f1919;
+}
+html[data-theme="dark"] .curriculum-inline-btn--save {
+  background: #7f1919;
+  border-color: #7f1919;
+  color: #fff !important;
+}
+.curriculum-inline-input {
+  width: 100%;
+  min-width: 0;
+  max-width: 100%;
+  box-sizing: border-box;
+  padding: 6px 8px !important;
+  font-size: 13px !important;
+  line-height: 1.25;
+}
+.curriculum-inline-input--num {
+  text-align: center;
+  padding-left: 4px !important;
+  padding-right: 4px !important;
+}
+html[data-theme="dark"] .curriculum-th-actions-head {
+  color: transparent;
+  background: rgba(255, 255, 255, 0.06);
+}
+.curriculum-doc-table thead tr:first-child .curriculum-th-sem-banner--full {
+  border-top-left-radius: 8px;
+  border-top-right-radius: 8px;
 }
 .curriculum-empty {
   padding: 32px;
@@ -1622,32 +1881,176 @@ td { padding: 12px 16px; border-bottom: 1px solid var(--border-ui); font-size: 1
   }
 }
 .curriculum-table .curriculum-td-subj {
+  min-width: 0;
   word-break: break-word;
+  overflow-wrap: anywhere;
+}
+.curriculum-years-stack {
+  padding: 4px 12px 16px;
+}
+.curriculum-year-block {
+  margin-bottom: 28px;
+}
+.curriculum-year-block:last-child {
+  margin-bottom: 0;
+}
+.curriculum-year-layers {
+  display: flex;
+  flex-direction: column;
+  gap: 16px;
+}
+.curriculum-midyear-band {
+  width: 100%;
+  min-width: 0;
+}
+.curriculum-midyear-band .curriculum-sem-col {
+  max-width: 100%;
+}
+.curriculum-year-banner {
+  margin: 0 0 10px;
+  padding: 10px 12px;
+  text-align: center;
+  font-size: 14px;
+  font-weight: 800;
+  letter-spacing: 0.06em;
+  color: #7f1919;
+  background: #f2e8e8;
+  border: 1px solid #7f1919;
+  border-radius: 8px;
+}
+/* Minimal “sheet” look: no vertical grid, light horizontal rules only (matches print-style curriculum) */
+.curriculum-doc-table {
+  border-collapse: collapse;
+  --curriculum-row-divider: #e8e9ed;
+  --curriculum-col-head-bg: #f3f4f6;
+  --curriculum-col-head-fg: #4b5563;
+}
+.curriculum-doc-table th,
+.curriculum-doc-table td {
+  border: none;
+  border-bottom: 1px solid var(--curriculum-row-divider);
+}
+.curriculum-doc-table thead tr:nth-child(2) th {
+  background: var(--curriculum-col-head-bg);
+  color: var(--curriculum-col-head-fg);
+  font-size: 10px;
+  font-weight: 700;
+  letter-spacing: 0.05em;
+  text-transform: uppercase;
+  border-bottom: 1px solid var(--curriculum-row-divider);
+  padding: 11px 8px;
+  white-space: normal;
+  line-height: 1.25;
+  hyphens: auto;
+}
+.curriculum-doc-table tbody tr:last-child td {
+  border-bottom: none;
+}
+.curriculum-doc-table tbody td {
+  background: var(--surface);
+}
+.curriculum-th-sched,
+.curriculum-td-sched {
+  text-align: center;
+  font-size: 12px;
+  line-height: 1.35;
+  vertical-align: middle;
+}
+.curriculum-doc-table.curriculum-table > thead > tr > th.curriculum-th-sched,
+.curriculum-doc-table.curriculum-table > tbody > tr > td.curriculum-td-sched {
+  padding-left: 8px;
+  padding-right: 4px;
+}
+.curriculum-doc-table thead tr:nth-child(2) th.curriculum-th-sched {
+  text-align: center;
+  padding: 11px 4px 11px 8px;
+  line-height: 1.25;
+}
+.curriculum-sched-cell {
+  display: inline-block;
+  max-width: 100%;
+  word-break: break-word;
+}
+.curriculum-sched-empty {
+  display: inline-block;
+  margin-left: 0;
+  color: var(--text-muted);
+}
+.curriculum-sched-remaining {
+  display: inline-block;
+  margin-left: 0;
+  font-variant-numeric: tabular-nums;
+  color: var(--text-primary);
+}
+.curriculum-sched-badge {
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  margin-left: 0;
+  padding: 4px 14px;
+  border-radius: 999px;
+  font-size: 11px;
+  font-weight: 700;
+  line-height: 1.25;
+  font-family: inherit;
+  letter-spacing: 0.02em;
+  box-sizing: border-box;
+  white-space: nowrap;
+}
+.curriculum-sched-badge--scheduled {
+  background: #e8f4fc;
+  border: 1px solid #6ba3d6;
+  color: #0c4a6e;
+}
+html[data-theme="dark"] .curriculum-sched-badge--scheduled {
+  background: rgba(56, 130, 200, 0.18);
+  border-color: #5a9fd4;
+  color: #b8daf7;
+}
+.curriculum-empty-panel {
+  border: 1px dashed var(--border-ui);
+  border-radius: 10px;
+  margin: 8px 0 4px;
+}
+html[data-theme="dark"] .curriculum-year-banner {
+  color: #f5e8e8;
+  background: rgba(242, 232, 232, 0.12);
+  border-color: #7f1919;
+}
+html[data-theme="dark"] .curriculum-doc-table {
+  --curriculum-row-divider: rgba(255, 255, 255, 0.1);
+  --curriculum-col-head-bg: rgba(255, 255, 255, 0.06);
+  --curriculum-col-head-fg: var(--text-muted);
 }
 .curriculum-sem-grid {
   display: grid;
   grid-template-columns: 1fr 1fr;
-  gap: 12px;
-  padding: 4px 12px 12px;
+  gap: 16px;
+  padding: 0;
+}
+/* Must follow `.curriculum-sem-grid` so it overrides the two-column template (same specificity, later wins). */
+.curriculum-sem-grid.curriculum-sem-grid--single {
+  grid-template-columns: 1fr;
 }
 .curriculum-sem-col {
   min-width: 0;
 }
-.curriculum-sem-title {
-  background: var(--red);
-  color: #fff;
-  font-size: 13px;
-  font-weight: 700;
-  padding: 8px 10px;
-  border-radius: 8px 8px 0 0;
-}
 .curriculum-sem-col .curriculum-table-wrap {
-  border: 1px solid var(--border-ui);
-  border-top: none;
-  border-radius: 0 0 8px 8px;
+  --curriculum-wrap-outline: #e8e9ed;
+  border: 1px solid var(--curriculum-wrap-outline);
+  border-radius: 8px;
+  box-shadow: 0 1px 3px rgba(15, 23, 42, 0.04);
   overflow-x: auto;
   overflow-y: hidden;
   -webkit-overflow-scrolling: touch;
+}
+.curriculum-sem-col .curriculum-table-wrap:has(.curriculum-doc-table--inline-edit) {
+  padding-right: 12px;
+  box-sizing: border-box;
+}
+html[data-theme="dark"] .curriculum-sem-col .curriculum-table-wrap {
+  --curriculum-wrap-outline: rgba(255, 255, 255, 0.12);
+  box-shadow: 0 1px 3px rgba(0, 0, 0, 0.25);
 }
 @media (max-width: 900px) {
   .curriculum-filter-row {
