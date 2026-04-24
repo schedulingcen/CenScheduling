@@ -3396,8 +3396,8 @@ function renderRequests() {
   }
 
   let requestListsBlock = u.role === 'chairperson' ? `
-    <div class="requests-queue-grid" style="display:grid;grid-template-columns:minmax(260px,0.7fr) minmax(0,1.8fr);gap:20px;">
-      <div class="card requests-queue-card" id="incoming-requests" style="min-width:0;">
+    <div class="requests-queue-grid">
+      <div class="card requests-queue-card requests-queue-card--incoming" id="incoming-requests" style="min-width:0;">
         <div class="card-header">
           <div class="card-title card-title-with-icon">${icon('inbox', 18)} Incoming Requests ${pending.length ? `<span style="background: var(--red); color: #fff; font-size: 10px; padding: 2px 6px; border-radius: 10px; margin-left: 6px;">${pending.length}</span>` : ''}</div>
         </div>
@@ -3412,7 +3412,7 @@ function renderRequests() {
                       const from = getDept(r.fromDept);
                       const sub = getSubject(r.subjectId);
                       return `
-                <div class="request-card">
+                <div class="request-card request-card--incoming">
                   <div class="request-icon">${icon('building', 20)}</div>
                   <div class="request-info">
                     <div class="request-title">${room?.name || 'Unknown Room'} — ${r.section}</div>
@@ -3433,9 +3433,10 @@ function renderRequests() {
         </div>
       </div>
 
-      <div class="card requests-queue-card" style="min-width:0;">
+      <div class="card requests-queue-card requests-queue-card--outgoing" style="min-width:0;">
         <div class="card-header">
           <div class="card-title card-title-with-icon">${icon('send', 18)} My Outgoing Requests</div>
+          <a href="#available-rooms-timetable" class="btn btn-outline btn-sm">View All</a>
         </div>
         <div class="card-body requests-queue-card-body">
           ${(() => {
@@ -3461,7 +3462,7 @@ function renderRequests() {
                               const statusIconColor = r.status === 'approved' ? '#16A34A' : (r.status === 'declined' ? '#DC2626' : '#D97706');
                               const statusIconBg = r.status === 'approved' ? '#F0FDF4' : (r.status === 'declined' ? '#FEF2F2' : '#FFFBEB');
                               return `
-                                <div class="request-card">
+                                <div class="request-card request-card--outgoing">
                                   <div class="request-icon request-icon-${escapeHtml(r.status || 'pending')}" style="color:${statusIconColor};background:${statusIconBg};">${icon(statusIcon, 20)}</div>
                                   <div class="request-info">
                                     <div class="request-title">${room?.name || 'Unknown Room'} from <span class="badge-dept ${r.toDept}">${to?.code || '?'}</span></div>
