@@ -2003,10 +2003,21 @@ html[data-theme="dark"] .curriculum-th-actions-head {
   border: 1px solid #6ba3d6;
   color: #0c4a6e;
 }
+.curriculum-sched-badge--remaining {
+  background: #f3f2f0;
+  border: 1px solid #c9c3bc;
+  color: #8f8a84;
+  font-weight: 700;
+}
 html[data-theme="dark"] .curriculum-sched-badge--scheduled {
   background: rgba(56, 130, 200, 0.18);
   border-color: #5a9fd4;
   color: #b8daf7;
+}
+html[data-theme="dark"] .curriculum-sched-badge--remaining {
+  background: rgba(255, 255, 255, 0.08);
+  border-color: rgba(255, 255, 255, 0.22);
+  color: #c9c3bc;
 }
 .curriculum-empty-panel {
   border: 1px dashed var(--border-ui);
@@ -2212,9 +2223,29 @@ html[data-theme="dark"] .borrow-tag { background: #2a2a38; }
   background: #F2E8E8;
   border-color: #A03232;
 }
+html[data-theme="dark"] .faculty-stats-grid .stat-card,
+html[data-theme="dark"] .faculty-stats-grid .stat-card:visited {
+  color: #1f1f2d;
+}
+html[data-theme="dark"] .faculty-stats-grid .stat-card .stat-num {
+  color: #1f1f2d;
+}
+html[data-theme="dark"] .faculty-stats-grid .stat-card .stat-label {
+  color: #59576a;
+}
 .stats-grid:not(.faculty-stats-grid) .stat-card {
   background: #F2E8E8;
   border-color: #A03232;
+}
+html[data-theme="dark"] .stats-grid:not(.faculty-stats-grid) .stat-card,
+html[data-theme="dark"] .stats-grid:not(.faculty-stats-grid) .stat-card:visited {
+  color: #1f1f2d;
+}
+html[data-theme="dark"] .stats-grid:not(.faculty-stats-grid) .stat-card .stat-num {
+  color: #1f1f2d;
+}
+html[data-theme="dark"] .stats-grid:not(.faculty-stats-grid) .stat-card .stat-label {
+  color: #59576a;
 }
 .faculty-toolbar-filters {
   gap: 10px;

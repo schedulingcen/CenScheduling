@@ -1190,7 +1190,7 @@ function curriculumScheduledHoursCellHtml(c, ayFilter) {
   if (remaining < 0.01) {
     return '<span class="curriculum-sched-badge curriculum-sched-badge--scheduled">Scheduled</span>';
   }
-  return `<span class="curriculum-sched-remaining">${escapeHtml(formatHoursValue(remaining))} hours</span>`;
+  return `<span class="curriculum-sched-badge curriculum-sched-badge--remaining">${escapeHtml(formatHoursValue(remaining))} hrs</span>`;
 }
 function computedCurriculumHoursFromUnits(lecUnits, labUnits) {
   let lec = Number(lecUnits);
