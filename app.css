@@ -194,6 +194,7 @@
 .badge-status.approved { background: #F0FDF4; color: #166534; border: 1px solid #86EFAC; }
 .badge-status.declined { background: #FEF2F2; color: #991B1B; border: 1px solid #FCA5A5; }
 .badge-status.active { background: #F0FDF4; color: #166534; }
+.badge-status.on_leave { background: #FFFBEB; color: #92400E; border: 1px solid #FCD34D; }
 .badge-status.inactive { background: #F0F0F0; color: #616161; }
 
 /* Card Styles */
@@ -2179,5 +2180,53 @@ html[data-theme="dark"] .borrow-tag { background: #2a2a38; }
     color: #111 !important;
     letter-spacing: 0.02em;
     padding: 0 0 12px;
+  }
+}
+
+.room-page-empty {
+  text-align: center;
+  color: var(--text-muted);
+  padding: 16px 8px;
+}
+
+.room-page-table .room-page-utilization-td {
+  min-width: 120px;
+}
+
+.section-room-dept-icon-th,
+.section-room-dept-icon-td {
+  width: 64px;
+  text-align: center;
+  vertical-align: middle;
+}
+.section-page-table .section-room-dept-icon-td .badge-dept,
+.room-page-table .section-room-dept-icon-td .badge-dept,
+.faculty-page-table .section-room-dept-icon-td .badge-dept {
+  vertical-align: middle;
+}
+.faculty-stats-grid {
+  margin-bottom: 12px;
+  grid-template-columns: repeat(5, minmax(0, 1fr));
+}
+.faculty-stats-grid .stat-card {
+  background: #F2E8E8;
+  border-color: #A03232;
+}
+.stats-grid:not(.faculty-stats-grid) .stat-card {
+  background: #F2E8E8;
+  border-color: #A03232;
+}
+.faculty-toolbar-filters {
+  gap: 10px;
+}
+.faculty-search-field {
+  flex: 2 1 320px;
+}
+.faculty-search-input {
+  width: 100%;
+}
+@media (max-width: 980px) {
+  .faculty-stats-grid {
+    grid-template-columns: repeat(2, minmax(0, 1fr));
   }
 }

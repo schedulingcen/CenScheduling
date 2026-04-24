@@ -151,6 +151,9 @@ function renderTopbarCenter() {
   if (state.page === 'curriculum') {
     return `<div class="curriculum-topbar-left"><div class="page-title page-title-curriculum-left">${escapeHtml(curriculumTopbarDegreeTitle())}</div></div>`;
   }
+  if (state.page === 'faculty') {
+    return `<div class="page-title">${escapeHtml(getPageTitle())}</div>`;
+  }
   let termPages = ['schedule', 'curriculum', 'requests'];
   if (!termPages.includes(state.page)) {
     return `<div class="page-title">${getPageTitle()}</div>`;
@@ -293,6 +296,7 @@ function hydratePersistedData() {
       state.professors = o.professors.map(p => ({
         ...p,
         name: normalizeProfessorTitle(p?.name),
+        note: p.note != null ? String(p.note) : '',
       }));
     }
     if (Array.isArray(o.subjects)) state.subjects = o.subjects;
@@ -343,6 +347,17 @@ function hydratePersistedData() {
     if (o.sectionDeptFilter != null) state.sectionDeptFilter = o.sectionDeptFilter;
     if (o.sectionAcademicYearFilter != null) {
       state.sectionAcademicYearFilter = normalizeAcademicYearInput(o.sectionAcademicYearFilter) || DEFAULT_ACADEMIC_YEAR;
+    }
+    if (o.roomDeptFilter != null) state.roomDeptFilter = o.roomDeptFilter;
+    if (o.roomTypeFilter != null) state.roomTypeFilter = o.roomTypeFilter;
+    if (o.roomAcademicYearFilter != null) {
+      state.roomAcademicYearFilter = normalizeAcademicYearInput(o.roomAcademicYearFilter) || DEFAULT_ACADEMIC_YEAR;
+    }
+    if (o.facultyDeptFilter != null) state.facultyDeptFilter = o.facultyDeptFilter;
+    if (o.facultyStatusFilter != null) state.facultyStatusFilter = o.facultyStatusFilter;
+    if (o.facultySearchQuery != null) state.facultySearchQuery = String(o.facultySearchQuery);
+    if (Array.isArray(o.suppressedRoomIds)) {
+      state.suppressedRoomIds = [...new Set(o.suppressedRoomIds.filter(Boolean))];
     }
     if (o.dashboardSummaryDay != null && typeof o.dashboardSummaryDay === 'string' && DAYS_WITH_SATURDAY.includes(o.dashboardSummaryDay)) {
       state.dashboardSummaryDay = o.dashboardSummaryDay;
@@ -395,6 +410,13 @@ function persistAppData() {
       sectionYearFilter: state.sectionYearFilter,
       sectionDeptFilter: state.sectionDeptFilter,
       sectionAcademicYearFilter: state.sectionAcademicYearFilter,
+      roomDeptFilter: state.roomDeptFilter,
+      roomTypeFilter: state.roomTypeFilter,
+      roomAcademicYearFilter: state.roomAcademicYearFilter,
+      facultyDeptFilter: state.facultyDeptFilter,
+      facultyStatusFilter: state.facultyStatusFilter,
+      facultySearchQuery: state.facultySearchQuery,
+      suppressedRoomIds: state.suppressedRoomIds,
       dashboardSummaryDay: state.dashboardSummaryDay,
     })
   );
@@ -414,7 +436,7 @@ let state = {
   filterSection: '',
   filterFaculty: '',
   filterRoom: '',
-  professors: [...PROFESSORS_DATA].map(p => ({ ...p, name: normalizeProfessorTitle(p?.name) })),
+  professors: [...PROFESSORS_DATA].map(p => ({ ...p, name: normalizeProfessorTitle(p?.name), note: p.note != null ? String(p.note) : '' })),
   subjects: [...SUBJECTS_DATA],
   rooms: [...ROOMS],
   schedules: [...SCHEDULES],
@@ -438,6 +460,14 @@ let state = {
   sectionYearFilter: 'all',
   sectionDeptFilter: 'all',
   sectionAcademicYearFilter: DEFAULT_ACADEMIC_YEAR,
+  roomDeptFilter: 'all',
+  roomTypeFilter: 'all',
+  roomAcademicYearFilter: DEFAULT_ACADEMIC_YEAR,
+  facultyDeptFilter: 'all',
+  facultyStatusFilter: 'all',
+  facultySearchQuery: '',
+  /** Without Supabase, deleted bundled-room ids stay hidden until session clears. */
+  suppressedRoomIds: [],
 };
 let nextId = 100;
 const genId = () => `id_${Date.now().toString(36)}_${Math.random().toString(36).slice(2, 10)}`;
@@ -507,6 +537,7 @@ function normalizeProfessorFromDb(row) {
     short: row.short || '',
     dept: row.dept_id || row.dept,
     active: row.active !== false,
+    note: row.note != null ? String(row.note) : '',
   };
 }
 function normalizeProfessorToDb(prof) {
@@ -877,12 +908,31 @@ function getProfessor(id) { return state.professors.find(p=>p.id===id); }
 function roomsSourceForApp() {
   let bundle = typeof ROOMS !== 'undefined' && Array.isArray(ROOMS) ? ROOMS : [];
   let dropRetired = arr => (Array.isArray(arr) ? arr.filter(r => !isRetiredCpeDrawingRoom(r)) : []);
+  let dropSuppressed = arr => {
+    let hid = new Set(Array.isArray(state.suppressedRoomIds) ? state.suppressedRoomIds : []);
+    return Array.isArray(arr) ? arr.filter(r => r && !hid.has(r.id)) : [];
+  };
   if (!hasSupabaseClient()) {
-    return dropRetired(bundle);
+    let fromSt = Array.isArray(state.rooms) ? state.rooms : [];
+    if (fromSt.length === 0) return dropRetired(bundle);
+    let ids = new Set(fromSt.map(r => r.id).filter(Boolean));
+    let extra = [];
+    for (let b of bundle) {
+      if (b && b.id && !ids.has(b.id)) {
+        extra.push({
+          id: b.id,
+          name: b.name,
+          type: b.type || 'classroom',
+          dept: b.dept,
+        });
+        ids.add(b.id);
+      }
+    }
+    return dropSuppressed(dropRetired(extra.length ? fromSt.concat(extra) : fromSt));
   }
   let fromDb = Array.isArray(state.rooms) ? state.rooms : [];
   if (fromDb.length === 0) {
-    return dropRetired(bundle);
+    return dropSuppressed(dropRetired(bundle));
   }
   let ids = new Set(fromDb.map(r => r.id).filter(Boolean));
   let extra = [];
@@ -898,7 +948,7 @@ function roomsSourceForApp() {
     }
   }
   let merged = extra.length ? fromDb.concat(extra) : fromDb;
-  return dropRetired(merged);
+  return dropSuppressed(dropRetired(merged));
 }
 
 /** Schedule/request uses this id when the user picks "Other" and types a name. */
@@ -987,6 +1037,39 @@ function getRoom(id) {
   return ROOMS.find(r => r.id === id);
 }
 function getDept(id) { return DEPARTMENTS.find(d=>d.id===id); }
+/** Faculty-style dept pill (code only) for section/room tables. */
+function deptBadgeHtml(deptId) {
+  let d = getDept(deptId);
+  let code = escapeHtml(d?.code || deptId || '?');
+  let cls = escapeHtml(deptId || '');
+  return `<span class="badge-dept ${cls}">${code}</span>`;
+}
+function departmentDisplayNameOnly(deptId) {
+  return escapeHtml(getDept(deptId)?.name || deptId || '—');
+}
+function professorStatusValue(p) {
+  let raw = String(p?.status || '').trim().toLowerCase();
+  if (raw === 'active' || raw === 'on_leave' || raw === 'inactive') return raw;
+  if (p?.active === false) return 'inactive';
+  let n = String(p?.note || '').toLowerCase();
+  if (n.includes('leave')) return 'on_leave';
+  return 'active';
+}
+function professorStatusLabel(status) {
+  if (status === 'on_leave') return 'On Leave';
+  if (status === 'inactive') return 'Inactive';
+  return 'Active';
+}
+/** Admin curriculum toolbar: always a concrete program id (no "all"). */
+function normalizeCurriculumAdminDeptFilter() {
+  if (state.page !== 'curriculum') return;
+  let u = state.currentUser;
+  if (u?.role !== 'admin') return;
+  let df = state.curriculumDeptFilter;
+  if (!df || df === 'all' || !DEPARTMENTS.some(d => d.id === df)) {
+    state.curriculumDeptFilter = DEPARTMENTS[0]?.id || '';
+  }
+}
 /** Top bar title on Curriculum, e.g. "Curriculum of BS Electrical Engineering". */
 function curriculumTopbarDegreeTitle() {
   let u = state.currentUser;
@@ -997,7 +1080,8 @@ function curriculumTopbarDegreeTitle() {
   let aySuffix = ` (AY ${ay})`;
   if (!u) return `Curriculum${aySuffix}`;
   if (u.role === 'admin') {
-    return `Curriculum — All departments${aySuffix}`;
+    let d = getDept(state.curriculumDeptFilter);
+    return d ? `Curriculum of BS ${d.name}${aySuffix}` : `Curriculum${aySuffix}`;
   }
   if (u.dept) {
     let d = getDept(u.dept);
@@ -2182,12 +2266,13 @@ function render() {
     }
     cenHydratedThisLoad = true;
   }
+  normalizeCurriculumAdminDeptFilter();
   app.innerHTML=`
     <div class="app">
       <div class="sidebar ${state.sidebarOpen?'open':''}" id="sidebar">${renderSidebar()}</div>
       <div class="overlay ${state.sidebarOpen?'show':''}" id="overlay"></div>
       <div class="main">
-        <div class="topbar"><span class="hamburger" id="hamburger" role="button" tabindex="0" aria-label="Open menu">${icon('menu', 22)}</span>${renderTopbarCenter()}<div class="topbar-actions"><button type="button" class="btn btn-outline btn-sm theme-toggle" id="themeToggleBtn" aria-label="${document.documentElement.dataset.theme === 'dark' ? 'Switch to light mode' : 'Switch to dark mode'}">${document.documentElement.dataset.theme === 'dark' ? icon('sun', 18) : icon('moon', 18)}</button>${state.page==='section'&&(state.currentUser?.role==='chairperson'||state.currentUser?.role==='admin')?`<button type="button" class="btn btn-primary btn-sm btn-schedule-add-pill" id="addSectionBtn">${icon('plus', 16)} Add Section</button>`:''}${state.page==='schedule'&&state.currentUser?.role!=='admin'?`<button type="button" class="btn btn-schedule-clear-all btn-sm" id="clearAllSchedulesBtn">Clear All</button><button type="button" class="btn btn-primary btn-sm btn-schedule-add-pill" id="addSchedBtn">${icon('plus', 16)} Add Schedule</button>`:''}${state.page==='curriculum'&&(state.currentUser?.role==='chairperson'||state.currentUser?.role==='admin')?`<button type="button" class="btn btn-outline btn-sm curriculum-export-btn" id="curriculumExportBtn">${icon('fileText', 16)} Export</button><button type="button" class="btn btn-primary btn-sm" id="addCurriculumBtn">${icon('plus', 16)} Add Subject</button>`:''}${state.page==='requests'&&state.currentUser?.role==='chairperson'?`<button class="btn btn-primary btn-sm" id="requestRoomTopBtn">${icon('plus', 16)} Create a Request</button>`:''}</div></div>
+        <div class="topbar"><span class="hamburger" id="hamburger" role="button" tabindex="0" aria-label="Open menu">${icon('menu', 22)}</span>${renderTopbarCenter()}<div class="topbar-actions"><button type="button" class="btn btn-outline btn-sm theme-toggle" id="themeToggleBtn" aria-label="${document.documentElement.dataset.theme === 'dark' ? 'Switch to light mode' : 'Switch to dark mode'}">${document.documentElement.dataset.theme === 'dark' ? icon('sun', 18) : icon('moon', 18)}</button>${state.page==='section'&&(state.currentUser?.role==='chairperson'||state.currentUser?.role==='admin')?`<button type="button" class="btn btn-primary btn-sm btn-schedule-add-pill" id="addSectionBtn">${icon('plus', 16)} Add Section</button>`:''}${state.page==='room'&&(state.currentUser?.role==='chairperson'||state.currentUser?.role==='admin')?`<button type="button" class="btn btn-primary btn-sm btn-schedule-add-pill" id="addRoomBtn">${icon('plus', 16)} Add Room</button>`:''}${state.page==='schedule'&&state.currentUser?.role!=='admin'?`<button type="button" class="btn btn-schedule-clear-all btn-sm" id="clearAllSchedulesBtn">Clear All</button><button type="button" class="btn btn-primary btn-sm btn-schedule-add-pill" id="addSchedBtn">${icon('plus', 16)} Add Schedule</button>`:''}${state.page==='curriculum'&&(state.currentUser?.role==='chairperson'||state.currentUser?.role==='admin')?`<button type="button" class="btn btn-outline btn-sm curriculum-export-btn" id="curriculumExportBtn">${icon('fileText', 16)} Export</button><button type="button" class="btn btn-primary btn-sm" id="addCurriculumBtn">${icon('plus', 16)} Add Subject</button>`:''}${state.page==='requests'&&state.currentUser?.role==='chairperson'?`<button class="btn btn-primary btn-sm" id="requestRoomTopBtn">${icon('plus', 16)} Create a Request</button>`:''}${state.page==='faculty'&&state.currentUser?.role==='admin'?`<button type="button" class="btn btn-primary btn-sm btn-schedule-add-pill" id="addProfBtn">${icon('plus', 16)} Add Professor</button>`:''}</div></div>
         <div class="content">${renderPage()}</div>
       </div>
     </div>
@@ -2357,7 +2442,11 @@ function normalizeScheduleFilters() {
         ? state.professors
         : state.professors.filter(p => p.dept === u.dept);
   let profScopeIds = profScope.map(p => p.id);
-  if (state.filterFaculty === 'all' || state.filterFaculty === '' || !profScopeIds.includes(state.filterFaculty)) {
+  if (u.role === 'admin' && state.filterMode === 'faculty') {
+    if (state.filterFaculty !== 'all' && (!state.filterFaculty || !profScopeIds.includes(state.filterFaculty))) {
+      state.filterFaculty = profScopeIds[0] || '';
+    }
+  } else if (state.filterFaculty === 'all' || state.filterFaculty === '' || !profScopeIds.includes(state.filterFaculty)) {
     state.filterFaculty = profScopeIds[0] || state.filterFaculty;
   }
 
@@ -2373,6 +2462,10 @@ function normalizeScheduleFilters() {
 function renderSchedulePage() {
   let u = state.currentUser;
   normalizeScheduleFilters();
+  let isChair = u.role === 'chairperson';
+  let isAdmin = u.role === 'admin';
+  let profOptions = (isAdmin ? state.professors : state.professors.filter(p => p.dept === u.dept)).slice().sort((a, b) => a.name.localeCompare(b.name));
+  let profOptionsForToolbar = isAdmin && state.filterMode === 'faculty' ? profOptions.filter(p => p.dept === state.filterDept) : profOptions;
   let termSem = state.termSemester || '1st Semester';
   let termAy = normalizeAcademicYearInput(state.termAcademicYear) || DEFAULT_ACADEMIC_YEAR;
   let scheds =
@@ -2383,8 +2476,17 @@ function renderSchedulePage() {
     (s.schSem || '').trim() === termSem &&
     (normalizeAcademicYearInput(s.schAy) || DEFAULT_ACADEMIC_YEAR) === termAy,
   );
-  if (state.filterMode === 'faculty') scheds = scheds.filter(s => s.professorId === state.filterFaculty);
-  else if (state.filterMode === 'room') scheds = scheds.filter(s => scheduleMatchesRoomFilter(s, state.filterRoom));
+  if (state.filterMode === 'faculty') {
+    if (u.role === 'admin' && state.filterFaculty === 'all') {
+      let idSet = new Set(profOptionsForToolbar.map(p => p.id));
+      scheds = scheds.filter(s => {
+        if (s.professorId === PROFESSOR_OTHER_ID) return s.dept === state.filterDept;
+        return idSet.has(s.professorId);
+      });
+    } else {
+      scheds = scheds.filter(s => s.professorId === state.filterFaculty);
+    }
+  } else if (state.filterMode === 'room') scheds = scheds.filter(s => scheduleMatchesRoomFilter(s, state.filterRoom));
   else if (state.filterMode === 'department' && u.role === 'admin') {
     scheds = scheds.filter(s => s.dept === state.filterDept && s.section === state.filterSection);
   } else if (state.filterMode === 'section' && u.role === 'chairperson') {
@@ -2394,11 +2496,7 @@ function renderSchedulePage() {
     ? [state.filterDept]
     : [u.dept];
   let sections = mergeSectionOptions(sectionScope);
-  let isChair = u.role === 'chairperson';
-  let isAdmin = u.role === 'admin';
   let deptOptions = isAdmin ? DEPARTMENTS : DEPARTMENTS.filter(d => d.id === u.dept);
-  let profOptions = (isAdmin ? state.professors : state.professors.filter(p => p.dept === u.dept)).slice().sort((a, b) => a.name.localeCompare(b.name));
-  let profOptionsForToolbar = isAdmin && state.filterMode === 'faculty' ? profOptions.filter(p => p.dept === state.filterDept) : profOptions;
   let roomsSrc = roomsSourceForApp();
   let roomOptions = (isAdmin ? roomsSrc : roomsSrc.filter(r => r.dept === u.dept)).slice().sort((a, b) => a.name.localeCompare(b.name));
   let roomOptionsForToolbar = isAdmin && state.filterMode === 'room' ? roomOptions.filter(r => r.dept === state.filterDept) : roomOptions;
@@ -2411,7 +2509,10 @@ function renderSchedulePage() {
   if (!isChair && state.filterMode === 'department') filtersRow = `${deptSelectHtml}${sectionSelectHtml}`;
   else if (isChair && state.filterMode === 'section') filtersRow = sectionSelectHtml;
   else if (state.filterMode === 'faculty') {
-    let facSelect = `<select class="filter-select" id="filterFaculty" aria-label="Faculty">${profOptionsForToolbar.map(p => `<option value="${escapeHtml(p.id)}" ${state.filterFaculty === p.id ? 'selected' : ''}>${escapeHtml(p.name)}${isAdmin ? '' : ` (${escapeHtml(getDept(p.dept)?.code || '')})`}</option>`).join('')}</select>`;
+    let facAllOpt = isAdmin
+      ? `<option value="all" ${state.filterFaculty === 'all' ? 'selected' : ''}>All Professors</option>`
+      : '';
+    let facSelect = `<select class="filter-select" id="filterFaculty" aria-label="Faculty">${facAllOpt}${profOptionsForToolbar.map(p => `<option value="${escapeHtml(p.id)}" ${state.filterFaculty === p.id ? 'selected' : ''}>${escapeHtml(p.name)}${isAdmin ? '' : ` (${escapeHtml(getDept(p.dept)?.code || '')})`}</option>`).join('')}</select>`;
     filtersRow = isAdmin ? `${deptSelectHtml}${facSelect}` : facSelect;
   } else if (state.filterMode === 'room') {
     let roomSelect = `<select class="filter-select" id="filterRoom" aria-label="Room">${roomOptionsForToolbar.map(r => `<option value="${escapeHtml(r.id)}" ${state.filterRoom === r.id ? 'selected' : ''}>${escapeHtml(r.name)}${isAdmin ? '' : ` (${escapeHtml(getDept(r.dept)?.code || '')})`}</option>`).join('')}</select>`;
@@ -2896,12 +2997,15 @@ function exportCurriculumTableCsv() {
   if (state.page !== 'curriculum') return;
   mergeMissingCurriculumRowsInto(state.curriculum);
   let u = state.currentUser;
+  normalizeCurriculumAdminDeptFilter();
   let termAy = normalizeAcademicYearInput(state.termAcademicYear) || DEFAULT_ACADEMIC_YEAR;
   let curriculumAyFilter = normalizeAcademicYearInput(state.curriculumAcademicYearFilter) || termAy;
   let chairDept = u?.role === 'chairperson' ? u.dept : '';
+  let adminDept = u?.role === 'admin' ? state.curriculumDeptFilter : '';
   if (state.curriculumYearFilter !== 'all' && !SCHEDULE_FORM_YEARS.includes(state.curriculumYearFilter)) state.curriculumYearFilter = 'all';
   let rows = state.curriculum.filter(c => {
     if (chairDept && curriculumFilterDept(c) !== chairDept) return false;
+    if (adminDept && curriculumFilterDept(c) !== adminDept) return false;
     if (state.curriculumYearFilter !== 'all' && curriculumFilterYear(c) !== state.curriculumYearFilter) return false;
     if (curriculumAcademicYearForFilter(c) !== curriculumAyFilter) return false;
     let sf = curriculumSemFilterEffective();
@@ -2965,7 +3069,10 @@ function exportCurriculumTableCsv() {
           .join('')}</tr>`,
     )
     .join('');
-  let deptSlug = u?.role === 'admin' ? 'all' : getDept(chairDept)?.code || chairDept || 'dept';
+  let deptSlug =
+    u?.role === 'admin'
+      ? getDept(state.curriculumDeptFilter)?.code || state.curriculumDeptFilter || 'dept'
+      : getDept(chairDept)?.code || chairDept || 'dept';
   let yearSlug = String(state.curriculumYearFilter || 'all').replace(/\s+/g, '-');
   let html = `<!DOCTYPE html><html><head><meta charset="utf-8"><style>
       @page { size: A4 portrait; margin: 0.45in; }
@@ -3427,10 +3534,12 @@ function renderCurriculumForm(d, opts) {
 function renderCurriculum() {
   mergeMissingCurriculumRowsInto(state.curriculum);
   let u = state.currentUser;
+  let isAdminCurriculum = u?.role === 'admin';
   let canMutateCurriculum = canUserMutateCurriculum(u);
   let termAy = normalizeAcademicYearInput(state.termAcademicYear) || DEFAULT_ACADEMIC_YEAR;
   let curriculumAyFilter = normalizeAcademicYearInput(state.curriculumAcademicYearFilter) || termAy;
   let chairDept = u?.role === 'chairperson' ? u.dept : '';
+  let adminDeptFilter = isAdminCurriculum ? state.curriculumDeptFilter : '';
   if (state.curriculumYearFilter !== 'all' && !SCHEDULE_FORM_YEARS.includes(state.curriculumYearFilter)) state.curriculumYearFilter = 'all';
   let ayPresets = typeof termAcademicYearOptions === 'function' ? termAcademicYearOptions() : [];
   let ayCustom = Array.isArray(state.termAcademicYearCustomOptions) ? state.termAcademicYearCustomOptions : [];
@@ -3442,6 +3551,7 @@ function renderCurriculum() {
   state.curriculumAcademicYearFilter = curriculumAyFilter;
   let rows = state.curriculum.filter(c => {
     if (chairDept && curriculumFilterDept(c) !== chairDept) return false;
+    if (adminDeptFilter && curriculumFilterDept(c) !== adminDeptFilter) return false;
     if (state.curriculumYearFilter !== 'all' && curriculumFilterYear(c) !== state.curriculumYearFilter) return false;
     if (curriculumAcademicYearForFilter(c) !== curriculumAyFilter) return false;
     let sf = curriculumSemFilterEffective();
@@ -3478,8 +3588,19 @@ function renderCurriculum() {
         `<option value="${escapeHtml(v)}" ${semFilterVal === v ? 'selected' : ''}>${escapeHtml(lab)}</option>`,
     )
     .join('');
+  let adminDeptToolbar = '';
+  if (isAdminCurriculum) {
+    let deptFilterOpts = DEPARTMENTS.map(
+      dept =>
+        `<option value="${escapeHtml(dept.id)}" ${state.curriculumDeptFilter === dept.id ? 'selected' : ''}>${escapeHtml(dept.code)} — ${escapeHtml(dept.name)}</option>`,
+    ).join('');
+    adminDeptToolbar = `<div class="curriculum-filter-field curriculum-filter-field--inline">
+        <select class="filter-select curriculum-filter-select curriculum-toolbar-filter-select" id="curriculumDeptFilter" aria-label="Department filter">${deptFilterOpts}</select>
+      </div>`;
+  }
   let curriculumToolbar = `<div class="curriculum-toolbar-block">
     <div class="curriculum-toolbar-filters">
+      ${adminDeptToolbar}
       <div class="curriculum-filter-field curriculum-filter-field--inline">
         <select class="filter-select curriculum-filter-select curriculum-toolbar-filter-select" id="curriculumSemFilter" aria-label="Semester filter">${semFilterOpts}</select>
       </div>
@@ -3768,14 +3889,148 @@ function renderSectionPage() {
   </div>`;
   return `${sectionToolbar}
     <div class="card"><div class="card-body">
-      <div class="table-wrap"><table><thead><tr><th>Department</th><th>Year</th><th>Section</th><th>Actions</th></tr></thead><tbody>
-        ${rows.map(r => `<tr><td>${escapeHtml(getDept(r.dept)?.code || r.dept)} — ${escapeHtml(getDept(r.dept)?.name || '')}</td><td>${escapeHtml(r.year)}</td><td>${escapeHtml(r.section)}</td><td><button class="btn btn-outline btn-sm" data-editsection="${escapeHtml(r.dept)}::${escapeHtml(r.section)}">Edit</button> <button class="btn btn-danger btn-sm" data-delsection="${escapeHtml(r.dept)}::${escapeHtml(r.section)}">Delete</button></td></tr>`).join('')}
+      <div class="table-wrap"><table class="section-page-table"><thead><tr><th class="section-room-dept-icon-th" aria-label="Department code"></th><th>Department</th><th>Section</th><th>Year</th><th>Actions</th></tr></thead><tbody>
+        ${rows.map(r => `<tr><td class="section-room-dept-icon-td">${deptBadgeHtml(r.dept)}</td><td>${departmentDisplayNameOnly(r.dept)}</td><td>${escapeHtml(r.section)}</td><td>${escapeHtml(r.year)}</td><td><button class="btn btn-outline btn-sm" data-editsection="${escapeHtml(r.dept)}::${escapeHtml(r.section)}">Edit</button> <button class="btn btn-danger btn-sm" data-delsection="${escapeHtml(r.dept)}::${escapeHtml(r.section)}">Delete</button></td></tr>`).join('')}
       </tbody></table></div>
     </div></div>`;
 }
 
+function roomRecordFromCatalog(roomId) {
+  if (!roomId) return null;
+  let fromState = state.rooms.find(r => r.id === roomId);
+  if (fromState) return { ...fromState };
+  let bundle = typeof ROOMS !== 'undefined' && Array.isArray(ROOMS) ? ROOMS : [];
+  let fromBundle = bundle.find(r => r.id === roomId);
+  return fromBundle ? { ...fromBundle, type: fromBundle.type || 'classroom' } : null;
+}
+
+function renderRoomForm(d) {
+  d = d || {};
+  let u = state.currentUser;
+  let isAdmin = u?.role === 'admin';
+  let deptVal = d.dept || (isAdmin ? DEPARTMENTS[0]?.id : u?.dept) || '';
+  let deptOpts = isAdmin
+    ? DEPARTMENTS.map(
+        x =>
+          `<option value="${escapeHtml(x.id)}" ${deptVal === x.id ? 'selected' : ''}>${escapeHtml(x.code)} — ${escapeHtml(x.name)}</option>`,
+      ).join('')
+    : `<option value="${escapeHtml(deptVal)}" selected>${escapeHtml(getDept(deptVal)?.code || '')} — ${escapeHtml(getDept(deptVal)?.name || '')}</option>`;
+  let deptDis = isAdmin ? '' : 'disabled';
+  let typeVal = String(d.type || 'classroom').toLowerCase();
+  if (typeVal !== 'classroom' && typeVal !== 'laboratory') typeVal = 'classroom';
+  return `<div class="form-grid form-grid-stacked">
+    <div class="form-group"><label class="form-label" for="room_dept">Department</label><select class="form-select" id="room_dept" ${deptDis}>${deptOpts}</select></div>
+    <div class="form-group"><label class="form-label" for="room_name">Room name</label><input class="form-input" id="room_name" value="${escapeHtml(d.name || '')}" placeholder="e.g. MDHP 303" autocomplete="off"></div>
+    <div class="form-group"><label class="form-label" for="room_type">Type</label><select class="form-select" id="room_type"><option value="classroom" ${typeVal === 'classroom' ? 'selected' : ''}>Lecture</option><option value="laboratory" ${typeVal === 'laboratory' ? 'selected' : ''}>Laboratory</option></select></div>
+    <input type="hidden" id="room_edit_id" value="${escapeHtml(d.id || '')}">
+  </div>`;
+}
+
+/** Room records page: filter values for `type` column. */
+const ROOM_PAGE_TYPE_FILTERS = ['all', 'classroom', 'laboratory'];
+
+/** Timetable type column: LEC / LAB (stored values still classroom / laboratory). */
+function roomPageTypeTableAbbrev(t) {
+  let x = String(t || '').toLowerCase();
+  if (x === 'laboratory') return 'LAB';
+  if (x === 'classroom') return 'LEC';
+  return '—';
+}
+
+function countSchedulesUsingRoom(roomId) {
+  if (!roomId || roomId === ROOM_OTHER_ID) return 0;
+  return state.schedules.filter(s => s.roomId === roomId).length;
+}
+
 function renderRoomPage() {
-  return `<div class="card"><div class="card-body"></div></div>`;
+  let u = state.currentUser;
+  if (!(u?.role === 'admin' || u?.role === 'chairperson')) {
+    return '<div class="card"><div class="card-body">You do not have access to Rooms.</div></div>';
+  }
+  if (!ROOM_PAGE_TYPE_FILTERS.includes(state.roomTypeFilter)) state.roomTypeFilter = 'all';
+  if (u?.role === 'admin' && state.roomDeptFilter !== 'all' && !DEPARTMENTS.some(d => d.id === state.roomDeptFilter)) {
+    state.roomDeptFilter = 'all';
+  }
+  let termAy = normalizeAcademicYearInput(state.termAcademicYear) || DEFAULT_ACADEMIC_YEAR;
+  let roomAyFilter = normalizeAcademicYearInput(state.roomAcademicYearFilter) || termAy;
+  let ayPresets = typeof termAcademicYearOptions === 'function' ? termAcademicYearOptions() : [];
+  let ayCustom = Array.isArray(state.termAcademicYearCustomOptions) ? state.termAcademicYearCustomOptions : [];
+  let aySet = new Set([...ayPresets, ...ayCustom].map(normalizeAcademicYearInput).filter(Boolean));
+  for (let s of state.schedules) aySet.add(scheduleAcademicYearForFilter(s));
+  aySet.add(termAy);
+  let roomAyOptions = [...aySet].filter(Boolean).sort((a, b) => String(a).localeCompare(String(b)));
+  if (!roomAyOptions.includes(roomAyFilter)) roomAyFilter = termAy;
+  state.roomAcademicYearFilter = roomAyFilter;
+  let ayOpts = roomAyOptions
+    .map(ay => `<option value="${escapeHtml(ay)}" ${roomAyFilter === ay ? 'selected' : ''}>${escapeHtml(ay)}</option>`)
+    .join('');
+  let allRooms = roomsSourceForApp().slice();
+  allRooms.sort((a, b) => {
+    let da = getDept(a.dept)?.name || a.dept || '';
+    let db = getDept(b.dept)?.name || b.dept || '';
+    if (da !== db) return da.localeCompare(db);
+    return String(a.name || '').localeCompare(String(b.name || ''), undefined, { sensitivity: 'base' });
+  });
+  let rows = allRooms;
+  if (u?.role === 'chairperson') {
+    rows = rows.filter(r => r.dept === u.dept);
+  } else if (u?.role === 'admin' && state.roomDeptFilter !== 'all') {
+    rows = rows.filter(r => r.dept === state.roomDeptFilter);
+  }
+  if (state.roomTypeFilter !== 'all') {
+    rows = rows.filter(r => String(r.type || 'classroom').toLowerCase() === state.roomTypeFilter);
+  }
+  let typeOpts = [
+    ['all', 'All room types'],
+    ['classroom', 'Lecture'],
+    ['laboratory', 'Laboratory'],
+  ]
+    .map(
+      ([v, lab]) =>
+        `<option value="${escapeHtml(v)}" ${state.roomTypeFilter === v ? 'selected' : ''}>${escapeHtml(lab)}</option>`,
+    )
+    .join('');
+  let deptToolbarField = '';
+  if (u?.role === 'admin') {
+    let deptF = state.roomDeptFilter || 'all';
+    let deptOpts =
+      `<option value="all" ${deptF === 'all' ? 'selected' : ''}>All departments</option>` +
+      DEPARTMENTS.map(
+        d =>
+          `<option value="${escapeHtml(d.id)}" ${deptF === d.id ? 'selected' : ''}>${escapeHtml(d.code)} — ${escapeHtml(d.name)}</option>`,
+      ).join('');
+    deptToolbarField = `<div class="curriculum-filter-field curriculum-filter-field--inline">
+        <select class="filter-select curriculum-filter-select curriculum-toolbar-filter-select" id="roomDeptFilter" aria-label="Department filter">${deptOpts}</select>
+      </div>`;
+  }
+  let typeToolbarField = `<div class="curriculum-filter-field curriculum-filter-field--inline">
+      <select class="filter-select curriculum-filter-select curriculum-toolbar-filter-select" id="roomTypeFilter" aria-label="Room type filter">${typeOpts}</select>
+    </div>`;
+  let ayToolbarField = `<div class="curriculum-filter-field curriculum-filter-field--inline">
+      <select class="filter-select curriculum-filter-select curriculum-toolbar-filter-select" id="roomAcademicYearFilter" aria-label="Academic year filter">${ayOpts}</select>
+    </div>`;
+  let roomToolbar = `<div class="curriculum-toolbar-block">
+    <div class="curriculum-toolbar-filters">
+      ${deptToolbarField}
+      ${typeToolbarField}
+      ${ayToolbarField}
+    </div>
+  </div>`;
+  let tbody =
+    rows.length === 0
+      ? `<tr><td colspan="6" class="room-page-empty">No rooms match these filters.</td></tr>`
+      : rows
+          .map(
+            r =>
+              `<tr><td class="section-room-dept-icon-td">${deptBadgeHtml(r.dept)}</td><td>${departmentDisplayNameOnly(r.dept)}</td><td>${escapeHtml(r.name || '')}</td><td>${escapeHtml(roomPageTypeTableAbbrev(r.type))}</td><td class="room-page-utilization-td"></td><td><button type="button" class="btn btn-outline btn-sm" data-editroom="${escapeHtml(r.id)}">Edit</button> <button type="button" class="btn btn-danger btn-sm" data-delroom="${escapeHtml(r.id)}">Delete</button></td></tr>`,
+          )
+          .join('');
+  return `${roomToolbar}
+    <div class="card"><div class="card-body">
+      <div class="table-wrap"><table class="room-page-table"><thead><tr><th class="section-room-dept-icon-th" aria-label="Department code"></th><th>Department</th><th>Room</th><th>Type</th><th>Room Utilization</th><th>Actions</th></tr></thead><tbody>
+        ${tbody}
+      </tbody></table></div>
+    </div></div>`;
 }
 
 function renderFormsPage() {
@@ -3783,7 +4038,54 @@ function renderFormsPage() {
 }
 
 function renderFaculty() {
-  return `<div class="page-header"><div><h2>Faculty</h2></div><button class="btn btn-primary" id="addProfBtn">${icon('plus', 16)} Add Professor</button></div><div class="table-wrap"><table><thead><tr><th>Name</th><th>Short</th><th>Dept</th><th>Status</th><th>Actions</th></tr></thead><tbody>${state.professors.map(p=>`<tr><td>${p.name}</td><td>${p.short}</td><td><span class="badge-dept ${p.dept}">${getDept(p.dept)?.code}</span></td><td><span class="badge-status ${p.active?'active':'inactive'}">${p.active?'Active':'Inactive'}</span></td><td><button class="btn btn-outline btn-sm" data-editprof="${p.id}">Edit</button> <button class="btn btn-danger btn-sm" data-delprof="${p.id}">Delete</button></td></tr>`).join('')}</tbody></table></div>`;
+  if (state.facultyDeptFilter !== 'all' && !DEPARTMENTS.some(d => d.id === state.facultyDeptFilter)) state.facultyDeptFilter = 'all';
+  if (!['all', 'active', 'on_leave', 'inactive'].includes(state.facultyStatusFilter)) state.facultyStatusFilter = 'all';
+  let deptF = state.facultyDeptFilter || 'all';
+  let statusF = state.facultyStatusFilter || 'all';
+  let q = String(state.facultySearchQuery || '').trim().toLowerCase();
+  let deptOpts = `<option value="all" ${deptF === 'all' ? 'selected' : ''}>All departments</option>` +
+    DEPARTMENTS.map(d => `<option value="${escapeHtml(d.id)}" ${deptF === d.id ? 'selected' : ''}>${escapeHtml(d.code)} — ${escapeHtml(d.name)}</option>`).join('');
+  let statusOpts = [
+    ['all', 'All status'],
+    ['active', 'Active'],
+    ['on_leave', 'On Leave'],
+    ['inactive', 'Inactive'],
+  ].map(([v, lab]) => `<option value="${escapeHtml(v)}" ${statusF === v ? 'selected' : ''}>${escapeHtml(lab)}</option>`).join('');
+  let all = state.professors.slice();
+  let totalProf = all.length;
+  let totalActive = all.filter(p => professorStatusValue(p) === 'active').length;
+  let totalOnLeave = all.filter(p => professorStatusValue(p) === 'on_leave').length;
+  let totalInactive = all.filter(p => professorStatusValue(p) === 'inactive').length;
+  let totalDept = new Set(all.map(p => p.dept).filter(Boolean)).size;
+  let rows = state.professors.slice();
+  if (deptF !== 'all') rows = rows.filter(p => p.dept === deptF);
+  if (statusF !== 'all') rows = rows.filter(p => professorStatusValue(p) === statusF);
+  if (q) {
+    rows = rows.filter(p => {
+      let hay = `${p.name || ''} ${p.short || ''} ${getDept(p.dept)?.name || ''} ${getDept(p.dept)?.code || ''} ${p.note || ''}`.toLowerCase();
+      return hay.includes(q);
+    });
+  }
+  rows.sort((a, b) => String(a.name || '').localeCompare(String(b.name || '')));
+  let summary = `<div class="stats-grid faculty-stats-grid">
+      <div class="stat-card"><div><div class="stat-num">${totalProf}</div><div class="stat-label">Professors</div></div></div>
+      <div class="stat-card"><div><div class="stat-num">${totalActive}</div><div class="stat-label">Active</div></div></div>
+      <div class="stat-card"><div><div class="stat-num">${totalOnLeave}</div><div class="stat-label">On Leave</div></div></div>
+      <div class="stat-card"><div><div class="stat-num">${totalInactive}</div><div class="stat-label">Inactive</div></div></div>
+      <div class="stat-card"><div><div class="stat-num">${totalDept}</div><div class="stat-label">Departments</div></div></div>
+    </div>`;
+  let facultyToolbar = `<div class="curriculum-toolbar-block"><div class="curriculum-toolbar-filters faculty-toolbar-filters">
+      <div class="curriculum-filter-field curriculum-filter-field--inline faculty-search-field"><input class="form-input faculty-search-input" id="facultySearchInput" type="search" placeholder="Search name or department" value="${escapeHtml(state.facultySearchQuery || '')}" aria-label="Search faculty"></div>
+      <div class="curriculum-filter-field curriculum-filter-field--inline"><select class="filter-select curriculum-filter-select curriculum-toolbar-filter-select" id="facultyDeptFilter" aria-label="Department filter">${deptOpts}</select></div>
+      <div class="curriculum-filter-field curriculum-filter-field--inline"><select class="filter-select curriculum-filter-select curriculum-toolbar-filter-select" id="facultyStatusFilter" aria-label="Status filter">${statusOpts}</select></div>
+    </div></div>`;
+  let tbody = rows.length === 0
+    ? `<tr><td colspan="4" class="room-page-empty">No faculty rows match these filters.</td></tr>`
+    : rows.map(p => {
+        let st = professorStatusValue(p);
+        return `<tr><td>${escapeHtml(p.name)}</td><td class="section-room-dept-icon-td">${deptBadgeHtml(p.dept)}</td><td><span class="badge-status ${escapeHtml(st)}">${escapeHtml(professorStatusLabel(st))}</span></td><td><button class="btn btn-outline btn-sm" data-editprof="${escapeHtml(p.id)}">Edit</button> <button class="btn btn-danger btn-sm" data-delprof="${escapeHtml(p.id)}">Delete</button></td></tr>`;
+      }).join('');
+  return `${summary}${facultyToolbar}<div class="table-wrap"><table class="faculty-page-table"><thead><tr><th>Name</th><th class="section-room-dept-icon-th" aria-label="Department">Department</th><th>Status</th><th>Actions</th></tr></thead><tbody>${tbody}</tbody></table></div>`;
 }
 
 function renderAccounts() {
@@ -3840,6 +4142,10 @@ function renderModal() {
     let d = data || {};
     return modalWrap(d._oldSection ? 'Edit Section' : 'Add Section', renderSectionForm(d));
   }
+  if (type === 'addRoom') {
+    let d = data || {};
+    return modalWrap(d.id ? 'Edit Room' : 'Add Room', renderRoomForm(d));
+  }
   if (type === 'addCurriculum') {
     let d = data || {};
     let viewOnly = !canUserMutateCurriculum(state.currentUser);
@@ -3886,7 +4192,7 @@ function scheduleFormFilterDefaults() {
   } else if (u.role === 'admin' && state.filterMode === 'department' && state.filterSection) {
     o.defaultSection = state.filterSection;
   }
-  if (state.filterMode === 'faculty' && state.filterFaculty) {
+  if (state.filterMode === 'faculty' && state.filterFaculty && state.filterFaculty !== 'all') {
     o.defaultProfessorId = state.filterFaculty;
   }
   if (state.filterMode === 'room' && state.filterRoom) {
@@ -4161,8 +4467,9 @@ function renderSubjectForm(d){
 }
 
 function renderProfessorForm(d){
+  d = d || {};
   let deptOpts=DEPARTMENTS.map(dept=>`<option value="${escapeHtml(dept.id)}" ${d.dept===dept.id?'selected':''}>${escapeHtml(dept.code)} — ${escapeHtml(dept.name)}</option>`).join('');
-  return `<div class="form-grid form-grid-stacked"><div class="form-group full"><label class="form-label" for="fp_name">Full name</label><input class="form-input" id="fp_name" placeholder="Full Name" value="${escapeHtml(d.name||'')}"></div><div class="form-group full"><label class="form-label" for="fp_short">Short name</label><input class="form-input" id="fp_short" placeholder="Short Name" value="${escapeHtml(d.short||'')}"></div><div class="form-group full"><label class="form-label" for="fp_dept">Department</label><select class="form-select" id="fp_dept">${deptOpts}</select></div></div>`;
+  return `<div class="form-grid form-grid-stacked"><input type="hidden" id="fp_edit_id" value="${escapeHtml(d.id||'')}"><div class="form-group full"><label class="form-label" for="fp_name">Full name</label><input class="form-input" id="fp_name" placeholder="Full Name" value="${escapeHtml(d.name||'')}"></div><div class="form-group full"><label class="form-label" for="fp_short">Short name</label><input class="form-input" id="fp_short" placeholder="Short Name" value="${escapeHtml(d.short||'')}"></div><div class="form-group full"><label class="form-label" for="fp_dept">Department</label><select class="form-select" id="fp_dept">${deptOpts}</select></div><div class="form-group full"><label class="form-label" for="fp_note">Note</label><textarea class="form-input" id="fp_note" rows="3" placeholder="Optional">${escapeHtml(d.note||'')}</textarea></div></div>`;
 }
 
 function renderRequestForm() {
@@ -4802,6 +5109,55 @@ function bindPage(){
       render();
       return;
     }
+    if (mt === 'addRoom') {
+      let u = state.currentUser;
+      if (!(u?.role === 'admin' || u?.role === 'chairperson')) return;
+      let dept = (document.getElementById('room_dept')?.value || '').trim();
+      let name = (document.getElementById('room_name')?.value || '').trim();
+      let type = (document.getElementById('room_type')?.value || 'classroom').toLowerCase();
+      let editId = (document.getElementById('room_edit_id')?.value || '').trim();
+      if (!dept || !name) {
+        showToast(MSG_FORM_INCOMPLETE);
+        return;
+      }
+      if (type !== 'classroom' && type !== 'laboratory') type = 'classroom';
+      if (u.role === 'chairperson' && dept !== u.dept) {
+        showToast('You can only manage rooms for your department.');
+        return;
+      }
+      let existing = editId ? roomRecordFromCatalog(editId) : null;
+      if (editId && !existing) {
+        showToast('Room not found.');
+        return;
+      }
+      if (editId && u.role === 'chairperson' && existing && existing.dept !== u.dept) {
+        showToast('You cannot edit this room.');
+        return;
+      }
+      if (!window.confirm(editId ? MSG_CONFIRM_SAVE_ROOM_EDIT : MSG_CONFIRM_SAVE_ROOM_NEW)) return;
+      let roomObj = {
+        id: editId || genId(),
+        name,
+        type,
+        dept,
+      };
+      if (hasSupabaseClient()) {
+        const { error } = await window.cenSupabase.from('rooms').upsert([normalizeRoomToDb(roomObj)], { onConflict: 'id' });
+        if (error) {
+          window.alert(`Unable to save room: ${error.message}`);
+          return;
+        }
+      }
+      state.suppressedRoomIds = (state.suppressedRoomIds || []).filter(x => x !== roomObj.id);
+      let idx = state.rooms.findIndex(r => r.id === roomObj.id);
+      if (idx >= 0) state.rooms[idx] = roomObj;
+      else state.rooms.push(roomObj);
+      state.rooms = state.rooms.filter(r => !isRetiredCpeDrawingRoom(r)).sort((a, b) => (a.name || '').localeCompare(b.name || ''));
+      state.modal = null;
+      showToast(editId ? 'Room updated' : 'Room added');
+      render();
+      return;
+    }
     if (mt === 'addSubject') {
       let sub = { id: document.getElementById('saveSubjectBtn')?.dataset.editid || genId(), code: document.getElementById('fs_code').value, name: document.getElementById('fs_name').value, dept: document.getElementById('fs_dept').value, units: parseInt(document.getElementById('fs_units').value), active: true };
       if (sub.code && sub.name) {
@@ -4821,7 +5177,16 @@ function bindPage(){
       return;
     }
     if (mt === 'addProfessor') {
-      let prof = { id: document.getElementById('saveProfBtn')?.dataset.editid || genId(), name: document.getElementById('fp_name').value, short: document.getElementById('fp_short').value, dept: document.getElementById('fp_dept').value, active: true };
+      let editId = (document.getElementById('fp_edit_id')?.value || '').trim();
+      let prev = editId ? state.professors.find(p => p.id === editId) : null;
+      let prof = {
+        id: editId || genId(),
+        name: document.getElementById('fp_name').value,
+        short: document.getElementById('fp_short').value,
+        dept: document.getElementById('fp_dept').value,
+        note: (document.getElementById('fp_note')?.value || '').trim(),
+        active: prev ? prev.active !== false : true,
+      };
       if (prof.name && prof.short) {
         if (!window.confirm(MSG_CONFIRM_SAVE_PROFESSOR)) return;
         if (hasSupabaseClient()) {
@@ -4833,7 +5198,11 @@ function bindPage(){
             return;
           }
         }
-        if (prof.id.startsWith('id_')) state.professors.push(prof); else { let i = state.professors.findIndex(p => p.id === prof.id); if (i >= 0) state.professors[i] = prof; }
+        if (!editId || !state.professors.some(p => p.id === prof.id)) state.professors.push(prof);
+        else {
+          let i = state.professors.findIndex(p => p.id === prof.id);
+          if (i >= 0) state.professors[i] = prof;
+        }
         state.modal = null; showToast('Professor saved'); render();
       }
       return;
@@ -5158,11 +5527,95 @@ function bindPage(){
     state.sectionAcademicYearFilter = normalizeAcademicYearInput(e.target.value || '') || DEFAULT_ACADEMIC_YEAR;
     render();
   });
+  document.getElementById('roomDeptFilter')?.addEventListener('change', e => {
+    state.roomDeptFilter = e.target.value || 'all';
+    render();
+  });
+  document.getElementById('roomTypeFilter')?.addEventListener('change', e => {
+    let v = e.target.value || 'all';
+    state.roomTypeFilter = ROOM_PAGE_TYPE_FILTERS.includes(v) ? v : 'all';
+    render();
+  });
+  document.getElementById('roomAcademicYearFilter')?.addEventListener('change', e => {
+    state.roomAcademicYearFilter = normalizeAcademicYearInput(e.target.value || '') || DEFAULT_ACADEMIC_YEAR;
+    render();
+  });
+  document.getElementById('facultyDeptFilter')?.addEventListener('change', e => {
+    state.facultyDeptFilter = e.target.value || 'all';
+    render();
+  });
+  document.getElementById('facultyStatusFilter')?.addEventListener('change', e => {
+    state.facultyStatusFilter = e.target.value || 'all';
+    render();
+  });
+  document.getElementById('facultySearchInput')?.addEventListener('input', e => {
+    state.facultySearchQuery = e.target.value || '';
+    let caret = Number.isFinite(e.target.selectionStart) ? e.target.selectionStart : state.facultySearchQuery.length;
+    render();
+    queueMicrotask(() => {
+      let inp = document.getElementById('facultySearchInput');
+      if (!inp) return;
+      inp.focus();
+      let pos = Math.max(0, Math.min(caret, inp.value.length));
+      try {
+        inp.setSelectionRange(pos, pos);
+      } catch (err) {
+        /* ignore */
+      }
+    });
+  });
   document.getElementById('addSectionBtn')?.addEventListener('click', () => {
     let u = state.currentUser;
     if (!(u?.role === 'admin' || u?.role === 'chairperson')) return;
     openModal({ type: 'addSection', data: { dept: u.role === 'chairperson' ? u.dept : DEPARTMENTS[0]?.id || '', year: '', section: '' } });
   });
+  document.getElementById('addRoomBtn')?.addEventListener('click', () => {
+    let u = state.currentUser;
+    if (!(u?.role === 'admin' || u?.role === 'chairperson')) return;
+    openModal({
+      type: 'addRoom',
+      data: { id: '', name: '', type: 'classroom', dept: u.role === 'chairperson' ? u.dept : DEPARTMENTS[0]?.id || '' },
+    });
+  });
+  document.querySelectorAll('[data-editroom]').forEach(el =>
+    el.addEventListener('click', () => {
+      let id = el.getAttribute('data-editroom') || '';
+      let rec = roomRecordFromCatalog(id);
+      if (!rec) return;
+      let u = state.currentUser;
+      if (u?.role === 'chairperson' && rec.dept !== u.dept) return;
+      openModal({ type: 'addRoom', data: { ...rec } });
+    }),
+  );
+  document.querySelectorAll('[data-delroom]').forEach(el =>
+    el.addEventListener('click', async () => {
+      let roomId = el.getAttribute('data-delroom') || '';
+      let rec = roomRecordFromCatalog(roomId);
+      if (!rec) return;
+      let u = state.currentUser;
+      if (!(u?.role === 'admin' || u?.role === 'chairperson')) return;
+      if (u.role === 'chairperson' && rec.dept !== u.dept) return;
+      let nUse = countSchedulesUsingRoom(roomId);
+      let delMsg =
+        nUse > 0
+          ? `This room is used by ${nUse} schedule row(s). ${MSG_CONFIRM_PERM_DELETE_ROOM}`
+          : MSG_CONFIRM_PERM_DELETE_ROOM;
+      if (!window.confirm(delMsg)) return;
+      if (hasSupabaseClient()) {
+        const { error } = await window.cenSupabase.from('rooms').delete().eq('id', roomId);
+        if (error) {
+          window.alert(`Unable to delete room: ${error.message}`);
+          return;
+        }
+        state.suppressedRoomIds = (state.suppressedRoomIds || []).filter(x => x !== roomId);
+      } else {
+        if (!state.suppressedRoomIds.includes(roomId)) state.suppressedRoomIds.push(roomId);
+      }
+      state.rooms = state.rooms.filter(r => r.id !== roomId);
+      showToast('Room deleted');
+      render();
+    }),
+  );
   document.querySelectorAll('[data-editsection]').forEach(el =>
     el.addEventListener('click', () => {
       let raw = el.getAttribute('data-editsection') || '';
@@ -5254,6 +5707,11 @@ function bindPage(){
       syncScheduleExportWizardStateFromDom();
     });
   }
+  document.getElementById('curriculumDeptFilter')?.addEventListener('change', e => {
+    state.curriculumDeptFilter = e.target.value || (DEPARTMENTS[0] && DEPARTMENTS[0].id) || '';
+    state.curriculumTableEditId = null;
+    render();
+  });
   document.getElementById('curriculumSemFilter')?.addEventListener('change', e => {
     state.curriculumSemFilter = e.target.value;
     state.curriculumTableEditId = null;
@@ -5485,6 +5943,9 @@ const MSG_CONFIRM_SAVE_CURRICULUM_EDIT = 'Update this curriculum row in the data
 const MSG_CONFIRM_PERM_DELETE_SCHEDULE = 'Permanently delete this schedule? This cannot be undone.';
 const MSG_CONFIRM_PERM_DELETE_CURRICULUM = 'Permanently delete this curriculum entry? This cannot be undone.';
 const MSG_CONFIRM_PERM_DELETE_PROFESSOR = 'Permanently delete this professor? This cannot be undone.';
+const MSG_CONFIRM_SAVE_ROOM_NEW = 'Save this room? It will be available for scheduling and room lists.';
+const MSG_CONFIRM_SAVE_ROOM_EDIT = 'Update this room? Existing name, type, or department will be replaced where stored.';
+const MSG_CONFIRM_PERM_DELETE_ROOM = 'Permanently delete this room? This cannot be undone.';
 
 function showFormValidationBanner(containerId, message) {
   let box = document.getElementById(containerId);
