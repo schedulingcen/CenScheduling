@@ -256,13 +256,16 @@ function resolveInitialPage() {
   if (typeof window.CEN_PAGE === 'string' && allowed.includes(window.CEN_PAGE)) return window.CEN_PAGE;
   return HTML_TO_PAGE[file] || 'dashboard';
 }
-/** Keep browser URL clean (root only) while preserving the current SPA view. */
+/** Keep browser URL clean (directory root) while preserving current SPA view. */
 function forceRootUrlInAddressBar() {
   try {
-    let p = (location.pathname || '').toLowerCase();
+    let rawPath = location.pathname || '';
+    let p = rawPath.toLowerCase();
     if (!p.endsWith('.html')) return;
     if (!window.history || typeof window.history.replaceState !== 'function') return;
-    window.history.replaceState(window.history.state || {}, '', '/');
+    let baseDir = rawPath.replace(/[^/]+$/, '');
+    if (!baseDir.endsWith('/')) baseDir += '/';
+    window.history.replaceState(window.history.state || {}, '', baseDir);
   } catch (e) {
     /* ignore */
   }

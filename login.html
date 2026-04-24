@@ -131,6 +131,10 @@
     ];
 
     const loginForm = document.getElementById('loginForm');
+    // If a session already exists, skip login screen.
+    if (sessionStorage.getItem('cen_user')) {
+      window.location.replace('dashboard.html');
+    }
     loginForm.addEventListener('submit', e => {
       e.preventDefault();
       doLogin();

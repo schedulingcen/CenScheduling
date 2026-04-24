@@ -1,0 +1,22 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+  <meta charset="UTF-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1.0">
+  <title>CEN Timetable</title>
+  <link rel="icon" type="image/png" href="assets/cen_logo.png">
+  <link rel="shortcut icon" href="assets/cen_logo.png">
+  <script>
+    (function () {
+      try {
+        var hasSession = !!sessionStorage.getItem('cen_user');
+        window.location.replace(hasSession ? 'dashboard.html' : 'login.html');
+      } catch (e) {
+        window.location.replace('login.html');
+      }
+    })();
+  </script>
+</head>
+<body>
+</body>
+</html>
