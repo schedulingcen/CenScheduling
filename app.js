@@ -3415,14 +3415,16 @@ function renderRequests() {
                 <div class="request-card request-card--incoming">
                   <div class="request-icon">${icon('building', 20)}</div>
                   <div class="request-info">
-                    <div class="request-title">${room?.name || 'Unknown Room'} — ${r.section}</div>
+                    <div class="request-card-head">
+                      <div class="request-title">${room?.name || 'Unknown Room'} — ${r.section}</div>
+                      <div class="request-actions">
+                        <button class="btn btn-green btn-sm" data-approve="${r.id}">${icon('check', 14)} Approve</button>
+                        <button class="btn btn-danger btn-sm" data-decline="${r.id}">${icon('close', 14)} Decline</button>
+                      </div>
+                    </div>
                     <div class="request-meta">From: <span class="badge-dept ${r.fromDept}">${from?.code || '?'}</span> · ${sub?.code || '?'} · ${r.professorId ? escapeHtml(professorDisplayLineFromPick(r.professorId, r.professorOtherName)) + ' · ' : ''}${r.days.map(d => d.slice(0, 3)).join(', ')} ${fmt12(r.timeStart)}–${fmt12(r.timeEnd)}</div>
                     ${r.reason ? `<div class="request-meta request-reason" style="margin-top: 4px; font-style: italic;">${icon('fileText', 14)} "${escapeHtml(r.reason)}"</div>` : ''}
                     <div class="request-meta" style="margin-top: 4px;">Requested: ${r.created}</div>
-                  </div>
-                  <div class="request-actions">
-                    <button class="btn btn-green btn-sm" data-approve="${r.id}">${icon('check', 14)} Approve</button>
-                    <button class="btn btn-danger btn-sm" data-decline="${r.id}">${icon('close', 14)} Decline</button>
                   </div>
                 </div>
               `;

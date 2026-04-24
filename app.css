@@ -95,6 +95,16 @@
 }
 .request-card--incoming .request-title {
   font-size: 15px;
+  flex: 1;
+  min-width: 0;
+  overflow-wrap: anywhere;
+}
+.request-card--incoming .request-card-head {
+  display: flex;
+  align-items: flex-start;
+  justify-content: space-between;
+  gap: 10px;
+  margin-bottom: 4px;
 }
 .request-card--incoming .request-meta {
   font-size: 12px;
@@ -218,6 +228,10 @@
   }
 }
 @media (max-width: 480px) {
+  .request-card--incoming .request-card-head {
+    flex-direction: column;
+    align-items: stretch;
+  }
   .request-actions {
     display: grid;
     grid-template-columns: 1fr 1fr;
