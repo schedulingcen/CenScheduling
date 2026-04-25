@@ -259,6 +259,9 @@ function resolveInitialPage() {
 /** Keep browser URL clean (directory root) while preserving current SPA view. */
 function forceRootUrlInAddressBar() {
   try {
+    // Multi-page mode: keep actual *.html in the URL so browser refresh
+    // returns to the same page instead of loading index.html.
+    if (typeof window.CEN_PAGE === 'string' && window.CEN_PAGE.trim()) return;
     let rawPath = location.pathname || '';
     let p = rawPath.toLowerCase();
     if (!p.endsWith('.html')) return;
