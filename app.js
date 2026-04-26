@@ -912,17 +912,37 @@ function normalizeProfessorTitle(name) {
   if (/^dr\.?\s+/i.test(noPhd)) return noPhd;
   return `DR. ${noPhd}`;
 }
+/** When Supabase has no `professors.status` column, "On leave" is stored in `note` via this prefix (stripped in the UI). */
+const FACULTY_NOTE_STATUS_TAG_RE = /^\s*__cen_faculty_status:(active|on_leave|inactive)__(\r?\n|\n)?/i;
+function stripFacultyStatusTagFromNote(note) {
+  return String(note || '').replace(FACULTY_NOTE_STATUS_TAG_RE, '').trimStart();
+}
+function parseFacultyStatusFromNote(note) {
+  let m = String(note || '').match(FACULTY_NOTE_STATUS_TAG_RE);
+  return m ? m[1].toLowerCase() : null;
+}
 function normalizeProfessorFromDb(row) {
   if (!row) return null;
-  let st = String(row.status || '').trim().toLowerCase();
-  let status = st === 'active' || st === 'on_leave' || st === 'inactive' ? st : undefined;
+  let note = row.note != null ? String(row.note) : '';
+  let stCol = String(row.status || '').trim().toLowerCase();
+  let status;
+  if (row.active === false) {
+    status = 'inactive';
+  } else if (stCol === 'active' || stCol === 'on_leave' || stCol === 'inactive') {
+    status = stCol;
+  } else {
+    let fromTag = parseFacultyStatusFromNote(note);
+    if (fromTag) status = fromTag;
+    else if (note.toLowerCase().includes('leave')) status = 'on_leave';
+    else status = 'active';
+  }
   return {
     id: row.id,
     name: normalizeProfessorTitle(row.name),
     short: row.short || '',
     dept: row.dept_id || row.dept,
     active: row.active !== false,
-    note: row.note != null ? String(row.note) : '',
+    note,
     status,
   };
 }
@@ -931,13 +951,16 @@ function normalizeProfessorToDb(prof) {
   if (!['active', 'on_leave', 'inactive'].includes(st)) {
     st = prof.active === false ? 'inactive' : 'active';
   }
+  let userNote = stripFacultyStatusTagFromNote(prof.note != null ? String(prof.note) : '').trimEnd();
+  let noteForDb =
+    st === 'on_leave' ? `__cen_faculty_status:on_leave__${userNote ? `\n${userNote}` : ''}` : userNote;
   return {
     id: prof.id,
     name: normalizeProfessorTitle(prof.name),
     short: prof.short || '',
     dept_id: prof.dept,
     active: st !== 'inactive',
-    status: st,
+    note: noteForDb,
   };
 }
 function normalizeRoomFromDb(row) {
@@ -1595,7 +1618,9 @@ function professorStatusValue(p) {
   let raw = String(p?.status || '').trim().toLowerCase();
   if (raw === 'active' || raw === 'on_leave' || raw === 'inactive') return raw;
   if (p?.active === false) return 'inactive';
-  let n = String(p?.note || '').toLowerCase();
+  let fromTag = parseFacultyStatusFromNote(p?.note);
+  if (fromTag) return fromTag;
+  let n = stripFacultyStatusTagFromNote(String(p?.note || '')).toLowerCase();
   if (n.includes('leave')) return 'on_leave';
   return 'active';
 }
@@ -2838,11 +2863,11 @@ function hasScheduleStartingAtOnDay(scheds, day, timeStart, excludeId) {
       timesEqualClock(s.timeStart, timeStart),
   );
 }
-/** Rowspan through the time row labeled with the end clock when duration is a multiple of 30m beyond one slot, unless back-to-back. */
+/** Rowspan through the time row labeled with the end clock for any block length that is a positive multiple of 30m (including one slot, e.g. 7:30–8:00), unless back-to-back. */
 function timeDurationForTimetableGridDisplay(schedule, day, allScheds) {
   let d = timeDuration(schedule.timeStart, schedule.timeEnd);
   let diff = parseTimeToMinutes(schedule.timeEnd) - parseTimeToMinutes(schedule.timeStart);
-  if (!Number.isFinite(diff) || diff <= 30 || diff % 30 !== 0) return d;
+  if (!Number.isFinite(diff) || diff <= 0 || diff % 30 !== 0) return d;
   if (hasScheduleStartingAtOnDay(allScheds, day, schedule.timeEnd, schedule.id)) return d;
   return d + 1;
 }
@@ -2861,7 +2886,7 @@ function hasScheduleStartingAtForRoomDay(scheds, day, roomId, timeStart, exclude
 function timeDurationForRoomDayGridDisplay(schedule, day, roomSchedsSameDay) {
   let d = timeDuration(schedule.timeStart, schedule.timeEnd);
   let diff = parseTimeToMinutes(schedule.timeEnd) - parseTimeToMinutes(schedule.timeStart);
-  if (!Number.isFinite(diff) || diff <= 30 || diff % 30 !== 0) return d;
+  if (!Number.isFinite(diff) || diff <= 0 || diff % 30 !== 0) return d;
   if (hasScheduleStartingAtForRoomDay(roomSchedsSameDay, day, schedule.roomId, schedule.timeEnd, schedule.id))
     return d;
   return d + 1;
@@ -2879,10 +2904,22 @@ function pendingRequestsForUser() {
 }
 
 function checkConflicts(entry, excludeId=null) {
-  let conflicts=[];
-  let scheds=state.schedules.filter(s=>s.id!==excludeId);
-  let timeOverlap=(as,ae,bs,be)=>as<be&&ae>bs;
-  for(let s of scheds){
+  let conflicts = [];
+  let entrySem = (entry.schSem || '').trim();
+  let entryAy = normalizeAcademicYearInput(entry.schAy) || DEFAULT_ACADEMIC_YEAR;
+  if (!entrySem) {
+    let t = currentTermFilter();
+    entrySem = t.sem;
+    entryAy = t.ay;
+  }
+  let scheds = state.schedules.filter(s => {
+    if (s.id === excludeId) return false;
+    if ((s.schSem || '').trim() !== entrySem) return false;
+    if ((normalizeAcademicYearInput(s.schAy) || DEFAULT_ACADEMIC_YEAR) !== entryAy) return false;
+    return true;
+  });
+  let timeOverlap = (as, ae, bs, be) => as < be && ae > bs;
+  for (let s of scheds) {
     if(!s.days.some(d=>entry.days.includes(d))) continue;
     if(!timeOverlap(entry.timeStart,entry.timeEnd,s.timeStart,s.timeEnd)) continue;
     if(scheduleProfessorsOverlap(s, entry)){
@@ -2904,18 +2941,7 @@ function checkConflicts(entry, excludeId=null) {
 function countSchedulesWithConflicts(schedulesToCheck) {
   let n = 0;
   for (let s of schedulesToCheck) {
-    let entry = {
-      professorId: s.professorId,
-      professorOtherName: s.professorOtherName,
-      roomId: s.roomId,
-      roomOtherName: s.roomOtherName,
-      dept: s.dept,
-      section: s.section,
-      days: s.days,
-      timeStart: s.timeStart,
-      timeEnd: s.timeEnd,
-    };
-    if (checkConflicts(entry, s.id).length) n++;
+    if (checkConflicts(scheduleEntryForConflictCheck(s), s.id).length) n++;
   }
   return n;
 }
@@ -2931,6 +2957,8 @@ function scheduleEntryForConflictCheck(s) {
     days: s.days,
     timeStart: s.timeStart,
     timeEnd: s.timeEnd,
+    schSem: s.schSem,
+    schAy: s.schAy,
   };
 }
 
@@ -2939,8 +2967,17 @@ function getConflictPairsForSchedule(scheduleRow) {
   let entry = scheduleEntryForConflictCheck(scheduleRow);
   let excludeId = scheduleRow.id;
   let pairs = [];
+  let entrySem = (entry.schSem || '').trim();
+  let entryAy = normalizeAcademicYearInput(entry.schAy) || DEFAULT_ACADEMIC_YEAR;
+  if (!entrySem) {
+    let t = currentTermFilter();
+    entrySem = t.sem;
+    entryAy = t.ay;
+  }
   for (let other of state.schedules) {
     if (other.id === excludeId) continue;
+    if ((other.schSem || '').trim() !== entrySem) continue;
+    if ((normalizeAcademicYearInput(other.schAy) || DEFAULT_ACADEMIC_YEAR) !== entryAy) continue;
     if (!other.days.some(d => entry.days.includes(d))) continue;
     if (!(entry.timeStart < other.timeEnd && entry.timeEnd > other.timeStart)) continue;
     let msgs = [];
@@ -5776,7 +5813,7 @@ function renderFaculty() {
   if (statusF !== 'all') rows = rows.filter(p => professorStatusValue(p) === statusF);
   if (q) {
     rows = rows.filter(p => {
-      let hay = `${p.name || ''} ${p.short || ''} ${getDept(p.dept)?.name || ''} ${getDept(p.dept)?.code || ''} ${p.note || ''}`.toLowerCase();
+      let hay = `${p.name || ''} ${p.short || ''} ${getDept(p.dept)?.name || ''} ${getDept(p.dept)?.code || ''} ${stripFacultyStatusTagFromNote(p.note || '')}`.toLowerCase();
       return hay.includes(q);
     });
   }
@@ -6586,7 +6623,7 @@ function renderProfessorForm(d){
     ['on_leave', 'On Leave'],
     ['inactive', 'Inactive'],
   ].map(([v, lab]) => `<option value="${escapeHtml(v)}" ${st === v ? 'selected' : ''}>${escapeHtml(lab)}</option>`).join('');
-  return `<div class="form-grid form-grid-stacked"><input type="hidden" id="fp_edit_id" value="${escapeHtml(d.id||'')}"><div class="form-group full"><label class="form-label" for="fp_name">Full name</label><input class="form-input" id="fp_name" placeholder="Full Name" value="${escapeHtml(d.name||'')}"></div><div class="form-group full"><label class="form-label" for="fp_short">Short name</label><input class="form-input" id="fp_short" placeholder="Short Name" value="${escapeHtml(d.short||'')}"></div><div class="form-group full"><label class="form-label" for="fp_dept">Department</label><select class="form-select" id="fp_dept">${deptOpts}</select></div><div class="form-group full"><label class="form-label" for="fp_status">Status</label><select class="form-select" id="fp_status" aria-label="Faculty status">${statusOpts}</select></div><div class="form-group full"><label class="form-label" for="fp_note">Note</label><textarea class="form-input" id="fp_note" rows="3" placeholder="Optional">${escapeHtml(d.note||'')}</textarea></div></div>`;
+  return `<div class="form-grid form-grid-stacked"><input type="hidden" id="fp_edit_id" value="${escapeHtml(d.id||'')}"><div class="form-group full"><label class="form-label" for="fp_name">Full name</label><input class="form-input" id="fp_name" placeholder="Full Name" value="${escapeHtml(d.name||'')}"></div><div class="form-group full"><label class="form-label" for="fp_short">Short name</label><input class="form-input" id="fp_short" placeholder="Short Name" value="${escapeHtml(d.short||'')}"></div><div class="form-group full"><label class="form-label" for="fp_dept">Department</label><select class="form-select" id="fp_dept">${deptOpts}</select></div><div class="form-group full"><label class="form-label" for="fp_status">Status</label><select class="form-select" id="fp_status" aria-label="Faculty status">${statusOpts}</select></div><div class="form-group full"><label class="form-label" for="fp_note">Note</label><textarea class="form-input" id="fp_note" rows="3" placeholder="Optional">${escapeHtml(stripFacultyStatusTagFromNote(d.note||''))}</textarea></div></div>`;
 }
 
 function renderRequestForm() {
