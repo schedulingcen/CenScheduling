@@ -5632,7 +5632,10 @@ function renderAccounts() {
 
 function renderMyAccount() {
   let u = state.currentUser;
-  return `<div class="card"><div class="card-body"><div style="display:flex;gap:16px;margin-bottom:24px"><div style="width:64px;height:64px;border-radius:50%;background:var(--red);display:flex;align-items:center;justify-content:center;font-size:22px;font-weight:700;color:#fff">${u.initials}</div><div><div style="font-size:18px;font-weight:700">${u.name}</div><div style="color:var(--gray-600)">${u.email}</div></div></div><div class="form-grid"><div class="form-group full"><label>Full Name</label><input class="form-input" value="${u.name}"></div><div class="form-group full"><label>Email</label><input class="form-input" value="${u.email}"></div></div><button class="btn btn-primary" onclick="showToast('Profile updated')">Save Changes</button></div></div>`;
+  if (!u) return '';
+  let nameVal = escapeHtml(u.name || '');
+  let emailVal = escapeHtml(u.email || '');
+  return `<div class="card my-account-card"><div class="card-body"><div style="display:flex;gap:16px;margin-bottom:24px"><div style="width:64px;height:64px;border-radius:50%;background:var(--red);display:flex;align-items:center;justify-content:center;font-size:22px;font-weight:700;color:#fff">${escapeHtml(u.initials || '')}</div><div><div id="myacct_header_name" style="font-size:18px;font-weight:700">${escapeHtml(u.name || '')}</div><div style="color:var(--gray-600)">${escapeHtml(u.email || '')}</div></div></div><div id="myacctAlert"></div><div class="form-grid"><div class="form-group full"><label for="myacct_name">Full Name</label><input class="form-input" id="myacct_name" name="name" autocomplete="name" value="${nameVal}"></div><div class="form-group full"><label for="myacct_email">Email</label><input class="form-input form-input-readonly" id="myacct_email" type="email" name="email" autocomplete="email" value="${emailVal}" readonly aria-readonly="true" title="Email is tied to your login and cannot be changed here"></div></div><button type="button" class="btn btn-primary" id="myacctSaveBtn">Save Changes</button></div></div>`;
 }
 
 function renderModal() {
@@ -6478,6 +6481,26 @@ function openModal(modalState) {
 
 function bindPage(){
   let isDean = state.currentUser?.role === 'admin';
+  document.getElementById('myacctSaveBtn')?.addEventListener('click', () => {
+    if (state.page !== 'account' || !state.currentUser) return;
+    let name = String(document.getElementById('myacct_name')?.value || '').trim();
+    if (!name) {
+      showFormValidationBanner('myacctAlert', 'Please enter your full name.');
+      return;
+    }
+    let box = document.getElementById('myacctAlert');
+    if (box) box.innerHTML = '';
+    state.currentUser.name = name;
+    state.currentUser.initials = initialsFromName(name);
+    try {
+      sessionStorage.setItem('cen_user', JSON.stringify(state.currentUser));
+    } catch (e) {
+      window.alert('Could not save profile in this browser (storage blocked).');
+      return;
+    }
+    showToast('Profile saved');
+    render();
+  });
   document.getElementById('deanPendingGoogleSyncBtn')?.addEventListener('click', () => {
     startDeanGoogleSyncForPendingAccounts();
   });

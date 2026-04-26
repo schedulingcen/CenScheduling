@@ -417,6 +417,14 @@ html[data-theme="dark"] .request-sheet-schedule th {
   line-height: 1.3;
 }
 /* Non-button affordance after “Book a room” was sent (follow-up is in the other dept’s incoming queue). */
+/* My Account: login email is fixed; display name is editable for the session. */
+.form-input.form-input-readonly,
+.form-input:read-only {
+  background: var(--surface-2, #f1f5f9);
+  color: var(--gray-600, #64748b);
+  cursor: not-allowed;
+}
+
 .request-book-room-sent-pill {
   display: inline-flex;
   align-items: center;
