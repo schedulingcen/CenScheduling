@@ -477,7 +477,16 @@ html[data-theme="dark"] .request-sheet-schedule th {
   flex-shrink: 0;
   white-space: nowrap;
 }
+.dashboard-summary-hint {
+  margin: 0 20px 12px;
+  max-width: 56rem;
+  line-height: 1.45;
+}
 @media (max-width: 520px) {
+  .dashboard-summary-hint {
+    margin-left: 16px;
+    margin-right: 16px;
+  }
   .dashboard-summary-card-header {
     flex-wrap: wrap;
   }
@@ -500,15 +509,27 @@ html[data-theme="dark"] .request-sheet-schedule th {
   text-align: center;
   box-sizing: border-box;
 }
-/* Schedule Summary: top row (TIME / ROOMS, lab columns) — light red band */
-.dashboard-summary-table thead .dashboard-summary-corner,
-.dashboard-summary-table thead .dashboard-summary-room-th {
+/* Row 1: Utilization % label — neutral background */
+.dashboard-summary-table thead tr.dashboard-summary-util-header-row th.dashboard-summary-util-label-th {
+  background: var(--surface);
+  color: #111;
+  font-weight: 800;
+  white-space: nowrap;
+  text-align: center;
+}
+html[data-theme="dark"] .dashboard-summary-table thead tr.dashboard-summary-util-header-row th.dashboard-summary-util-label-th {
+  background: var(--surface);
+  color: var(--text-primary);
+}
+/* Row 2: TIME / ROOMS + room names — light red band */
+.dashboard-summary-table thead tr.dashboard-summary-rooms-header-row .dashboard-summary-corner,
+.dashboard-summary-table thead tr.dashboard-summary-rooms-header-row .dashboard-summary-room-th {
   background: var(--red-light);
   color: #111;
   font-weight: 700;
   white-space: nowrap;
 }
-.dashboard-summary-table thead .dashboard-summary-room-th {
+.dashboard-summary-table thead tr.dashboard-summary-rooms-header-row .dashboard-summary-room-th {
   min-width: 72px;
   max-width: 140px;
   line-height: 1.2;
@@ -520,8 +541,8 @@ html[data-theme="dark"] .request-sheet-schedule th {
   min-width: 104px;
   box-shadow: 1px 0 0 var(--border-ui);
 }
-html[data-theme="dark"] .dashboard-summary-table thead .dashboard-summary-corner,
-html[data-theme="dark"] .dashboard-summary-table thead .dashboard-summary-room-th {
+html[data-theme="dark"] .dashboard-summary-table thead tr.dashboard-summary-rooms-header-row .dashboard-summary-corner,
+html[data-theme="dark"] .dashboard-summary-table thead tr.dashboard-summary-rooms-header-row .dashboard-summary-room-th {
   background: var(--red-light);
   color: #111;
 }
@@ -566,6 +587,26 @@ html[data-theme="dark"] .dashboard-summary-table thead .dashboard-summary-room-t
   justify-content: center;
   gap: 2px;
   min-height: 100%;
+}
+.dashboard-summary-util-row .dashboard-summary-util-label {
+  font-weight: 800;
+}
+.dashboard-summary-util-cell {
+  font-weight: 800;
+  min-width: 72px;
+  font-variant-numeric: tabular-nums;
+}
+.dashboard-summary-util-high {
+  background: #00ff00;
+  color: #111;
+}
+.dashboard-summary-util-mid {
+  background: #fff200;
+  color: #111;
+}
+.dashboard-summary-util-low {
+  background: #ff1a1a;
+  color: #111;
 }
 
 .card-header {
@@ -2689,4 +2730,62 @@ html[data-theme="dark"] .forms-doc-thumb {
   align-items: center;
   justify-content: center;
   gap: 6px;
+}
+
+/* Forms — export modal */
+.modal.modal-forms-export .modal-body {
+  max-height: min(78vh, 640px);
+  overflow-y: auto;
+}
+.forms-export-modal-hint {
+  display: flex;
+  align-items: flex-start;
+  gap: 10px;
+  padding: 10px 12px;
+  border-radius: 8px;
+  background: var(--red-light, #fdecea);
+  border: 1px solid rgba(160, 50, 50, 0.25);
+  font-size: 0.88rem;
+  line-height: 1.45;
+  color: var(--text);
+  margin-bottom: 14px;
+}
+html[data-theme="dark"] .forms-export-modal-hint {
+  background: rgba(160, 50, 50, 0.12);
+  border-color: rgba(255, 255, 255, 0.12);
+}
+.forms-export-info-icon {
+  flex: 0 0 22px;
+  width: 22px;
+  height: 22px;
+  border-radius: 50%;
+  background: var(--red);
+  color: #fff;
+  font-size: 12px;
+  font-weight: 700;
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  line-height: 1;
+}
+.forms-export-section-label {
+  font-size: 0.72rem;
+  font-weight: 700;
+  letter-spacing: 0.06em;
+  text-transform: uppercase;
+  color: var(--gray-600);
+  margin: 4px 0 8px;
+}
+.forms-export-grid {
+  grid-template-columns: repeat(2, minmax(0, 1fr));
+  gap: 12px 16px;
+}
+@media (max-width: 560px) {
+  .forms-export-grid {
+    grid-template-columns: 1fr;
+  }
+}
+.modal-forms-export .modal-footer {
+  justify-content: flex-end;
+  gap: 10px;
 }
