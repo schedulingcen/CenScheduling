@@ -231,6 +231,11 @@ function requestMatchesCurrentTerm(r, term = currentTermFilter()) {
   return (r.schSem || '').trim() === term.sem
     && (normalizeAcademicYearInput(r.schAy) || DEFAULT_ACADEMIC_YEAR) === term.ay;
 }
+/** Match request rows when id may be string (DOM/Supabase) or legacy number. */
+function getStateRequestById(requestId) {
+  if (requestId === null || requestId === undefined || requestId === '') return null;
+  return state.requests.find(x => String(x.id) === String(requestId)) || null;
+}
 function scheduleAcademicYearForFilter(s) {
   return normalizeAcademicYearInput(s.schAy) || DEFAULT_ACADEMIC_YEAR;
 }
@@ -1002,6 +1007,7 @@ function normalizeRequestFromDb(row) {
     labLabel: row.lab_label || null,
     reason: row.reason || '',
     reasonComment: row.reason_comment || '',
+    declineReason: row.decline_reason != null && String(row.decline_reason).trim() !== '' ? String(row.decline_reason).trim() : '',
     status: row.status || 'pending',
     created: row.created || null,
     parentTeachingRequestId: row.parent_teaching_request_id || null,
@@ -1028,6 +1034,8 @@ function normalizeRequestToDb(req) {
     lab_label: req.labLabel || null,
     reason: req.reason || '',
     reason_comment: req.reasonComment || '',
+    decline_reason:
+      req.declineReason != null && String(req.declineReason).trim() !== '' ? String(req.declineReason).trim() : null,
     status: req.status || 'pending',
     created: req.created || null,
     parent_teaching_request_id: req.parentTeachingRequestId || null,
@@ -1050,6 +1058,11 @@ async function insertRequestDb(req) {
     if (isSupabaseMissingColumnError(res.error, 'parent_teaching_request_id') && !dropped.has('parent_teaching_request_id')) {
       delete working[0].parent_teaching_request_id;
       dropped.add('parent_teaching_request_id');
+      droppedAny = true;
+    }
+    if (isSupabaseMissingColumnError(res.error, 'decline_reason') && !dropped.has('decline_reason')) {
+      delete working[0].decline_reason;
+      dropped.add('decline_reason');
       droppedAny = true;
     }
     if (!droppedAny) return res;
@@ -1330,6 +1343,42 @@ function scheduleProfessorsOverlap(a, b) {
     return x.length > 0 && x === y;
   }
   return true;
+}
+/**
+ * True if this professor has no timetable row overlapping the slot (same term as `options.term`).
+ * When days/times are incomplete, returns true so lists stay populated until the user finishes the slot.
+ */
+function professorIsFreeForSlot(professorId, days, timeStart, timeEnd, options) {
+  options = options || {};
+  if (!professorId || professorId === PROFESSOR_OTHER_ID) return true;
+  if (!Array.isArray(days) || days.length === 0 || !timeStart || !timeEnd) return true;
+  let term = options.term;
+  if (!term || !(term.sem || '').trim()) return true;
+  let excludeId = options.excludeScheduleId != null ? options.excludeScheduleId : null;
+  let pseudo = {
+    professorId,
+    professorOtherName: null,
+    days,
+    timeStart,
+    timeEnd,
+    dept: '',
+    section: '',
+    roomId: '',
+    roomOtherName: null,
+  };
+  for (let s of state.schedules) {
+    if (excludeId != null && String(s.id) === String(excludeId)) continue;
+    if (!scheduleMatchesCurrentTerm(s, term)) continue;
+    if (!Array.isArray(s.days) || !s.days.some(d => days.includes(d))) continue;
+    if (!timeRangesOverlap(timeStart, timeEnd, s.timeStart, s.timeEnd)) continue;
+    if (scheduleProfessorsOverlap(s, pseudo)) return false;
+  }
+  return true;
+}
+function filterProfessorsByAvailability(profList, days, timeStart, timeEnd, options) {
+  if (!Array.isArray(profList) || !profList.length) return [];
+  if (!Array.isArray(days) || days.length === 0 || !timeStart || !timeEnd) return profList.slice();
+  return profList.filter(p => professorIsFreeForSlot(p.id, days, timeStart, timeEnd, options));
 }
 function getRoom(id) {
   let source = roomsSourceForApp();
@@ -1710,7 +1759,31 @@ function firstScheduleInRoomSlot(roomId, day, slotStart, slotEnd) {
     timeRangesOverlap(slotStart, slotEnd, s.timeStart, s.timeEnd)
   );
 }
-function mergeSectionOptions(deptIds) {
+/** Official program prefix on section labels (BSIE = Industrial Engineering, etc.). */
+const SECTION_PROGRAM_PREFIX_BY_DEPT = {
+  ie: 'BSIE',
+  ee: 'BSEE',
+  cpe: 'BSCPE',
+  ce: 'BSCE',
+  me: 'BSME',
+  ece: 'BSECE',
+};
+function sectionLabelMatchesDeptProgram(sectionLabel, deptId) {
+  let prefix = SECTION_PROGRAM_PREFIX_BY_DEPT[deptId];
+  if (!prefix) return true;
+  let t = String(sectionLabel || '')
+    .trim()
+    .toUpperCase()
+    .replace(/\s+/g, ' ');
+  return t.startsWith(prefix);
+}
+/**
+ * @param {string[]} deptIds Department ids whose schedules + sample labels are merged.
+ * @param {{ programMatchDept?: string }} [opts] If set, keep only labels that match that dept's program prefix
+ *   (avoids showing BSEE/BSCPE sections under an IE chair when a timetable row is mis-tagged).
+ */
+function mergeSectionOptions(deptIds, opts) {
+  opts = opts || {};
   const ids = Array.isArray(deptIds) ? deptIds : [deptIds];
   const fromSched = [...new Set(state.schedules.filter(s => ids.includes(s.dept)).map(s => String(s.section)))];
   const samples = [];
@@ -1722,8 +1795,14 @@ function mergeSectionOptions(deptIds) {
   });
   // Keep legacy IE first-year section visible even if sample data is stale in cache.
   if (ids.includes('ie')) samples.push('BSIE IGK');
-  return [...new Set([...fromSched, ...samples].map(s => String(s || '').trim()).filter(Boolean))]
-    .sort((a, b) => String(a).localeCompare(String(b)));
+  let out = [...new Set([...fromSched, ...samples].map(s => String(s || '').trim()).filter(Boolean))].sort((a, b) =>
+    String(a).localeCompare(String(b)),
+  );
+  let scopeDept = opts.programMatchDept;
+  if (scopeDept && SECTION_PROGRAM_PREFIX_BY_DEPT[scopeDept]) {
+    out = out.filter(s => sectionLabelMatchesDeptProgram(s, scopeDept));
+  }
+  return out;
 }
 function sectionYearFromLabel(sectionLabel) {
   let raw = String(sectionLabel || '').trim().toUpperCase();
@@ -1909,9 +1988,10 @@ function timetableSlotChrome(s, conflictSinceById, conflictIds) {
   return { ...base, slotKind: 'normal', borderLeftWidth: 3 };
 }
 function sectionOptionsForDeptYear(deptIds, yearLabel) {
-  let all = mergeSectionOptions(deptIds);
-  if (!yearLabel) return all;
   let ids = Array.isArray(deptIds) ? deptIds : [deptIds];
+  let mergeOpts = ids.length === 1 && ids[0] ? { programMatchDept: ids[0] } : {};
+  let all = mergeSectionOptions(deptIds, mergeOpts);
+  if (!yearLabel) return all;
   let fromScheduleYear = new Set(
     state.schedules
       .filter(s => ids.includes(s.dept) && String(s.schYear || '').trim() === yearLabel)
@@ -2235,6 +2315,119 @@ function getCreateScheduleDeptForCascade() {
   }
   return u.dept;
 }
+function readCreateScheduleSlotFromDom() {
+  let days = [...document.querySelectorAll('#modalBackdrop input[id^="day_"]:checked')].map(c => c.value);
+  let timeStart = document.getElementById('f_timeStart')?.value || '';
+  let timeEnd = document.getElementById('f_timeEnd')?.value || '';
+  let sem = (document.getElementById('f_sem')?.value || '').trim() || state.termSemester || '1st Semester';
+  let ay = normalizeAcademicYearInput(document.getElementById('f_ay')?.value || state.termAcademicYear) || DEFAULT_ACADEMIC_YEAR;
+  return { days, timeStart, timeEnd, term: { sem, ay } };
+}
+function getCreateScheduleProfessorCandidateList() {
+  let u = state.currentUser;
+  if (!u) return [];
+  let isAdmin = u.role === 'admin';
+  let deptEl = document.getElementById('f_schedule_dept');
+  let formDept = isAdmin ? (deptEl?.value || 'all') : u.dept;
+  if (isAdmin && (formDept === 'all' || !formDept)) {
+    return [...state.professors].sort((a, b) => a.name.localeCompare(b.name));
+  }
+  if (!formDept) return [];
+  return [...state.professors.filter(p => p.dept === formDept)].sort((a, b) => a.name.localeCompare(b.name));
+}
+function refreshCreateScheduleProfessorOptions() {
+  let sel = document.getElementById('f_professor');
+  if (!sel || state.modal?.type !== 'addSchedule') return;
+  let profList = getCreateScheduleProfessorCandidateList();
+  let { days, timeStart, timeEnd, term } = readCreateScheduleSlotFromDom();
+  let available = filterProfessorsByAvailability(profList, days, timeStart, timeEnd, { term });
+  let prev = sel.value;
+  let profBody = available
+    .map(p => `<option value="${escapeHtml(p.id)}" ${prev === p.id ? 'selected' : ''}>${escapeHtml(p.name)} (${escapeHtml(getDept(p.dept)?.code || '')})</option>`)
+    .join('');
+  let profLegacyOpt = '';
+  if (prev && prev !== PROFESSOR_OTHER_ID && !available.some(p => p.id === prev)) {
+    let px = getProfessor(prev);
+    if (px && !profList.some(p => p.id === prev)) {
+      profLegacyOpt = `<option value="${escapeHtml(prev)}" selected>${escapeHtml(px.name)} (${escapeHtml(getDept(px.dept)?.code || '')})</option>`;
+    }
+  }
+  sel.innerHTML = `<option value="">Select professor...</option>${profBody}${profLegacyOpt}<option value="${PROFESSOR_OTHER_ID}" ${prev === PROFESSOR_OTHER_ID ? 'selected' : ''}>Others:</option>`;
+  let selWrap = document.getElementById('f_professor_select_wrap');
+  let otherWrap = document.getElementById('f_professor_other_wrap');
+  if (prev === PROFESSOR_OTHER_ID) {
+    if (selWrap) selWrap.hidden = true;
+    if (otherWrap) otherWrap.hidden = false;
+  } else {
+    if (selWrap) selWrap.hidden = false;
+    if (otherWrap) otherWrap.hidden = true;
+  }
+}
+function readViewScheduleEditSlotFromDom() {
+  let days = [...document.querySelectorAll('#modalBackdrop input[id^="vsday_"]:checked')].map(c => c.value);
+  let timeStart = document.getElementById('vs_timeStart')?.value || '';
+  let timeEnd = document.getElementById('vs_timeEnd')?.value || '';
+  let sem = (document.getElementById('vs_sem')?.value || '').trim() || '1st Semester';
+  let ay = normalizeAcademicYearInput(document.getElementById('vs_ay')?.value || state.termAcademicYear) || DEFAULT_ACADEMIC_YEAR;
+  return { days, timeStart, timeEnd, term: { sem, ay } };
+}
+function refreshViewScheduleProfessorOptions() {
+  let sel = document.getElementById('vs_professor');
+  if (!sel || state.modal?.type !== 'viewSchedule' || state.modal?.viewScheduleMode !== 'edit') return;
+  let draft = state.modal.data || {};
+  let listDept = document.getElementById('vs_dept')?.value || draft.dept;
+  if (!listDept) return;
+  let profList = [...state.professors.filter(p => p.dept === listDept)].sort((a, b) => a.name.localeCompare(b.name));
+  let { days, timeStart, timeEnd, term } = readViewScheduleEditSlotFromDom();
+  let available = filterProfessorsByAvailability(profList, days, timeStart, timeEnd, { term, excludeScheduleId: draft.id });
+  let prev = sel.value;
+  let legacy = '';
+  if (prev && prev !== PROFESSOR_OTHER_ID && !available.some(p => p.id === prev)) {
+    let px = getProfessor(prev);
+    if (px) legacy = `<option value="${escapeHtml(prev)}" selected>${escapeHtml(px.name)}</option>`;
+  }
+  let opts = available.map(p => `<option value="${escapeHtml(p.id)}" ${prev === p.id ? 'selected' : ''}>${escapeHtml(p.name)}</option>`).join('');
+  sel.innerHTML = `<option value="" ${!prev ? 'selected' : ''}>—</option>${opts}${legacy}<option value="${PROFESSOR_OTHER_ID}" ${prev === PROFESSOR_OTHER_ID ? 'selected' : ''}>Others:</option>`;
+  let sw = document.getElementById('vs_professor_select_wrap');
+  let ow = document.getElementById('vs_professor_other_wrap');
+  if (prev === PROFESSOR_OTHER_ID) {
+    if (sw) sw.hidden = true;
+    if (ow) ow.hidden = false;
+  } else {
+    if (sw) sw.hidden = false;
+    if (ow) ow.hidden = true;
+  }
+}
+function refreshRequestFormProfessorOptions() {
+  let sel = document.getElementById('rq_professor');
+  if (!sel || state.modal?.type !== 'newRequest' || currentRequestFormStep() !== 2) return;
+  if ((document.getElementById('rq_reason')?.value || '').trim() === REQUEST_ROOM_REASON_CHOICES[1]) return;
+  let u = state.currentUser;
+  if (!u?.dept) return;
+  let toDept = document.getElementById('rq_to_dept')?.value || '';
+  let facultyDept = (document.getElementById('rq_reason')?.value || '').trim() === REQUEST_ROOM_REASON_CHOICES[0] ? u.dept : (toDept || u.dept);
+  let profList = [...state.professors.filter(p => p.dept === facultyDept)].sort((a, b) => a.name.localeCompare(b.name));
+  let days = [...document.querySelectorAll('#modalBackdrop input[id^="rqday_"]:checked')].map(c => c.value);
+  let timeStart = document.getElementById('rq_timeStart')?.value || '';
+  let timeEnd = document.getElementById('rq_timeEnd')?.value || '';
+  let sem = (document.getElementById('rq_sem')?.value || '').trim() || state.termSemester || '1st Semester';
+  let ay = normalizeAcademicYearInput(state.termAcademicYear) || DEFAULT_ACADEMIC_YEAR;
+  let available = filterProfessorsByAvailability(profList, days, timeStart, timeEnd, { term: { sem, ay } });
+  let prev = sel.value;
+  sel.innerHTML =
+    `<option value="">Select professor...</option>` +
+    available.map(p => `<option value="${escapeHtml(p.id)}" ${prev === p.id ? 'selected' : ''}>${escapeHtml(p.name)} (${escapeHtml(p.short)})</option>`).join('') +
+    `<option value="${PROFESSOR_OTHER_ID}" ${prev === PROFESSOR_OTHER_ID ? 'selected' : ''}>Others:</option>`;
+  let sw = document.getElementById('rq_professor_select_wrap');
+  let ow = document.getElementById('rq_professor_other_wrap');
+  if (prev === PROFESSOR_OTHER_ID) {
+    if (sw) sw.hidden = true;
+    if (ow) ow.hidden = false;
+  } else {
+    if (sw) sw.hidden = false;
+    if (ow) ow.hidden = true;
+  }
+}
 /** Populate Year → Semester → Subject from curriculum (DOM-only; Create Schedule modal). */
 function initCreateScheduleCurriculumCascade() {
   let yEl = document.getElementById('f_year');
@@ -2273,6 +2466,7 @@ function initCreateScheduleCurriculumCascade() {
       secEl.innerHTML = '<option value="">Select section...</option>';
       secEl.disabled = true;
       refreshCreateScheduleSetLabUi();
+      refreshCreateScheduleProfessorOptions();
       return;
     }
     yEl.disabled = false;
@@ -2285,6 +2479,7 @@ function initCreateScheduleCurriculumCascade() {
     fillSubjectSelect([], '');
     fillSectionSelect(sectionOptionsForDeptYear([d], ''), '');
     refreshCreateScheduleSetLabUi();
+    refreshCreateScheduleProfessorOptions();
   }
 
   rebuildAll();
@@ -2298,6 +2493,7 @@ function initCreateScheduleCurriculumCascade() {
       fillSubjectSelect([], '');
       fillSectionSelect(sectionOptionsForDeptYear([d], ''), '');
       refreshCreateScheduleSetLabUi();
+      refreshCreateScheduleProfessorOptions();
       return;
     }
     let sems = semsForDeptYear(d, y);
@@ -2305,6 +2501,7 @@ function initCreateScheduleCurriculumCascade() {
     fillSubjectSelect([], '');
     fillSectionSelect(sectionOptionsForDeptYear([d], y), '');
     refreshCreateScheduleSetLabUi();
+    refreshCreateScheduleProfessorOptions();
   });
 
   sEl.addEventListener('change', () => {
@@ -2314,11 +2511,13 @@ function initCreateScheduleCurriculumCascade() {
     if (!d || !y || !sem) {
       fillSubjectSelect([], '');
       refreshCreateScheduleSetLabUi();
+      refreshCreateScheduleProfessorOptions();
       return;
     }
     let ay = normalizeAcademicYearInput(ayEl?.value || state.termAcademicYear) || DEFAULT_ACADEMIC_YEAR;
     fillSubjectSelect(subjectsForCreateScheduleSlot(d, y, sem, ay), '');
     refreshCreateScheduleSetLabUi();
+    refreshCreateScheduleProfessorOptions();
   });
   ayEl?.addEventListener('change', () => {
     let d = getCreateScheduleDeptForCascade();
@@ -2327,11 +2526,13 @@ function initCreateScheduleCurriculumCascade() {
     if (!d || !y || !sem) {
       fillSubjectSelect([], '');
       refreshCreateScheduleSetLabUi();
+      refreshCreateScheduleProfessorOptions();
       return;
     }
     let ay = normalizeAcademicYearInput(ayEl.value || state.termAcademicYear) || DEFAULT_ACADEMIC_YEAR;
     fillSubjectSelect(subjectsForCreateScheduleSlot(d, y, sem, ay), '');
     refreshCreateScheduleSetLabUi();
+    refreshCreateScheduleProfessorOptions();
   });
   subEl.addEventListener('change', refreshCreateScheduleSetLabUi);
   deptEl?.addEventListener('change', rebuildAll);
@@ -2819,7 +3020,7 @@ function normalizeScheduleFilters() {
   let sectionScope = (u.role === 'admin' && state.filterMode === 'department')
     ? [state.filterDept]
     : [u.dept];
-  let secOpts = mergeSectionOptions(sectionScope);
+  let secOpts = mergeSectionOptions(sectionScope, sectionScope.length === 1 && sectionScope[0] ? { programMatchDept: sectionScope[0] } : {});
   if (state.filterSection === 'all' || state.filterSection === '' || !secOpts.includes(state.filterSection)) {
     state.filterSection = secOpts[0] || state.filterSection;
   }
@@ -2861,7 +3062,7 @@ function renderSchedulePage() {
   let sectionScope = (u.role === 'admin' && state.filterMode === 'department')
     ? [state.filterDept]
     : [u.dept];
-  let sections = mergeSectionOptions(sectionScope);
+  let sections = mergeSectionOptions(sectionScope, sectionScope.length === 1 && sectionScope[0] ? { programMatchDept: sectionScope[0] } : {});
   let deptOptions = isAdmin ? DEPARTMENTS : DEPARTMENTS.filter(d => d.id === u.dept);
   let roomsSrc = roomsSourceForApp();
   let roomOptions = (isAdmin ? roomsSrc : roomsSrc.filter(r => r.dept === u.dept)).slice().sort((a, b) => a.name.localeCompare(b.name));
@@ -3848,7 +4049,7 @@ function renderRequests() {
                       const actionButtons = requesterBooking
                         ? `<button type="button" class="btn btn-outline btn-sm" data-book-room-request="${escapeHtml(r.id)}">${icon('calendar', 14)} Book a room</button>`
                         : `<button type="button" class="btn btn-green btn-sm" data-approve="${r.id}">${icon('check', 14)} Accept</button>
-                      <button type="button" class="btn btn-danger btn-sm" data-decline="${r.id}">${icon('close', 14)} Decline</button>`;
+                      <button type="button" class="btn btn-danger btn-sm" data-decline="${escapeHtml(String(r.id))}">${icon('close', 14)} Decline</button>`;
                       return `
                 <div class="request-card request-card--incoming">
                   <div class="request-icon request-icon-pending">${icon('refresh', 20)}</div>
@@ -3901,7 +4102,9 @@ function renderRequests() {
                               const statusIcon = isApprovedFamily ? 'check' : (r.status === 'declined' ? 'close' : 'refresh');
                               const statusIconColor = isApprovedFamily ? '#16A34A' : (r.status === 'declined' ? '#DC2626' : '#D97706');
                               const statusIconBg = isApprovedFamily ? '#F0FDF4' : (r.status === 'declined' ? '#FEF2F2' : '#FFFBEB');
-                              const needsRoomBooking = r.status === 'approved_teaching' || (isTeachingAssignmentRequest(r) && requestHasPendingRoom(r));
+                              const teachingNeedsBookAfterApproval = isTeachingAssignmentRequest(r) && requestHasPendingRoom(r)
+                                && (r.status === 'approved' || r.status === 'approved_teaching');
+                              const needsRoomBooking = r.status === 'approved_teaching' || teachingNeedsBookAfterApproval;
                               const roomPending = requestHasPendingRoom(r);
                               const canBookRoom = needsRoomBooking && roomPending && !hasPendingRoomRequestForTeachingParent(r.id);
                               const statusLabel = needsRoomBooking
@@ -3915,6 +4118,9 @@ function renderRequests() {
                                     <div class="request-title">${roomPending ? 'Room To Be Requested' : (room?.name || (needsRoomBooking ? 'Room To Be Requested' : 'Unknown Room'))} from <span class="badge-dept ${r.toDept}">${to?.code || '?'}</span></div>
                                     <div class="request-meta">${sub?.code || '?'} · ${r.section} · ${r.professorId ? escapeHtml(professorDisplayLineFromPick(r.professorId, r.professorOtherName)) + ' · ' : ''}${r.days.map(d => d.slice(0, 3)).join(', ')} ${fmt12(r.timeStart)}–${fmt12(r.timeEnd)}</div>
                                     <div style="margin-top: 6px;"><span class="badge-status ${badgeClass}">${statusLabel}</span></div>
+                                    ${r.status === 'declined' && String(r.declineReason || '').trim()
+                                      ? `<div class="incoming-request-reason request-decline-reason"><strong>Decline reason:</strong> ${escapeHtml(String(r.declineReason).trim())}</div>`
+                                      : ''}
                                     ${canBookRoom ? `<div style="margin-top:8px;"><button type="button" class="btn btn-outline btn-sm" data-book-room-request="${escapeHtml(r.id)}">Book a room</button></div>` : ''}
                                   </div>
                                 </div>
@@ -5072,7 +5278,7 @@ function renderFormsPage() {
     SCHEDULE_FORM_YEARS.map(
       y => `<option value="${escapeHtml(y)}" ${state.formsYearLevel === y ? 'selected' : ''}>${escapeHtml(y)}</option>`,
     ).join('');
-  let sections = mergeSectionOptions([dept]);
+  let sections = mergeSectionOptions([dept], { programMatchDept: dept });
   let secOpts =
     `<option value="all" ${state.formsSection === 'all' || !state.formsSection ? 'selected' : ''}>All sections</option>` +
     sections.map(
@@ -5141,7 +5347,7 @@ function renderFormsExportModalBody() {
   const semOpts = SCHEDULE_FORM_SEMS.map(
     s => `<option value="${escapeHtml(s)}" ${s === sem ? 'selected' : ''}>${escapeHtml(s)}</option>`,
   ).join('');
-  const sections = mergeSectionOptions([dept]);
+  const sections = mergeSectionOptions([dept], { programMatchDept: dept });
   const yearOpts =
     formType === 'preenroll'
       ? SCHEDULE_FORM_YEARS.map(
@@ -5405,6 +5611,10 @@ function renderModal() {
     let footer = `<button type="button" class="btn btn-secondary" id="modalClose2">Cancel</button><button type="button" class="btn btn-primary" id="modalSaveBtn">Send Room Request</button>`;
     return modalWrap('Book Room For Teaching', renderTeachingRoomBookingForm(), footer, 'modal-request', 'Request a room after teaching assignment approval');
   }
+  if (type === 'declineRequest') {
+    let footer = `<button type="button" class="btn btn-secondary" id="modalClose2">Cancel</button><button type="button" class="btn btn-danger" id="modalSaveBtn">Decline request</button>`;
+    return modalWrap('Decline request', renderDeclineRequestForm(), footer, 'modal-request', 'The requester will see this reason on their Requests page.');
+  }
   if (type === 'scheduleExportWizard') {
     const sewFooter = `<button type="button" class="btn btn-secondary" id="modalClose2">Cancel</button><button type="button" class="btn btn-primary" id="scheduleExportWizardConfirmBtn">${icon('fileText', 16)} Export</button>`;
     return modalWrap(
@@ -5513,18 +5723,31 @@ function isTeachingAssignmentRequest(req) {
   return reason.includes('teaching assignment') || note.includes('teaching assignment');
 }
 
+/** Teaching assignment + "select from another department": defer room until after faculty approval. */
+function teachingAssignmentUsesDeferredRoomBooking(req) {
+  if (!req || !isTeachingAssignmentRequest(req) || req.parentTeachingRequestId) return false;
+  if (req.roomId == null || req.roomId === '' || req.roomId === REQUEST_ROOM_PENDING_ID) return true;
+  if (String(req.reasonComment || '').includes(REQUEST_ROOM_PENDING_MARKER)) return true;
+  if (String(req.reason || '').includes(REQUEST_ROOM_PENDING_MARKER)) return true;
+  return false;
+}
+
 function requestHasPendingRoom(req) {
   if (!req) return true;
   if (req.status === 'approved_teaching' || req.status === 'pending_teaching_room') return true;
-  if (isTeachingAssignmentRequest(req) && req.status === 'approved' && !req.parentTeachingRequestId) {
-    let children = state.requests.filter(x => x.parentTeachingRequestId === req.id);
-    if (!children.length) return true;
-    let hasApprovedChild = children.some(x => x.status === 'approved');
-    return !hasApprovedChild;
+  if (isTeachingAssignmentRequest(req) && !req.parentTeachingRequestId) {
+    if (!teachingAssignmentUsesDeferredRoomBooking(req)) {
+      return false;
+    }
+    if (req.status === 'approved') {
+      let children = state.requests.filter(x => x.parentTeachingRequestId === req.id);
+      if (!children.length) return true;
+      return !children.some(x => x.status === 'approved');
+    }
+    if (isPendingRequestStatus(req.status)) {
+      return true;
+    }
   }
-  // Backward compatibility: older teaching requests (before pending_teaching_room rollout)
-  // were stored as plain "pending" with a real room id fallback.
-  if (isTeachingAssignmentRequest(req) && isPendingRequestStatus(req.status) && !req.parentTeachingRequestId) return true;
   if (req.roomId == null || req.roomId === '' || req.roomId === REQUEST_ROOM_PENDING_ID) return true;
   return String(req.reasonComment || '').includes(REQUEST_ROOM_PENDING_MARKER)
     || String(req.reason || '').includes(REQUEST_ROOM_PENDING_MARKER);
@@ -5544,10 +5767,10 @@ function requestReasonDisplayText(req) {
 
 function needsRequesterRoomBooking(req, userDept) {
   if (!req || !userDept) return false;
-  return req.fromDept === userDept
-    && req.status === 'approved_teaching'
-    && requestHasPendingRoom(req)
-    && !hasPendingRoomRequestForTeachingParent(req.id);
+  if (req.fromDept !== userDept || req.parentTeachingRequestId) return false;
+  if (!teachingAssignmentUsesDeferredRoomBooking(req)) return false;
+  let statusOk = req.status === 'approved' || req.status === 'approved_teaching';
+  return statusOk && requestHasPendingRoom(req) && !hasPendingRoomRequestForTeachingParent(req.id);
 }
 
 function hasPendingRoomRequestForTeachingParent(parentRequestId) {
@@ -5563,9 +5786,19 @@ function renderTeachingApprovalForm() {
   }
   let approverDept = r.toDept || state.currentUser?.dept || '';
   let approverDeptInfo = getDept(approverDept);
-  let profChoices = state.professors
-    .filter(p => p.dept === approverDept && professorStatusValue(p) === 'active')
-    .sort((a, b) => a.name.localeCompare(b.name));
+  let taTerm = {
+    sem: (r.schSem || '').trim() || '1st Semester',
+    ay: normalizeAcademicYearInput(r.schAy) || normalizeAcademicYearInput(state.termAcademicYear) || DEFAULT_ACADEMIC_YEAR,
+  };
+  let profChoices = filterProfessorsByAvailability(
+    state.professors
+      .filter(p => p.dept === approverDept && professorStatusValue(p) === 'active')
+      .sort((a, b) => a.name.localeCompare(b.name)),
+    Array.isArray(r.days) ? r.days : [],
+    r.timeStart,
+    r.timeEnd,
+    { term: taTerm },
+  );
   let profOpts = profChoices.map(p => `<option value="${escapeHtml(p.id)}">${escapeHtml(p.name)} (${escapeHtml(p.short)})</option>`).join('');
   return `<div class="request-room-form schedule-form-wrapper">
     <div id="taApproveAlert"></div>
@@ -5584,6 +5817,28 @@ function renderTeachingApprovalForm() {
         ${profOpts}
       </select>
       <p class="form-hint">Required before approving a Teaching Assignment request.</p>
+    </div>
+  </div>`;
+}
+
+function renderDeclineRequestForm() {
+  let reqId = state.modal?.requestId;
+  let r = getStateRequestById(reqId);
+  let from = r ? getDept(r.fromDept) : null;
+  let sub = r ? getSubject(r.subjectId) : null;
+  let roomLine = r ? escapeHtml(roomDisplayLineFromPick(r.roomId, r.roomOtherName)) : '—';
+  let summary = r
+    ? `${escapeHtml(sub?.code || '—')} · ${escapeHtml(r.section || '—')} · ${roomLine} · ${escapeHtml(from?.code || r.fromDept || '—')} → ${escapeHtml(getDept(r.toDept)?.code || r.toDept || '—')}`
+    : 'Could not load request details — you can still type a reason if you retry from the list.';
+  let alertInner = !r
+    ? `<div class="alert form-validation-alert" role="alert">${icon('alertTriangle', 18)}<span class="form-validation-alert-text">This request was not found in the current list. Close and open Decline again from <strong>Incoming Requests</strong>.</span></div>`
+    : '';
+  return `<div class="request-room-form schedule-form-wrapper decline-request-form">
+    <div id="declineRequestAlert">${alertInner}</div>
+    <p class="form-hint decline-request-summary" style="margin-bottom:12px;">${summary}</p>
+    <div class="form-group full">
+      <label class="form-label" for="decline_reason_comment">Reason for declining <span class="label-req" aria-hidden="true">*</span></label>
+      <textarea class="form-input form-textarea decline-reason-input" id="decline_reason_comment" name="decline_reason_comment" rows="5" required placeholder="Explain why this request cannot be approved…" aria-required="true"></textarea>
     </div>
   </div>`;
 }
@@ -5667,12 +5922,19 @@ function renderScheduleForm() {
     secDeptIds = [d];
   }
 
-  let profBody = profList.map(p => `<option value="${escapeHtml(p.id)}" ${defProf && defProf === p.id ? 'selected' : ''}>${escapeHtml(p.name)} (${escapeHtml(getDept(p.dept)?.code || '')})</option>`).join('');
+  let slotDaysInit = slot?.day ? [slot.day] : [];
+  let slotTsInit = slot?.timeStart || '';
+  let slotTeInit = slot?.timeEnd || '';
+  let profTermInit = currentTermFilter();
+  let profListForOpts = filterProfessorsByAvailability(profList, slotDaysInit, slotTsInit, slotTeInit, { term: profTermInit });
+  let profBody = profListForOpts.map(p => `<option value="${escapeHtml(p.id)}" ${defProf && defProf === p.id ? 'selected' : ''}>${escapeHtml(p.name)} (${escapeHtml(getDept(p.dept)?.code || '')})</option>`).join('');
   let profLegacyOpt =
-    defProf && defProf !== PROFESSOR_OTHER_ID && !profList.some(p => p.id === defProf)
+    defProf && defProf !== PROFESSOR_OTHER_ID && !profListForOpts.some(p => p.id === defProf)
       ? (() => {
           let px = getProfessor(defProf);
-          return px ? `<option value="${escapeHtml(defProf)}" selected>${escapeHtml(px.name)} (${escapeHtml(getDept(px.dept)?.code || '')})</option>` : '';
+          if (!px) return '';
+          if (profList.some(p => p.id === defProf)) return '';
+          return `<option value="${escapeHtml(defProf)}" selected>${escapeHtml(px.name)} (${escapeHtml(getDept(px.dept)?.code || '')})</option>`;
         })()
       : '';
   let profOpts = profBody + profLegacyOpt + `<option value="${PROFESSOR_OTHER_ID}">Others:</option>`;
@@ -5687,7 +5949,8 @@ function renderScheduleForm() {
   roomOpts += `<option value="${ROOM_OTHER_ID}">Others:</option>`;
   let timeStartOpts = timetableTimeStartChoices().map(t => `<option value="${t}" ${slot && slot.timeStart === t ? 'selected' : ''}>${fmt12(t)}</option>`).join('');
   let timeEndOpts = timetableTimeEndChoices().map(t => `<option value="${t}" ${slot && slot.timeEnd === t ? 'selected' : ''}>${fmt12(t)}</option>`).join('');
-  let secChoices = mergeSectionOptions(secDeptIds);
+  let secMergeOpts = secDeptIds.length === 1 && secDeptIds[0] ? { programMatchDept: secDeptIds[0] } : {};
+  let secChoices = mergeSectionOptions(secDeptIds, secMergeOpts);
   let secOpts = secChoices.map(s => `<option value="${escapeHtml(s)}" ${defSec && defSec === s ? 'selected' : ''}>${escapeHtml(s)}</option>`).join('');
   let secLegacyOpt =
     defSec && !secChoices.includes(defSec)
@@ -5805,6 +6068,19 @@ function renderViewSchedule(d) {
   let isAdmin = state.currentUser.role === 'admin';
   let subList = subjectsForCreateScheduleSlot(listDept, d.schYear || '', d.schSem || '', normalizeAcademicYearInput(d.schAy) || DEFAULT_ACADEMIC_YEAR);
   let profList = [...state.professors.filter(p => p.dept === listDept)].sort((a, b) => a.name.localeCompare(b.name));
+  let vsTerm = {
+    sem: (d.schSem || '').trim() || '1st Semester',
+    ay: normalizeAcademicYearInput(d.schAy) || DEFAULT_ACADEMIC_YEAR,
+  };
+  let profAvail = filterProfessorsByAvailability(profList, Array.isArray(d.days) ? d.days : [], d.timeStart, d.timeEnd, {
+    term: vsTerm,
+    excludeScheduleId: d.id,
+  });
+  let profLegacyEdit = '';
+  if (d.professorId && d.professorId !== PROFESSOR_OTHER_ID && !profAvail.some(p => p.id === d.professorId)) {
+    let px = getProfessor(d.professorId);
+    if (px) profLegacyEdit = `<option value="${escapeHtml(d.professorId)}" selected>${escapeHtml(px.name)}</option>`;
+  }
   let roomList = [...roomsSourceForApp().filter(r => r.dept === listDept)].sort((a, b) => a.name.localeCompare(b.name));
   let subOpts = subList.map(x => `<option value="${escapeHtml(x.id)}" ${d.subjectId === x.id ? 'selected' : ''}>${escapeHtml(x.code)} — ${escapeHtml(x.name)}</option>`).join('');
   let subLegacyOpt =
@@ -5814,11 +6090,14 @@ function renderViewSchedule(d) {
           return sx ? `<option value="${escapeHtml(sx.id)}" selected>${escapeHtml(sx.code)} — ${escapeHtml(sx.name)}</option>` : '';
         })()
       : '';
-  let profOpts = `<option value="" ${!d.professorId ? 'selected' : ''}>—</option>` + profList.map(p => `<option value="${escapeHtml(p.id)}" ${d.professorId === p.id ? 'selected' : ''}>${escapeHtml(p.name)}</option>`).join('')
-    + `<option value="${PROFESSOR_OTHER_ID}" ${d.professorId === PROFESSOR_OTHER_ID ? 'selected' : ''}>Others:</option>`;
+  let profOpts =
+    `<option value="" ${!d.professorId ? 'selected' : ''}>—</option>` +
+    profAvail.map(p => `<option value="${escapeHtml(p.id)}" ${d.professorId === p.id ? 'selected' : ''}>${escapeHtml(p.name)}</option>`).join('') +
+    profLegacyEdit +
+    `<option value="${PROFESSOR_OTHER_ID}" ${d.professorId === PROFESSOR_OTHER_ID ? 'selected' : ''}>Others:</option>`;
   let roomOpts = roomList.map(r => `<option value="${escapeHtml(r.id)}" ${d.roomId === r.id ? 'selected' : ''}>${escapeHtml(r.name)}</option>`).join('')
     + `<option value="${ROOM_OTHER_ID}" ${d.roomId === ROOM_OTHER_ID ? 'selected' : ''}>Others:</option>`;
-  let secChoices = mergeSectionOptions([listDept]);
+  let secChoices = mergeSectionOptions([listDept], listDept ? { programMatchDept: listDept } : {});
   let secOpts = secChoices.map(sec => `<option value="${escapeHtml(sec)}" ${String(d.section) === sec ? 'selected' : ''}>${escapeHtml(sec)}</option>`).join('');
   let secLegacyOpt =
     d.section && !secChoices.includes(String(d.section))
@@ -5921,7 +6200,9 @@ function renderRequestForm() {
     ? `<select class="form-select" id="rq_to_dept" required aria-label="Requesting to department">${toDeptOpts}</select>`
     : `<select class="form-select" id="rq_to_dept" disabled aria-label="Requesting to department"><option value="">No other departments with rooms</option></select>`;
   let defSection = requestFormDefaultSection();
-  let rqSecOpts = mergeSectionOptions([u.dept]).map(s => `<option value="${escapeHtml(s)}" ${defSection && String(defSection) === s ? 'selected' : ''}>${escapeHtml(s)}</option>`).join('');
+  let rqSecOpts = mergeSectionOptions([u.dept], u.dept ? { programMatchDept: u.dept } : {})
+    .map(s => `<option value="${escapeHtml(s)}" ${defSection && String(defSection) === s ? 'selected' : ''}>${escapeHtml(s)}</option>`)
+    .join('');
   let mySubs = [];
   // Reason logic: "Room Shortage" keeps faculty scoped to requester's department.
   // Other reasons may scope faculty to the selected receiving department.
@@ -5929,8 +6210,15 @@ function renderRequestForm() {
     ? u.dept
     : (selectedToDeptId || u.dept);
   let myProfs = [...state.professors.filter(p => p.dept === facultyDept)].sort((a, b) => a.name.localeCompare(b.name));
+  let rqProfTerm = {
+    sem: (state.termSemester || '1st Semester').trim(),
+    ay: normalizeAcademicYearInput(state.termAcademicYear) || DEFAULT_ACADEMIC_YEAR,
+  };
+  let myProfsForRq = !isTeachingAssignmentReason
+    ? filterProfessorsByAvailability(myProfs, daysForRooms, timeS, timeE, { term: rqProfTerm })
+    : myProfs;
   let subOpts = mySubs.map(s => `<option value="${escapeHtml(s.id)}">${escapeHtml(s.code)} — ${escapeHtml(s.name)}</option>`).join('');
-  let profOpts = myProfs.map(p => `<option value="${escapeHtml(p.id)}">${escapeHtml(p.name)} (${escapeHtml(p.short)})</option>`).join('')
+  let profOpts = myProfsForRq.map(p => `<option value="${escapeHtml(p.id)}">${escapeHtml(p.name)} (${escapeHtml(p.short)})</option>`).join('')
     + `<option value="${PROFESSOR_OTHER_ID}">Others:</option>`;
   let ts = timetableTimeStartChoices().map(t => `<option value="${t}" ${slot && slot.timeStart === t ? 'selected' : ''}>${fmt12(t)}</option>`).join('');
   let te = timetableTimeEndChoices().map(t => `<option value="${t}" ${slot && slot.timeEnd === t ? 'selected' : ''}>${fmt12(t)}</option>`).join('');
@@ -6340,6 +6628,41 @@ function bindPage(){
       saveRemovedBaseAccountEmails(removed);
       state.modal = null;
       showToast('Account updated');
+      render();
+      return;
+    }
+    if (mt === 'declineRequest') {
+      let r = getStateRequestById(state.modal?.requestId);
+      if (!r) {
+        showFormValidationBanner('declineRequestAlert', 'Request not found. Close this dialog and click Decline again on the request card.');
+        return;
+      }
+      let declineText = (document.getElementById('decline_reason_comment')?.value || '').trim();
+      if (!declineText) {
+        showFormValidationBanner('declineRequestAlert', 'Enter a reason before declining this request.');
+        return;
+      }
+      if (!window.confirm('Decline this request? The requester will see your reason.')) return;
+      r.status = 'declined';
+      r.declineReason = declineText;
+      if (hasSupabaseClient()) {
+        let patch = { status: 'declined', decline_reason: declineText };
+        let { error } = await window.cenSupabase.from('requests').update(patch).eq('id', r.id);
+        if (error && isSupabaseMissingColumnError(error, 'decline_reason')) {
+          ({ error } = await window.cenSupabase.from('requests').update({ status: 'declined' }).eq('id', r.id));
+          if (!error) {
+            console.warn('requests.decline_reason column missing; add it to persist decline reasons in the database.');
+          }
+        }
+        if (error) {
+          window.alert(`Unable to decline request in Supabase: ${error.message}`);
+          r.status = 'pending';
+          delete r.declineReason;
+          return;
+        }
+      }
+      state.modal = null;
+      showToast('Request declined');
       render();
       return;
     }
@@ -7131,24 +7454,14 @@ function bindPage(){
     window.alert('This request has been accepted and added to the timetable.');
     render();
   }));
-  document.querySelectorAll('[data-decline]').forEach(el=>el.addEventListener('click', async ()=>{
-    let r=state.requests.find(x=>x.id===el.dataset.decline);
-    if (!r) return;
-    if (!window.confirm('Are you sure you want to decline this request?')) return;
-    if (hasSupabaseClient()) {
-      const { error } = await window.cenSupabase
-        .from('requests')
-        .update({ status: 'declined' })
-        .eq('id', r.id);
-      if (error) {
-        window.alert(`Unable to decline request in Supabase: ${error.message}`);
-        return;
-      }
-    }
-    r.status='declined';
-    window.alert('This request has been declined.');
-    render();
-  }));
+  document.querySelectorAll('[data-decline]').forEach(el => {
+    el.addEventListener('click', () => {
+      let rid = el.getAttribute('data-decline');
+      if (rid == null || rid === '' || !getStateRequestById(rid)) return;
+      state.modal = { type: 'declineRequest', requestId: rid };
+      render();
+    });
+  });
   document.getElementById('addCurriculumBtn')?.addEventListener('click',()=>{openModal({type:'addCurriculum',data:{}});});
   document.querySelectorAll('[data-curriculum-table-edit]').forEach(btn =>
     btn.addEventListener('click', () => {
@@ -7769,6 +8082,7 @@ function bindPage(){
         document.getElementById('rq_reason')?.focus({ preventScroll: true });
       }
       refreshRequestSetLabUi();
+      refreshRequestFormProfessorOptions();
     });
   }
   if (state.modal?.type === 'editSystemAccount') {
@@ -7817,6 +8131,7 @@ function bindPage(){
       subEl.innerHTML = `<option value="">Select subject...</option>${subOpts}${subLegacy}`;
     }
     refreshRequestSetLabUi();
+    refreshRequestFormProfessorOptions();
   }
   document.getElementById('rq_year')?.addEventListener('change', syncRequestFormSectionAndSubject);
   document.getElementById('rq_sem')?.addEventListener('change', syncRequestFormSectionAndSubject);
@@ -7868,11 +8183,36 @@ function bindPage(){
   document.getElementById('vs_subject')?.addEventListener('change', refreshViewScheduleSetLabUi);
   if (state.modal?.type === 'addSchedule') {
     initCreateScheduleCurriculumCascade();
-    queueMicrotask(() => refreshCreateScheduleSetLabUi());
+    queueMicrotask(() => {
+      refreshCreateScheduleSetLabUi();
+      refreshCreateScheduleProfessorOptions();
+    });
   }
   if (state.modal?.type === 'viewSchedule' && state.modal.viewScheduleMode === 'edit') {
-    queueMicrotask(() => refreshViewScheduleSetLabUi());
+    queueMicrotask(() => {
+      refreshViewScheduleSetLabUi();
+      refreshViewScheduleProfessorOptions();
+    });
   }
+  document.getElementById('modalBackdrop')?.addEventListener('change', e => {
+    let id = e.target?.id || '';
+    if (!id) return;
+    if (state.modal?.type === 'addSchedule') {
+      if (id === 'f_timeStart' || id === 'f_timeEnd' || id === 'f_sem' || id === 'f_ay' || id.startsWith('day_')) {
+        refreshCreateScheduleProfessorOptions();
+      }
+    }
+    if (state.modal?.type === 'viewSchedule' && state.modal.viewScheduleMode === 'edit') {
+      if (id === 'vs_timeStart' || id === 'vs_timeEnd' || id === 'vs_sem' || id.startsWith('vsday_')) {
+        refreshViewScheduleProfessorOptions();
+      }
+    }
+    if (state.modal?.type === 'newRequest' && currentRequestFormStep() === 2) {
+      if (id === 'rq_timeStart' || id === 'rq_timeEnd' || id === 'rq_sem' || id.startsWith('rqday_')) {
+        refreshRequestFormProfessorOptions();
+      }
+    }
+  });
 }
 
 function showToast(msg){state.toast=msg;render();setTimeout(()=>{state.toast=null;render();},3000);}
