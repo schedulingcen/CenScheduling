@@ -384,15 +384,27 @@
       const list = loadStoredArray(ACCOUNT_ROLE_OVERRIDES_KEY);
       return list.find(x => String(x?.email || '').trim().toLowerCase() === clean) || null;
     }
-    function registerPendingAccount(email, profile) {
+    async function registerPendingAccount(email, profile) {
       const clean = String(email || '').trim().toLowerCase();
       if (!clean) return;
+      const name = String(profile?.name || '').trim() || 'Google User';
+      if (window.cenSupabase) {
+        const { error } = await window.cenSupabase.from('pending_accounts').insert({
+          email: clean,
+          name,
+          provider: 'google',
+        });
+        if (error && error.code !== '23505') {
+          console.warn('pending_accounts insert:', error.message);
+        }
+        return;
+      }
       const list = loadStoredArray(PENDING_ACCOUNTS_KEY);
       const existing = list.find(x => String(x?.email || '').trim().toLowerCase() === clean);
       if (existing) return;
       list.push({
         email: clean,
-        name: String(profile?.name || '').trim() || 'Google User',
+        name,
         provider: 'google',
         createdAt: new Date().toISOString(),
       });
@@ -491,7 +503,7 @@
     async function completeAppLoginForEmail(email, showPendingWarning, profile) {
       const appUser = resolveUserByEmail(email);
       if (!appUser) {
-        registerPendingAccount(email, profile || {});
+        await registerPendingAccount(email, profile || {});
         if (showPendingWarning) {
           showErr('Your account is pending dean approval. Please wait for role assignment in Accounts.');
         }

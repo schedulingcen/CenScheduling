@@ -646,7 +646,10 @@ let state = {
   formsYearLevel: 'all',
   formsSection: 'all',
   formsFacultyId: '',
+  /** Accounts page: cloud pending list `{ phase, rows, errorMessage? }` or null. */
+  pendingAccountsUi: null,
 };
+let __cenPendingAccountsFetchGen = 0;
 let nextId = 100;
 const genId = () => `id_${Date.now().toString(36)}_${Math.random().toString(36).slice(2, 10)}`;
 
@@ -2515,6 +2518,46 @@ function ensureAuth() {
 function render() {
   let app=document.getElementById('app');
   if(!ensureAuth()) return;
+  if (state.page !== 'accounts') {
+    state.pendingAccountsUi = null;
+  } else if (state.currentUser?.role === 'admin' && hasSupabaseClient() && !state.pendingAccountsUi) {
+    state.pendingAccountsUi = { phase: 'loading', rows: [] };
+    let gen = ++__cenPendingAccountsFetchGen;
+    (async () => {
+      let { data: sessWrap } = await window.cenSupabase.auth.getSession();
+      let session = sessWrap?.session;
+      if (gen !== __cenPendingAccountsFetchGen || state.page !== 'accounts') return;
+      if (!session) {
+        state.pendingAccountsUi = {
+          phase: 'error',
+          rows: [],
+          errorMessage:
+            'Sign in with Google or your Supabase password on the login page (not the demo shortcut) so pending accounts can load from the cloud.',
+        };
+        render();
+        return;
+      }
+      let { data, error } = await window.cenSupabase
+        .from('pending_accounts')
+        .select('email,name,provider,created_at')
+        .order('created_at', { ascending: true });
+      if (gen !== __cenPendingAccountsFetchGen || state.page !== 'accounts') return;
+      if (error) {
+        state.pendingAccountsUi = { phase: 'error', rows: [], errorMessage: error.message };
+      } else {
+        state.pendingAccountsUi = {
+          phase: 'ready',
+          rows: (data || []).map(row => ({
+            email: String(row.email || '').trim().toLowerCase(),
+            name: String(row.name || '').trim() || 'Google User',
+            provider: row.provider || 'google',
+            createdAt: row.created_at,
+          })),
+        };
+      }
+      render();
+    })();
+  }
   if (!cenHydratedThisLoad) {
     if (!hasSupabaseClient()) {
       hydratePersistedData();
@@ -5171,7 +5214,20 @@ function renderAccounts() {
   let baseByEmail = new Map(officialBaseAccountsList().map(u => [String(u.email || '').toLowerCase(), u]));
   let mappedUsers = buildMergedSystemAccounts();
   let overrideEmailSet = new Set(loadAccountRoleOverrides().map(x => String(x?.email || '').trim().toLowerCase()).filter(Boolean));
-  let pendingRows = loadPendingAccounts().sort((a, b) => String(a.email || '').localeCompare(String(b.email || '')));
+  let pendingRows = [];
+  let pendingNotice = '';
+  if (state.currentUser?.role === 'admin' && hasSupabaseClient()) {
+    let ui = state.pendingAccountsUi;
+    if (!ui || ui.phase === 'loading') {
+      pendingNotice = `<div class="card" style="margin-top:14px;"><div class="card-body" style="padding:14px 16px;">Loading pending accounts from Supabase…</div></div>`;
+    } else if (ui.phase === 'error') {
+      pendingNotice = `<div class="alert" style="margin-top:14px;" role="alert">${icon('alertTriangle', 18)}<span>${escapeHtml(ui.errorMessage || 'Could not load pending accounts.')}</span></div>`;
+    } else {
+      pendingRows = [...(ui.rows || [])].sort((a, b) => String(a.email || '').localeCompare(String(b.email || '')));
+    }
+  } else {
+    pendingRows = loadPendingAccounts().sort((a, b) => String(a.email || '').localeCompare(String(b.email || '')));
+  }
   let deptOpts = `<option value="" selected>Please assign</option>${
     DEPARTMENTS.map(d => `<option value="${escapeHtml(d.id)}">${escapeHtml(d.code)} - ${escapeHtml(d.name)}</option>`).join('')
   }`;
@@ -5182,9 +5238,11 @@ function renderAccounts() {
     let source = base ? 'base' : 'override';
     return `<tr><td><strong>${escapeHtml(u.name || '')}</strong></td><td>${escapeHtml(u.email || '')}</td><td><span class="badge-status ${u.role === 'admin' ? 'approved' : 'active'}">${u.role === 'admin' ? 'Admin' : 'Chairperson'}</span></td><td>${u.dept ? `<span class="badge-dept ${escapeHtml(u.dept)}">${escapeHtml(getDept(u.dept)?.code || u.dept)}</span>` : '—'}</td><td><button type="button" class="btn btn-outline btn-sm" data-edit-mapped="${escapeHtml(em)}" data-mapped-source="${escapeHtml(source)}" data-has-override="${hasOverride ? '1' : '0'}">Edit</button> <button type="button" class="btn btn-danger btn-sm" data-del-mapped="${escapeHtml(em)}" data-mapped-source="${escapeHtml(source)}" data-has-override="${hasOverride ? '1' : '0'}">Delete</button></td></tr>`;
   }).join('')}</tbody></table></div>`;
-  let pendingTable = pendingRows.length
-    ? `<div class="table-wrap" style="margin-top:14px;"><table><thead><tr><th>Name</th><th>Email</th><th>Requested Access</th><th>Assign Department</th><th>Action</th></tr></thead><tbody>${pendingRows.map(p => `<tr><td><strong>${escapeHtml(p.name || 'Google User')}</strong></td><td>${escapeHtml(p.email || '')}</td><td><span class="badge-status pending">Pending</span></td><td><select class="form-select pending-assign-dept">${deptOpts}</select></td><td style="white-space:nowrap;"><button type="button" class="btn btn-primary btn-sm" data-assign-pending="${escapeHtml(p.email || '')}">Assign as Chair</button> <button type="button" class="btn btn-danger btn-sm" data-del-pending="${escapeHtml(p.email || '')}">Delete</button></td></tr>`).join('')}</tbody></table></div>`
-    : `<div class="card" style="margin-top:14px;"><div class="card-body" style="padding:14px 16px;">No pending Google sign-ins waiting for dean assignment.</div></div>`;
+  let pendingTable = pendingNotice
+    ? pendingNotice
+    : pendingRows.length
+      ? `<div class="table-wrap" style="margin-top:14px;"><table><thead><tr><th>Name</th><th>Email</th><th>Requested Access</th><th>Assign Department</th><th>Action</th></tr></thead><tbody>${pendingRows.map(p => `<tr><td><strong>${escapeHtml(p.name || 'Google User')}</strong></td><td>${escapeHtml(p.email || '')}</td><td><span class="badge-status pending">Pending</span></td><td><select class="form-select pending-assign-dept">${deptOpts}</select></td><td style="white-space:nowrap;"><button type="button" class="btn btn-primary btn-sm" data-assign-pending="${escapeHtml(p.email || '')}">Assign as Chair</button> <button type="button" class="btn btn-danger btn-sm" data-del-pending="${escapeHtml(p.email || '')}">Delete</button></td></tr>`).join('')}</tbody></table></div>`
+      : `<div class="card" style="margin-top:14px;"><div class="card-body" style="padding:14px 16px;">No pending Google sign-ins waiting for dean assignment.</div></div>`;
   return `<div class="page-header"><div><h2>System Accounts</h2><p style="color:var(--gray-600);margin-top:4px;">Dean can assign pending Google users to a department chair role.</p></div></div>${mappedTable}${pendingTable}`;
 }
 
@@ -7413,42 +7471,67 @@ function bindPage(){
     }
     state.professors=state.professors.filter(p=>p.id!==el.dataset.delprof);showToast('Professor deleted');render();
   }));
-  document.querySelectorAll('[data-assign-pending]').forEach(btn => btn.addEventListener('click', () => {
-    let email = String(btn.getAttribute('data-assign-pending') || '').trim().toLowerCase();
-    if (!email) return;
-    let row = btn.closest('tr');
-    let dept = String(row?.querySelector('.pending-assign-dept')?.value || '').trim();
-    if (!dept) {
-      showToast('Choose a department before assigning.');
-      return;
-    }
-    let pending = loadPendingAccounts();
-    let picked = pending.find(x => String(x?.email || '').trim().toLowerCase() === email);
-    let displayName = String(picked?.name || email.split('@')[0] || 'User').trim();
-    let overrides = loadAccountRoleOverrides().filter(x => String(x?.email || '').trim().toLowerCase() !== email);
-    overrides.push({
-      id: `mapped_${email.replace(/[^a-z0-9]/g, '')}`,
-      name: displayName,
-      email,
-      role: 'chairperson',
-      dept,
-      initials: initialsFromName(displayName),
-      assignedAt: new Date().toISOString(),
-    });
-    saveAccountRoleOverrides(overrides);
-    savePendingAccounts(pending.filter(x => String(x?.email || '').trim().toLowerCase() !== email));
-    showToast(`Assigned ${displayName} as ${String(getDept(dept)?.code || dept)} Chair.`);
-    render();
-  }));
-  document.querySelectorAll('[data-del-pending]').forEach(btn => btn.addEventListener('click', () => {
-    let email = String(btn.getAttribute('data-del-pending') || '').trim().toLowerCase();
-    if (!email) return;
-    if (!window.confirm(`Remove this pending request for ${email}?`)) return;
-    let pending = loadPendingAccounts().filter(x => String(x?.email || '').trim().toLowerCase() !== email);
-    savePendingAccounts(pending);
-    showToast('Pending request removed');
-    render();
-  }));
+  document.querySelectorAll('[data-assign-pending]').forEach(btn =>
+    btn.addEventListener('click', async () => {
+      let email = String(btn.getAttribute('data-assign-pending') || '').trim().toLowerCase();
+      if (!email) return;
+      let row = btn.closest('tr');
+      let dept = String(row?.querySelector('.pending-assign-dept')?.value || '').trim();
+      if (!dept) {
+        showToast('Choose a department before assigning.');
+        return;
+      }
+      let picked =
+        state.pendingAccountsUi?.phase === 'ready'
+          ? state.pendingAccountsUi.rows.find(x => String(x?.email || '').trim().toLowerCase() === email)
+          : loadPendingAccounts().find(x => String(x?.email || '').trim().toLowerCase() === email);
+      let displayName = String(picked?.name || email.split('@')[0] || 'User').trim();
+      if (hasSupabaseClient()) {
+        let { error } = await window.cenSupabase.from('pending_accounts').delete().eq('email', email);
+        if (error) {
+          window.alert(`Unable to remove pending row in Supabase: ${error.message}`);
+          return;
+        }
+      } else {
+        let pending = loadPendingAccounts();
+        savePendingAccounts(pending.filter(x => String(x?.email || '').trim().toLowerCase() !== email));
+      }
+      let overrides = loadAccountRoleOverrides().filter(x => String(x?.email || '').trim().toLowerCase() !== email);
+      overrides.push({
+        id: `mapped_${email.replace(/[^a-z0-9]/g, '')}`,
+        name: displayName,
+        email,
+        role: 'chairperson',
+        dept,
+        initials: initialsFromName(displayName),
+        assignedAt: new Date().toISOString(),
+      });
+      saveAccountRoleOverrides(overrides);
+      state.pendingAccountsUi = null;
+      showToast(`Assigned ${displayName} as ${String(getDept(dept)?.code || dept)} Chair.`);
+      render();
+    }),
+  );
+  document.querySelectorAll('[data-del-pending]').forEach(btn =>
+    btn.addEventListener('click', async () => {
+      let email = String(btn.getAttribute('data-del-pending') || '').trim().toLowerCase();
+      if (!email) return;
+      if (!window.confirm(`Remove this pending request for ${email}?`)) return;
+      if (hasSupabaseClient()) {
+        let { error } = await window.cenSupabase.from('pending_accounts').delete().eq('email', email);
+        if (error) {
+          window.alert(`Unable to delete pending row in Supabase: ${error.message}`);
+          return;
+        }
+      } else {
+        let pending = loadPendingAccounts().filter(x => String(x?.email || '').trim().toLowerCase() !== email);
+        savePendingAccounts(pending);
+      }
+      state.pendingAccountsUi = null;
+      showToast('Pending request removed');
+      render();
+    }),
+  );
   document.querySelectorAll('[data-edit-mapped]').forEach(btn => btn.addEventListener('click', () => {
     if (state.currentUser?.role !== 'admin') return;
     let email = String(btn.getAttribute('data-edit-mapped') || '').trim().toLowerCase();
