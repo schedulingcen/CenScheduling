@@ -656,6 +656,23 @@ const genId = () => `id_${Date.now().toString(36)}_${Math.random().toString(36).
 function hasSupabaseClient() {
   return !!(window.cenSupabaseReady && window.cenSupabase);
 }
+/** OAuth return target for dean Supabase session on the Accounts page (whitelist in Supabase Auth URL config). */
+function cenAccountsPageAbsoluteUrl() {
+  try {
+    return new URL('accounts.html', window.location.href).href;
+  } catch (_) {
+    let base = typeof location !== 'undefined' && location.origin ? location.origin : '';
+    return `${base}/accounts.html`;
+  }
+}
+async function startDeanGoogleSyncForPendingAccounts() {
+  if (!hasSupabaseClient()) return;
+  let { error } = await window.cenSupabase.auth.signInWithOAuth({
+    provider: 'google',
+    options: { redirectTo: cenAccountsPageAbsoluteUrl() },
+  });
+  if (error) window.alert(`Google sign-in failed: ${error.message}`);
+}
 function loadCurriculumHoursOverrides() {
   try {
     let raw = localStorage.getItem(CURRICULUM_HOURS_OVERRIDES_KEY);
@@ -2528,11 +2545,16 @@ function render() {
       let session = sessWrap?.session;
       if (gen !== __cenPendingAccountsFetchGen || state.page !== 'accounts') return;
       if (!session) {
+        let localRows = loadPendingAccounts().map(p => ({
+          email: String(p?.email || '').trim().toLowerCase(),
+          name: String(p?.name || '').trim() || 'Google User',
+          provider: p?.provider || 'google',
+          createdAt: p?.createdAt,
+        }));
         state.pendingAccountsUi = {
-          phase: 'error',
-          rows: [],
-          errorMessage:
-            'Sign in with Google or your Supabase password on the login page (not the demo shortcut) so pending accounts can load from the cloud.',
+          phase: 'ready',
+          rows: localRows,
+          cloudAuth: false,
         };
         render();
         return;
@@ -2553,6 +2575,7 @@ function render() {
             provider: row.provider || 'google',
             createdAt: row.created_at,
           })),
+          cloudAuth: true,
         };
       }
       render();
@@ -5215,15 +5238,22 @@ function renderAccounts() {
   let mappedUsers = buildMergedSystemAccounts();
   let overrideEmailSet = new Set(loadAccountRoleOverrides().map(x => String(x?.email || '').trim().toLowerCase()).filter(Boolean));
   let pendingRows = [];
-  let pendingNotice = '';
+  let pendingBeforeTable = '';
+  let pendingOnlyLoading = '';
   if (state.currentUser?.role === 'admin' && hasSupabaseClient()) {
     let ui = state.pendingAccountsUi;
     if (!ui || ui.phase === 'loading') {
-      pendingNotice = `<div class="card" style="margin-top:14px;"><div class="card-body" style="padding:14px 16px;">Loading pending accounts from Supabase…</div></div>`;
+      pendingOnlyLoading = `<div class="card" style="margin-top:14px;"><div class="card-body" style="padding:14px 16px;">Loading pending accounts from Supabase…</div></div>`;
     } else if (ui.phase === 'error') {
-      pendingNotice = `<div class="alert" style="margin-top:14px;" role="alert">${icon('alertTriangle', 18)}<span>${escapeHtml(ui.errorMessage || 'Could not load pending accounts.')}</span></div>`;
+      pendingBeforeTable = `<div class="alert" style="margin-top:14px;" role="alert">${icon('alertTriangle', 18)}<span>${escapeHtml(ui.errorMessage || 'Could not load pending accounts.')}</span></div>`;
     } else {
       pendingRows = [...(ui.rows || [])].sort((a, b) => String(a.email || '').localeCompare(String(b.email || '')));
+      if (ui.cloudAuth === false) {
+        pendingBeforeTable = `<div class="card" style="margin-top:14px;border:1px solid var(--gray-200);"><div class="card-body" style="padding:14px 16px;">
+          <p style="margin:0 0 10px;color:var(--gray-700);line-height:1.5;">The demo dean login does not open a Supabase session, so the cloud pending list is hidden. Use <strong>Sign in with Google</strong> with your dean email (the one listed in Supabase <code style="font-size:12px;">dean_allowed_emails</code>, e.g. <code style="font-size:12px;">admin@slsu.edu.ph</code>) to load and manage pending sign-ups from the database.</p>
+          <button type="button" class="btn btn-primary btn-sm" id="deanPendingGoogleSyncBtn">${icon('user', 16)} Sign in with Google (load pending)</button>
+        </div></div>`;
+      }
     }
   } else {
     pendingRows = loadPendingAccounts().sort((a, b) => String(a.email || '').localeCompare(String(b.email || '')));
@@ -5238,11 +5268,13 @@ function renderAccounts() {
     let source = base ? 'base' : 'override';
     return `<tr><td><strong>${escapeHtml(u.name || '')}</strong></td><td>${escapeHtml(u.email || '')}</td><td><span class="badge-status ${u.role === 'admin' ? 'approved' : 'active'}">${u.role === 'admin' ? 'Admin' : 'Chairperson'}</span></td><td>${u.dept ? `<span class="badge-dept ${escapeHtml(u.dept)}">${escapeHtml(getDept(u.dept)?.code || u.dept)}</span>` : '—'}</td><td><button type="button" class="btn btn-outline btn-sm" data-edit-mapped="${escapeHtml(em)}" data-mapped-source="${escapeHtml(source)}" data-has-override="${hasOverride ? '1' : '0'}">Edit</button> <button type="button" class="btn btn-danger btn-sm" data-del-mapped="${escapeHtml(em)}" data-mapped-source="${escapeHtml(source)}" data-has-override="${hasOverride ? '1' : '0'}">Delete</button></td></tr>`;
   }).join('')}</tbody></table></div>`;
-  let pendingTable = pendingNotice
-    ? pendingNotice
-    : pendingRows.length
-      ? `<div class="table-wrap" style="margin-top:14px;"><table><thead><tr><th>Name</th><th>Email</th><th>Requested Access</th><th>Assign Department</th><th>Action</th></tr></thead><tbody>${pendingRows.map(p => `<tr><td><strong>${escapeHtml(p.name || 'Google User')}</strong></td><td>${escapeHtml(p.email || '')}</td><td><span class="badge-status pending">Pending</span></td><td><select class="form-select pending-assign-dept">${deptOpts}</select></td><td style="white-space:nowrap;"><button type="button" class="btn btn-primary btn-sm" data-assign-pending="${escapeHtml(p.email || '')}">Assign as Chair</button> <button type="button" class="btn btn-danger btn-sm" data-del-pending="${escapeHtml(p.email || '')}">Delete</button></td></tr>`).join('')}</tbody></table></div>`
-      : `<div class="card" style="margin-top:14px;"><div class="card-body" style="padding:14px 16px;">No pending Google sign-ins waiting for dean assignment.</div></div>`;
+  let pendingTable = pendingOnlyLoading
+    ? pendingOnlyLoading
+    : `${pendingBeforeTable}${
+        pendingRows.length
+          ? `<div class="table-wrap" style="margin-top:14px;"><table><thead><tr><th>Name</th><th>Email</th><th>Requested Access</th><th>Assign Department</th><th>Action</th></tr></thead><tbody>${pendingRows.map(p => `<tr><td><strong>${escapeHtml(p.name || 'Google User')}</strong></td><td>${escapeHtml(p.email || '')}</td><td><span class="badge-status pending">Pending</span></td><td><select class="form-select pending-assign-dept">${deptOpts}</select></td><td style="white-space:nowrap;"><button type="button" class="btn btn-primary btn-sm" data-assign-pending="${escapeHtml(p.email || '')}">Assign as Chair</button> <button type="button" class="btn btn-danger btn-sm" data-del-pending="${escapeHtml(p.email || '')}">Delete</button></td></tr>`).join('')}</tbody></table></div>`
+          : `<div class="card" style="margin-top:14px;"><div class="card-body" style="padding:14px 16px;">No pending Google sign-ins waiting for dean assignment.</div></div>`
+      }`;
   return `<div class="page-header"><div><h2>System Accounts</h2><p style="color:var(--gray-600);margin-top:4px;">Dean can assign pending Google users to a department chair role.</p></div></div>${mappedTable}${pendingTable}`;
 }
 
@@ -6006,6 +6038,9 @@ function openModal(modalState) {
 
 function bindPage(){
   let isDean = state.currentUser?.role === 'admin';
+  document.getElementById('deanPendingGoogleSyncBtn')?.addEventListener('click', () => {
+    startDeanGoogleSyncForPendingAccounts();
+  });
   document.getElementById('dashboardConflictsBtn')?.addEventListener('click', () => {
     openModal({ type: 'dashboardConflicts', step: 'list' });
   });
@@ -7487,10 +7522,16 @@ function bindPage(){
           : loadPendingAccounts().find(x => String(x?.email || '').trim().toLowerCase() === email);
       let displayName = String(picked?.name || email.split('@')[0] || 'User').trim();
       if (hasSupabaseClient()) {
-        let { error } = await window.cenSupabase.from('pending_accounts').delete().eq('email', email);
-        if (error) {
-          window.alert(`Unable to remove pending row in Supabase: ${error.message}`);
-          return;
+        let { data: sessWrap } = await window.cenSupabase.auth.getSession();
+        if (sessWrap?.session) {
+          let { error } = await window.cenSupabase.from('pending_accounts').delete().eq('email', email);
+          if (error) {
+            window.alert(`Unable to remove pending row in Supabase: ${error.message}`);
+            return;
+          }
+        } else {
+          let pending = loadPendingAccounts();
+          savePendingAccounts(pending.filter(x => String(x?.email || '').trim().toLowerCase() !== email));
         }
       } else {
         let pending = loadPendingAccounts();
@@ -7518,10 +7559,16 @@ function bindPage(){
       if (!email) return;
       if (!window.confirm(`Remove this pending request for ${email}?`)) return;
       if (hasSupabaseClient()) {
-        let { error } = await window.cenSupabase.from('pending_accounts').delete().eq('email', email);
-        if (error) {
-          window.alert(`Unable to delete pending row in Supabase: ${error.message}`);
-          return;
+        let { data: sessWrap } = await window.cenSupabase.auth.getSession();
+        if (sessWrap?.session) {
+          let { error } = await window.cenSupabase.from('pending_accounts').delete().eq('email', email);
+          if (error) {
+            window.alert(`Unable to delete pending row in Supabase: ${error.message}`);
+            return;
+          }
+        } else {
+          let pending = loadPendingAccounts().filter(x => String(x?.email || '').trim().toLowerCase() !== email);
+          savePendingAccounts(pending);
         }
       } else {
         let pending = loadPendingAccounts().filter(x => String(x?.email || '').trim().toLowerCase() !== email);

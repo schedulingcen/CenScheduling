@@ -472,6 +472,13 @@
       postGooglePasswordPanel.classList.add('hidden-panel');
       loginForm.classList.remove('hidden-panel');
       try { sessionStorage.removeItem(SS_PW_AFTER_GOOGLE); } catch (_) {}
+      if (authMode === 'register') {
+        formTitle.textContent = 'Create an account';
+        formSubtitle.textContent = 'College of Engineering';
+      } else {
+        formTitle.textContent = 'College of Engineering';
+        formSubtitle.textContent = 'Southern Luzon State University';
+      }
     }
     async function bootstrapSessionFromSupabase() {
       const params = new URLSearchParams(window.location.search);
