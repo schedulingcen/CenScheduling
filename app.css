@@ -89,29 +89,177 @@
 .requests-queue-card--outgoing .card-title {
   font-size: 17px;
 }
-.requests-queue-card--incoming .request-card {
+/* Incoming queue cards: same structure as My Outgoing Requests (Pending); Accept/Decline replace status badge. */
+.requests-queue-card--incoming .request-card--incoming {
+  padding: 12px;
   border-radius: 8px;
+}
+.requests-queue-card--incoming .requests-list:not(.requests-list--empty) {
+  --request-card-estimate: 210px;
+}
+.incoming-request-reason {
+  margin-top: 8px;
+  font-size: 12px;
+  line-height: 1.4;
+  color: var(--text-muted);
+  font-style: italic;
+  overflow-wrap: break-word;
+}
+.incoming-request-actions {
+  margin-top: 6px;
+  display: grid;
+  grid-template-columns: 1fr 1fr;
+  gap: 8px;
+  width: 100%;
+  max-width: 100%;
+  box-sizing: border-box;
+}
+.incoming-request-actions .btn {
+  width: 100%;
+  max-width: none;
+  border-radius: 8px;
+  min-height: 40px;
+  font-weight: 600;
+  font-size: 12px;
+  justify-content: center;
+  white-space: nowrap;
+}
+.incoming-request-actions .btn-green {
+  background: #D9EEE6;
+  color: #0F766E;
+  border-color: #9EDBC7;
+}
+.incoming-request-actions .btn-danger {
+  background: #F8E8E8;
+  color: #B43333;
+  border-color: #EAB3B3;
+}
+.incoming-request-actions .btn-green:hover { background: #CBE8DD; }
+.incoming-request-actions .btn-danger:hover { background: #F4DEDE; }
+html[data-theme="dark"] .incoming-request-actions .btn-green {
+  background: rgba(16, 185, 129, 0.22);
+  color: #86EFAC;
+  border-color: rgba(16, 185, 129, 0.45);
+}
+html[data-theme="dark"] .incoming-request-actions .btn-danger {
+  background: rgba(239, 68, 68, 0.2);
+  color: #FCA5A5;
+  border-color: rgba(239, 68, 68, 0.45);
+}
+.request-sheet {
+  border-radius: 6px;
+  border: 1px solid #BFC5D2;
+  background: #fff;
   padding: 12px;
 }
-.request-card--incoming .request-title {
-  font-size: 15px;
-  flex: 1;
-  min-width: 0;
-  overflow-wrap: anywhere;
-}
-.request-card--incoming .request-card-head {
+.request-sheet-head {
   display: flex;
-  align-items: flex-start;
   justify-content: space-between;
+  align-items: flex-start;
   gap: 10px;
-  margin-bottom: 4px;
+  border-bottom: 1px solid #D8DCE6;
+  padding-bottom: 8px;
+  margin-bottom: 10px;
 }
-.request-card--incoming .request-meta {
+.request-sheet-title-wrap {
+  min-width: 0;
+}
+.request-sheet-title {
+  font-size: 14px;
+  font-weight: 700;
+  color: #1F2937;
+  letter-spacing: .01em;
+}
+.request-sheet-subtitle {
+  margin-top: 4px;
+  font-size: 11px;
+  color: #4B5563;
+}
+.request-sheet-meta-grid {
+  display: grid;
+  grid-template-columns: repeat(2, minmax(0, 1fr));
+  gap: 8px 12px;
+}
+.request-sheet-meta-item {
+  border: 1px solid #D8DCE6;
+  border-radius: 4px;
+  padding: 6px 8px;
+  background: #FBFCFF;
+  display: flex;
+  flex-direction: column;
+  gap: 2px;
+  min-width: 0;
+}
+.request-sheet-meta-item-full {
+  grid-column: 1 / -1;
+}
+.request-sheet-meta-label {
+  font-size: 10px;
+  font-weight: 700;
+  color: #6B7280;
+  text-transform: uppercase;
+  letter-spacing: .05em;
+}
+.request-sheet-meta-value {
   font-size: 12px;
+  color: #111827;
   line-height: 1.35;
+  word-break: break-word;
 }
-.request-card--incoming .request-actions .btn {
-  min-width: 106px;
+.request-sheet-schedule-wrap {
+  margin-top: 10px;
+  overflow-x: auto;
+}
+.request-sheet-schedule {
+  width: 100%;
+  border-collapse: collapse;
+  min-width: 460px;
+  font-size: 12px;
+}
+.request-sheet-schedule th,
+.request-sheet-schedule td {
+  border: 1px solid #9CA3AF;
+  padding: 6px 8px;
+  text-align: left;
+  vertical-align: top;
+}
+.request-sheet-schedule th {
+  background: #F3F4F6;
+  font-size: 11px;
+  font-weight: 700;
+  color: #374151;
+  text-transform: uppercase;
+}
+html[data-theme="dark"] .request-sheet {
+  border-color: var(--border-ui);
+  background: var(--surface);
+}
+html[data-theme="dark"] .request-sheet-head {
+  border-bottom-color: var(--border-ui);
+}
+html[data-theme="dark"] .request-sheet-title {
+  color: var(--text-primary);
+}
+html[data-theme="dark"] .request-sheet-subtitle {
+  color: var(--text-muted);
+}
+html[data-theme="dark"] .request-sheet-meta-item {
+  border-color: var(--border-ui);
+  background: var(--surface-elevated, var(--bg-secondary));
+}
+html[data-theme="dark"] .request-sheet-meta-label {
+  color: var(--text-muted);
+}
+html[data-theme="dark"] .request-sheet-meta-value {
+  color: var(--text-primary);
+}
+html[data-theme="dark"] .request-sheet-schedule th,
+html[data-theme="dark"] .request-sheet-schedule td {
+  border-color: var(--border-ui);
+}
+html[data-theme="dark"] .request-sheet-schedule th {
+  background: var(--table-header-bg);
+  color: var(--text-primary);
 }
 .card.requests-queue-card {
   min-height: 0;
@@ -228,9 +376,16 @@
   }
 }
 @media (max-width: 480px) {
-  .request-card--incoming .request-card-head {
+  .incoming-request-actions {
+    grid-template-columns: 1fr 1fr;
+    gap: 8px;
+  }
+  .request-sheet-head {
     flex-direction: column;
     align-items: stretch;
+  }
+  .request-sheet-meta-grid {
+    grid-template-columns: 1fr;
   }
   .request-actions {
     display: grid;

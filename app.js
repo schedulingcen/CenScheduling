@@ -757,6 +757,7 @@ function normalizeRequestFromDb(row) {
     setLabel: row.set_label || null,
     labLabel: row.lab_label || null,
     reason: row.reason || '',
+    reasonComment: row.reason_comment || '',
     status: row.status || 'pending',
     created: row.created || null,
   };
@@ -781,9 +782,19 @@ function normalizeRequestToDb(req) {
     set_label: req.setLabel || null,
     lab_label: req.labLabel || null,
     reason: req.reason || '',
+    reason_comment: req.reasonComment || '',
     status: req.status || 'pending',
     created: req.created || null,
   };
+}
+
+async function insertRequestDb(req) {
+  let payload = normalizeRequestToDb(req);
+  let res = await window.cenSupabase.from('requests').insert([payload]);
+  if (!res.error || !isSupabaseMissingColumnError(res.error, 'reason_comment')) return res;
+  let fallback = [{ ...payload }];
+  delete fallback[0].reason_comment;
+  return window.cenSupabase.from('requests').insert(fallback);
 }
 
 async function syncRequestsFromSupabase() {
@@ -1353,12 +1364,12 @@ function slotEndFromRow(row) {
   return `${Math.floor(total / 60)}:${String(total % 60).padStart(2, '0')}`;
 }
 /** Latest time a class may end (building close). */
-const TIMETABLE_DAY_CLOSE = '21:30';
-/** Period end options: 8:00 AM … 9:30 PM (no times past close). */
+const TIMETABLE_DAY_CLOSE = '21:00';
+/** Period end options: 8:00 AM … 9:00 PM (no times past close). */
 function timetableTimeEndChoices() {
   return timeSlots.slice(1).filter(t => t <= TIMETABLE_DAY_CLOSE);
 }
-/** Slot starts allowed for new/edited classes (through 9:00 PM; last row 9:30 is display-only). */
+/** Slot starts allowed for new/edited classes (through 8:30 PM; last row 9:00 is display-only). */
 function timetableTimeStartChoices() {
   return timeSlots.filter(t => t < TIMETABLE_DAY_CLOSE);
 }
@@ -2093,9 +2104,9 @@ function timeDuration(s, e) {
   if (!Number.isFinite(start) || !Number.isFinite(end)) return 1;
   let diff = end - start;
   if (diff <= 0) return 1;
+  // Use exact half-hour span so adjacent classes (e.g. 7:30-9:00 then 9:00-10:30)
+  // do not overlap and generate malformed table columns.
   let slots = Math.ceil(diff / 30);
-  // UI expectation: end label row is included in the colored block.
-  slots += 1;
   return Math.max(1, slots);
 }
 function pendingRequestsForUser() {
@@ -2331,14 +2342,13 @@ function renderSidebar() {
   let isUtilitiesOpen = !!state.utilitiesNavOpen;
   let utilitiesNav = u.role === 'admin'
     ? `
-      <a href="#" id="utilitiesNavToggle" class="nav-item ${state.page === 'section' || state.page === 'room' || state.page === 'forms' ? 'active' : ''}" aria-expanded="${isUtilitiesOpen ? 'true' : 'false'}" aria-label="Records">
+      <a href="#" id="utilitiesNavToggle" class="nav-item ${state.page === 'section' || state.page === 'room' ? 'active' : ''}" aria-expanded="${isUtilitiesOpen ? 'true' : 'false'}" aria-label="Records">
         <span class="nav-icon">${icon('settings', 18)}</span>Records
         <span style="margin-left:auto;font-weight:700;display:inline-block;transform:${isUtilitiesOpen ? 'rotate(90deg)' : 'none'};transform-origin:center;">&gt;</span>
       </a>
       ${isUtilitiesOpen ? `
       <a href="${pageHref('section')}#section" class="nav-item ${state.page === 'section' ? 'active' : ''}" style="padding-left:42px;">Section</a>
       <a href="${pageHref('room')}#room" class="nav-item ${state.page === 'room' ? 'active' : ''}" style="padding-left:42px;">Room</a>
-      <a href="${pageHref('forms')}#forms" class="nav-item ${state.page === 'forms' ? 'active' : ''}" style="padding-left:42px;">Forms</a>
       ` : ''}
     `
     : '';
@@ -2355,6 +2365,7 @@ function renderSidebar() {
       <div class="nav-section-label">Navigation</div>
       ${nav('dashboard','home','Dashboard')}
       ${nav('schedule','calendar','Schedule')}
+      ${u.role === 'chairperson' ? nav('forms', 'fileText', 'Forms') : ''}
       ${u.role === 'chairperson' || u.role === 'admin' ? nav('requests', 'refresh', 'Requests', requestsExtra) : ''}
       <div class="nav-section-label" style="margin-top:8px">Manage</div>
       ${utilitiesNav}
@@ -2649,7 +2660,7 @@ function renderTimetableGrid(scheds, gridOpts) {
   });
   html += '</tr></thead><tbody>';
   
-  // Time rows: 7:30 AM … 9:30 PM (last row marks day close; bookable slots end at 9:00 start / 9:30 end)
+  // Time rows: 7:30 AM … 9:00 PM (last row marks day close; bookable slots end at 8:30 start / 9:00 end)
   for (let row = 0; row < rows; row++) {
     const time = timeSlots[row];
     const isDayCloseRow = time === TIMETABLE_DAY_CLOSE;
@@ -3417,20 +3428,22 @@ function renderRequests() {
                       const room = getRoom(r.roomId);
                       const from = getDept(r.fromDept);
                       const sub = getSubject(r.subjectId);
+                      const daysShort = Array.isArray(r.days) ? r.days.map(d => d.slice(0, 3)).join(', ') : '—';
+                      const professorPart = r.professorId
+                        ? escapeHtml(professorDisplayLineFromPick(r.professorId, r.professorOtherName)) + ' · '
+                        : '';
+                      const noteText = (r.reasonComment || r.reason || '').trim();
                       return `
                 <div class="request-card request-card--incoming">
-                  <div class="request-icon">${icon('building', 20)}</div>
+                  <div class="request-icon request-icon-pending">${icon('refresh', 20)}</div>
                   <div class="request-info">
-                    <div class="request-card-head">
-                      <div class="request-title">${room?.name || 'Unknown Room'} — ${r.section}</div>
-                      <div class="request-actions">
-                        <button class="btn btn-green btn-sm" data-approve="${r.id}">${icon('check', 14)} Approve</button>
-                        <button class="btn btn-danger btn-sm" data-decline="${r.id}">${icon('close', 14)} Decline</button>
-                      </div>
+                    <div class="request-title">${room?.name || 'Unknown Room'} from <span class="badge-dept ${r.fromDept}">${from?.code || '?'}</span></div>
+                    <div class="request-meta">${escapeHtml(sub?.code || '—')} · ${escapeHtml(r.section || '—')} · ${professorPart}${escapeHtml(daysShort)} ${fmt12(r.timeStart)}\u2013${fmt12(r.timeEnd)}</div>
+                    ${noteText ? `<div class="incoming-request-reason">"${escapeHtml(noteText)}"</div>` : ''}
+                    <div class="request-actions incoming-request-actions">
+                      <button type="button" class="btn btn-green btn-sm" data-approve="${r.id}">${icon('check', 14)} Accept</button>
+                      <button type="button" class="btn btn-danger btn-sm" data-decline="${r.id}">${icon('close', 14)} Decline</button>
                     </div>
-                    <div class="request-meta">From: <span class="badge-dept ${r.fromDept}">${from?.code || '?'}</span> · ${sub?.code || '?'} · ${r.professorId ? escapeHtml(professorDisplayLineFromPick(r.professorId, r.professorOtherName)) + ' · ' : ''}${r.days.map(d => d.slice(0, 3)).join(', ')} ${fmt12(r.timeStart)}–${fmt12(r.timeEnd)}</div>
-                    ${r.reason ? `<div class="request-meta request-reason" style="margin-top: 4px; font-style: italic;">${icon('fileText', 14)} "${escapeHtml(r.reason)}"</div>` : ''}
-                    <div class="request-meta" style="margin-top: 4px;">Requested: ${r.created}</div>
                   </div>
                 </div>
               `;
@@ -4503,6 +4516,7 @@ function renderRequestForm() {
   let toDeptChoices = requestFormToDepartmentChoices(u);
   let selectedToDeptId = resolveRequestFormToDeptId(u, m?.requestToDept);
   let selectedReason = (m?.requestReason || '').trim();
+  let selectedReasonComment = (m?.requestReasonComment || '').trim();
   if (m) m.requestToDept = selectedToDeptId;
   let roomsPickAll = roomsFreeForBorrowing(u, daysForRooms, timeS, timeE);
   let isTeachingAssignmentReason = selectedReason === REQUEST_ROOM_REASON_CHOICES[1];
@@ -4635,6 +4649,10 @@ function renderRequestForm() {
         <label class="form-label" for="rq_timeEnd">Time end ${req}</label>
         <select class="form-select" id="rq_timeEnd" required>${te}</select>
       </div>
+    </div>
+    <div class="form-group full">
+      <label class="form-label" for="rq_reason_comment">Reason / Comment <span class="form-optional">(optional)</span></label>
+      <textarea class="form-input" id="rq_reason_comment" rows="3" maxlength="300" placeholder="Add extra details for your request (optional)">${escapeHtml(selectedReasonComment)}</textarea>
     </div>
   </div>`;
 }
@@ -5296,6 +5314,7 @@ function bindPage(){
       let profOtherRq = (document.getElementById('rq_professor_other')?.value || '').trim();
       let toDeptPick = document.getElementById('rq_to_dept')?.value || '';
       let reasonRq = (document.getElementById('rq_reason')?.value || '').trim();
+      let reasonCommentRq = (document.getElementById('rq_reason_comment')?.value || '').trim();
       let isTeachingAssignmentReason = reasonRq === REQUEST_ROOM_REASON_CHOICES[1];
       if (!toDeptPick || !roomId || !subId || !profReq || !section || !days.length || !timeStart || !timeEnd || !schYear || !schSem || !reasonRq) {
         showFormValidationBanner('rqFormAlert', MSG_FORM_INCOMPLETE);
@@ -5367,13 +5386,12 @@ function bindPage(){
         setLabel: setV || null,
         labLabel: null,
         reason: reasonRq,
+        reasonComment: reasonCommentRq,
         status: 'pending',
         created: new Date().toISOString().slice(0, 10),
       };
       if (hasSupabaseClient()) {
-        window.cenSupabase
-          .from('requests')
-          .insert([normalizeRequestToDb(req)])
+        insertRequestDb(req)
           .then(({ error }) => {
             if (error) {
               showFormValidationBanner('rqFormAlert', `Supabase error: ${error.message}`);
@@ -5431,17 +5449,21 @@ function bindPage(){
     state.modal.requestReason = e.target.value;
     render();
   });
+  document.getElementById('rq_reason_comment')?.addEventListener('input', e => {
+    if (state.modal?.type !== 'newRequest') return;
+    state.modal.requestReasonComment = e.target.value;
+  });
   document.querySelectorAll('[data-approve]').forEach(el=>el.addEventListener('click', async ()=>{
     let r=state.requests.find(x=>x.id===el.dataset.approve);
     if (!r) return;
-    if (!window.confirm('Are you sure you want to approve this request?')) return;
+    if (!window.confirm('Are you sure you want to accept this request?')) return;
     if (hasSupabaseClient()) {
       const { error } = await window.cenSupabase
         .from('requests')
         .update({ status: 'approved' })
         .eq('id', r.id);
       if (error) {
-        window.alert(`Unable to approve request in Supabase: ${error.message}`);
+        window.alert(`Unable to accept request in Supabase: ${error.message}`);
         return;
       }
     }
@@ -5451,14 +5473,14 @@ function bindPage(){
     if (hasSupabaseClient()) {
       const { error } = await upsertSchedulesDb([approvedSched]);
       if (error) {
-        window.alert(`Request approved but schedule insert failed in Supabase: ${error.message}`);
+        window.alert(`Request accepted but schedule insert failed in Supabase: ${error.message}`);
         return;
       }
       await syncSchedulesFromSupabase();
     } else {
       state.schedules.push(approvedSched);
     }
-    window.alert('This request has been approved and added to the timetable.');
+    window.alert('This request has been accepted and added to the timetable.');
     render();
   }));
   document.querySelectorAll('[data-decline]').forEach(el=>el.addEventListener('click', async ()=>{
