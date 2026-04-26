@@ -49,7 +49,11 @@ function toggleAppTheme() {
 }
 
 const CEN_STATE_KEY = 'cen_app_state';
+/** Survives browser restart (unlike sessionStorage) so curriculum deletions stay suppressed after sync. */
+const CEN_CURRICULUM_TOMBSTONES_KEY = 'cen_curriculum_deleted_slots_v1';
 const CURRICULUM_HOURS_OVERRIDES_KEY = 'cen_curriculum_required_hours_overrides_v1';
+/** Lec unit = 1 contact hour/week; each lab unit counts this many contact hours/week in curriculum totals. */
+const CURRICULUM_LAB_HOURS_PER_UNIT = 6;
 const ACCOUNT_ROLE_OVERRIDES_KEY = 'cen_account_role_overrides_v1';
 const PENDING_ACCOUNTS_KEY = 'cen_pending_accounts_v1';
 const ACCOUNT_BASE_REMOVED_KEY = 'cen_accounts_removed_base_v1';
@@ -377,15 +381,41 @@ const REQUEST_ROOM_REASON_CHOICES = [
 const REQUEST_ROOM_PENDING_ID = '__room_pending__';
 const REQUEST_ROOM_PENDING_MARKER = '__PENDING_ROOM_BOOKING__';
 
+/** Stable string key for curriculum row ids (HTML data-* is always string; DB may return number). */
+function curriculumRowIdKey(id) {
+  return id == null || id === '' ? '' : String(id);
+}
+
+/**
+ * Same catalog "slot" even when Supabase uses a UUID and `CURRICULUM_DATA` uses `cc_*` ids — without this,
+ * deleting the DB row lets `mergeMissingCurriculumRowsInto` re-append the bundled duplicate (row "comes back").
+ */
+function curriculumRowSuppressionKey(c) {
+  if (!c) return '';
+  let dept = curriculumFilterDept(c) || '';
+  let year = curriculumFilterYear(c) || '';
+  let sem = curriculumFilterSemester(c) || '';
+  let ay = curriculumAcademicYearForFilter(c) || '';
+  let code = normalizeSubjectCode(curriculumCodeFromRow(c));
+  let sec = String(c.section || '').trim();
+  return `${dept}|${year}|${sem}|${ay}|${code}|${sec}`;
+}
+
 /** Append catalog rows from data.js that are not yet in arr (by id). */
 function mergeMissingCurriculumRowsInto(arr) {
   if (typeof CURRICULUM_DATA === 'undefined' || !Array.isArray(CURRICULUM_DATA)) return;
-  let seen = new Set(arr.map(c => c && c.id).filter(Boolean));
+  let suppressed = new Set(
+    (Array.isArray(state.suppressedCurriculumIds) ? state.suppressedCurriculumIds : []).map(curriculumRowIdKey).filter(Boolean),
+  );
+  let suppressedSlots = new Set((Array.isArray(state.suppressedCurriculumKeys) ? state.suppressedCurriculumKeys : []).filter(Boolean));
+  let seen = new Set(arr.map(c => curriculumRowIdKey(c && c.id)).filter(Boolean));
   for (let b of CURRICULUM_DATA) {
-    if (b && b.id && !seen.has(b.id)) {
-      arr.push({ ...b });
-      seen.add(b.id);
-    }
+    let bid = curriculumRowIdKey(b && b.id);
+    if (!bid || suppressed.has(bid) || seen.has(bid)) continue;
+    let slot = curriculumRowSuppressionKey(b);
+    if (slot && suppressedSlots.has(slot)) continue;
+    arr.push({ ...b });
+    seen.add(bid);
   }
 }
 
@@ -495,6 +525,7 @@ function hydratePersistedData() {
   const raw = sessionStorage.getItem(CEN_STATE_KEY);
   if (!raw) return;
   try {
+    mergeCurriculumTombstonesFromLocalStorage();
     const o = JSON.parse(raw);
     if (Array.isArray(o.professors)) {
       state.professors = o.professors.map(p => ({
@@ -516,6 +547,20 @@ function hydratePersistedData() {
     if (o.filterSection != null) state.filterSection = o.filterSection;
     if (o.filterFaculty != null) state.filterFaculty = o.filterFaculty;
     if (o.filterRoom != null) state.filterRoom = o.filterRoom;
+    /** Must run before `mergeMissingCurriculumRowsInto` so deleted bundle rows are not re-inserted. */
+    if (Array.isArray(o.suppressedCurriculumIds)) {
+      state.suppressedCurriculumIds = [
+        ...new Set([
+          ...(state.suppressedCurriculumIds || []).map(curriculumRowIdKey),
+          ...o.suppressedCurriculumIds.filter(Boolean).map(curriculumRowIdKey),
+        ]),
+      ].filter(Boolean);
+    }
+    if (Array.isArray(o.suppressedCurriculumKeys)) {
+      state.suppressedCurriculumKeys = [
+        ...new Set([...(state.suppressedCurriculumKeys || []), ...o.suppressedCurriculumKeys.filter(Boolean)]),
+      ];
+    }
     if (Array.isArray(o.curriculum)) {
       let bundleById = {};
       if (typeof CURRICULUM_DATA !== 'undefined' && Array.isArray(CURRICULUM_DATA)) {
@@ -584,9 +629,43 @@ function hydratePersistedData() {
  * stored in `CEN_STATE_KEY` — without this, a full page reload reset the term to defaults and
  * the dashboard Schedule Summary showed no classes even though the DB had rows.
  */
+function mergeCurriculumTombstonesFromLocalStorage() {
+  if (!sessionStorage.getItem('cen_user')) return;
+  try {
+    const raw = localStorage.getItem(CEN_CURRICULUM_TOMBSTONES_KEY);
+    if (!raw) return;
+    const t = JSON.parse(raw);
+    if (Array.isArray(t.ids) && t.ids.length) {
+      let set = new Set((state.suppressedCurriculumIds || []).map(curriculumRowIdKey));
+      for (let x of t.ids) {
+        let k = curriculumRowIdKey(x);
+        if (k) set.add(k);
+      }
+      state.suppressedCurriculumIds = [...set];
+    }
+    if (Array.isArray(t.keys) && t.keys.length) {
+      state.suppressedCurriculumKeys = [...new Set([...(state.suppressedCurriculumKeys || []), ...t.keys.filter(Boolean)])];
+    }
+  } catch (e) { /* ignore */ }
+}
+
+function persistCurriculumTombstonesToLocalStorage() {
+  if (!state.loggedIn) return;
+  try {
+    localStorage.setItem(
+      CEN_CURRICULUM_TOMBSTONES_KEY,
+      JSON.stringify({
+        ids: state.suppressedCurriculumIds || [],
+        keys: state.suppressedCurriculumKeys || [],
+      }),
+    );
+  } catch (e) { /* private mode / quota */ }
+}
+
 function mergePersistedTermPreferences() {
   /** Same session as login (`cen_user`); avoid requiring `ensureAuth` to have run first (init calls this before first `render`). */
   if (!sessionStorage.getItem('cen_user')) return;
+  mergeCurriculumTombstonesFromLocalStorage();
   const raw = sessionStorage.getItem(CEN_STATE_KEY);
   if (!raw) return;
   try {
@@ -612,6 +691,19 @@ function mergePersistedTermPreferences() {
     }
     if (Array.isArray(o.suppressedRoomIds) && o.suppressedRoomIds.length) {
       state.suppressedRoomIds = [...new Set([...(state.suppressedRoomIds || []), ...o.suppressedRoomIds.filter(Boolean)])];
+    }
+    if (Array.isArray(o.suppressedCurriculumIds) && o.suppressedCurriculumIds.length) {
+      state.suppressedCurriculumIds = [
+        ...new Set([
+          ...(state.suppressedCurriculumIds || []).map(curriculumRowIdKey),
+          ...o.suppressedCurriculumIds.filter(Boolean).map(curriculumRowIdKey),
+        ]),
+      ].filter(Boolean);
+    }
+    if (Array.isArray(o.suppressedCurriculumKeys) && o.suppressedCurriculumKeys.length) {
+      state.suppressedCurriculumKeys = [
+        ...new Set([...(state.suppressedCurriculumKeys || []), ...o.suppressedCurriculumKeys.filter(Boolean)]),
+      ];
     }
   } catch (e) { /* ignore */ }
 }
@@ -669,6 +761,8 @@ function persistAppData() {
       facultyStatusFilter: state.facultyStatusFilter,
       facultySearchQuery: state.facultySearchQuery,
       suppressedRoomIds: state.suppressedRoomIds,
+      suppressedCurriculumIds: state.suppressedCurriculumIds,
+      suppressedCurriculumKeys: state.suppressedCurriculumKeys,
       dashboardSummaryDay: state.dashboardSummaryDay,
       formsAcademicYear: state.formsAcademicYear,
       formsSemester: state.formsSemester,
@@ -677,6 +771,7 @@ function persistAppData() {
       formsFacultyId: state.formsFacultyId,
     })
   );
+  persistCurriculumTombstonesToLocalStorage();
 }
 
 // State
@@ -726,6 +821,10 @@ let state = {
   facultySearchQuery: '',
   /** Without Supabase, deleted bundled-room ids stay hidden until session clears. */
   suppressedRoomIds: [],
+  /** User-deleted curriculum ids: omitted from bundle merge so rows stay removed (and DB repair skips re-upserting). */
+  suppressedCurriculumIds: [],
+  /** Deleted catalog slots (dept|year|sem|ay|code|section): blocks re-merge when DB id ≠ bundled `cc_*` id. */
+  suppressedCurriculumKeys: [],
   /** Chair Forms page: default synced from top-bar term on first open (see `normalizeFormsPageState`). */
   formsAcademicYear: '',
   formsSemester: '',
@@ -815,6 +914,8 @@ function normalizeProfessorTitle(name) {
 }
 function normalizeProfessorFromDb(row) {
   if (!row) return null;
+  let st = String(row.status || '').trim().toLowerCase();
+  let status = st === 'active' || st === 'on_leave' || st === 'inactive' ? st : undefined;
   return {
     id: row.id,
     name: normalizeProfessorTitle(row.name),
@@ -822,15 +923,21 @@ function normalizeProfessorFromDb(row) {
     dept: row.dept_id || row.dept,
     active: row.active !== false,
     note: row.note != null ? String(row.note) : '',
+    status,
   };
 }
 function normalizeProfessorToDb(prof) {
+  let st = String(prof.status || '').trim().toLowerCase();
+  if (!['active', 'on_leave', 'inactive'].includes(st)) {
+    st = prof.active === false ? 'inactive' : 'active';
+  }
   return {
     id: prof.id,
     name: normalizeProfessorTitle(prof.name),
     short: prof.short || '',
     dept_id: prof.dept,
-    active: prof.active !== false,
+    active: st !== 'inactive',
+    status: st,
   };
 }
 function normalizeRoomFromDb(row) {
@@ -1073,8 +1180,13 @@ function normalizeRequestFromDb(row) {
     labLabel: row.lab_label || null,
     reason: row.reason || '',
     reasonComment: row.reason_comment || '',
-    declineReason: row.decline_reason != null && String(row.decline_reason).trim() !== '' ? String(row.decline_reason).trim() : '',
-    status: row.status || 'pending',
+    declineReason: (() => {
+      for (let v of [row.decline_reason, row.declineReason, row.decline_comment, row.declineComment]) {
+        if (v != null && String(v).trim() !== '') return String(v).trim();
+      }
+      return '';
+    })(),
+    status: normalizeRequestStatusFromDb(row.status),
     created: row.created || null,
     parentTeachingRequestId: row.parent_teaching_request_id || null,
   };
@@ -1181,6 +1293,8 @@ async function syncSchedulesFromSupabase() {
 
 async function syncCoreDataFromSupabase() {
   if (!hasSupabaseClient()) return false;
+  /** Must run before curriculum merge/repair — otherwise `suppressedCurriculumIds/Keys` are still empty and deleted rows are re-upserted from the bundle. */
+  mergePersistedTermPreferences();
   try {
     const [subjectsRes, professorsRes, curriculumRes, schedulesRes, requestsRes, roomsRes] = await Promise.all([
       window.cenSupabase.from('subjects').select('*').order('code', { ascending: true }),
@@ -1203,17 +1317,31 @@ async function syncCoreDataFromSupabase() {
     }
     state.subjects = Array.isArray(subjectsRes.data) ? subjectsRes.data.map(normalizeSubjectFromDb).filter(Boolean) : [];
     state.professors = Array.isArray(professorsRes.data) ? professorsRes.data.map(normalizeProfessorFromDb).filter(Boolean) : [];
-    state.curriculum = Array.isArray(curriculumRes.data) ? curriculumRes.data.map(normalizeCurriculumFromDb).filter(Boolean) : [];
+    let rawCurriculum = Array.isArray(curriculumRes.data) ? curriculumRes.data.map(normalizeCurriculumFromDb).filter(Boolean) : [];
     // Re-upsert bundled `CURRICULUM_DATA` rows missing from DB (accidental deletes).
-    let curriculumIdsFromDb = new Set(state.curriculum.map(c => c.id).filter(Boolean));
+    let curriculumIdsFromDb = new Set(rawCurriculum.map(c => curriculumRowIdKey(c && c.id)).filter(Boolean));
+    let supCurr = new Set((state.suppressedCurriculumIds || []).map(curriculumRowIdKey).filter(Boolean));
+    let supSlots = new Set((state.suppressedCurriculumKeys || []).filter(Boolean));
+    state.curriculum = rawCurriculum.filter(c => {
+      if (!c) return false;
+      if (supCurr.has(curriculumRowIdKey(c.id))) return false;
+      if (supSlots.has(curriculumRowSuppressionKey(c))) return false;
+      return true;
+    });
     mergeMissingCurriculumRowsInto(state.curriculum);
     let bundleBackedIds = new Set();
     if (typeof CURRICULUM_DATA !== 'undefined' && Array.isArray(CURRICULUM_DATA)) {
       for (let b of CURRICULUM_DATA) {
-        if (b && b.id) bundleBackedIds.add(b.id);
+        if (b && b.id) bundleBackedIds.add(curriculumRowIdKey(b.id));
       }
     }
-    let curriculumRepairRows = state.curriculum.filter(c => c && c.id && bundleBackedIds.has(c.id) && !curriculumIdsFromDb.has(c.id));
+    let curriculumRepairRows = state.curriculum.filter(c => {
+      if (!c || !c.id) return false;
+      let cid = curriculumRowIdKey(c.id);
+      if (supCurr.has(cid)) return false;
+      if (supSlots.has(curriculumRowSuppressionKey(c))) return false;
+      return bundleBackedIds.has(cid) && !curriculumIdsFromDb.has(cid);
+    });
     if (curriculumRepairRows.length > 0) {
       const chunkSize = 150;
       for (let i = 0; i < curriculumRepairRows.length; i += chunkSize) {
@@ -1530,30 +1658,38 @@ function curriculumColTotal(c) {
     return escapeHtml(String((Number.isFinite(lec) ? lec : 0) + (Number.isFinite(lab) ? lab : 0)));
   return '—';
 }
-/** Required Hours from Lec/Lab units (Lab = 3 hours per lab unit). */
-function curriculumRequiredHours(c) {
-  let lec = Number(c.lecUnits);
-  let lab = Number(c.labUnits);
+/**
+ * Weekly hours for a curriculum row: explicit `requiredHours` / `required_hours` when set, else Lec + Lab×{@link CURRICULUM_LAB_HOURS_PER_UNIT}, else total units.
+ * (Inline edits store `requiredHours`; it must win over the formula when both exist.)
+ */
+function curriculumRequiredHoursEffectiveNumber(c) {
+  if (!c) return null;
+  let raw = c.requiredHours;
+  if (raw === null || raw === undefined || raw === '') raw = c.required_hours;
+  if (raw !== null && raw !== undefined && raw !== '') {
+    let rh = Number(raw);
+    if (Number.isFinite(rh) && rh >= 0) return rh;
+  }
+  let lec = Number(c.lecUnits != null ? c.lecUnits : c.lec_units);
+  let lab = Number(c.labUnits != null ? c.labUnits : c.lab_units);
   let lecH = Number.isFinite(lec) ? lec : 0;
-  let labH = Number.isFinite(lab) ? lab * 3 : 0;
-  if (Number.isFinite(lec) || Number.isFinite(lab)) return escapeHtml(String(lecH + labH));
-  if (Number.isFinite(Number(c.requiredHours))) return escapeHtml(String(Number(c.requiredHours)));
-  let total = Number(c.units);
-  if (Number.isFinite(total) && total > 0) return escapeHtml(String(total));
-  return '—';
-}
-/** Numeric required weekly hours for a curriculum row (same rules as {@link curriculumRequiredHours}). */
-function curriculumRowRequiredHoursNumber(c) {
-  let lec = Number(c.lecUnits);
-  let lab = Number(c.labUnits);
-  let lecH = Number.isFinite(lec) ? lec : 0;
-  let labH = Number.isFinite(lab) ? lab * 3 : 0;
+  let labH = Number.isFinite(lab) ? lab * CURRICULUM_LAB_HOURS_PER_UNIT : 0;
   if (Number.isFinite(lec) || Number.isFinite(lab)) return lecH + labH;
-  let rh = Number(c.requiredHours);
-  if (Number.isFinite(rh) && rh >= 0) return rh;
   let total = Number(c.units);
   if (Number.isFinite(total) && total > 0) return total;
   return null;
+}
+/** Table cell: required hours (HTML). */
+function curriculumRequiredHours(c) {
+  let n = curriculumRequiredHoursEffectiveNumber(c);
+  if (n == null || !Number.isFinite(n)) return '—';
+  return escapeHtml(String(n));
+}
+/** Numeric required weekly hours (scheduling / remaining column). */
+function curriculumRowRequiredHoursNumber(c) {
+  let n = curriculumRequiredHoursEffectiveNumber(c);
+  if (n == null || !Number.isFinite(n)) return null;
+  return n;
 }
 /** Banner text for curriculum year blocks (formal document style). */
 function curriculumYearBlockBannerLabel(yearKey) {
@@ -1614,28 +1750,63 @@ function computedCurriculumHoursFromUnits(lecUnits, labUnits) {
   let lec = Number(lecUnits);
   let lab = Number(labUnits);
   let lecH = Number.isFinite(lec) ? lec : 0;
-  let labH = Number.isFinite(lab) ? lab * 3 : 0;
+  let labH = Number.isFinite(lab) ? lab * CURRICULUM_LAB_HOURS_PER_UNIT : 0;
   return lecH + labH;
+}
+function getStateCurriculumRowById(rowId) {
+  if (rowId == null || rowId === '') return null;
+  let want = String(rowId);
+  return state.curriculum.find(c => c && String(c.id) === want) || null;
+}
+function findCurriculumInlineEditRow(rootEl, rowId) {
+  if (!rootEl || rowId == null || rowId === '') return null;
+  let rid = String(rowId).trim();
+  for (let tr of rootEl.querySelectorAll('tbody tr')) {
+    for (let inp of tr.querySelectorAll('.curriculum-inline-input')) {
+      if (String(inp.getAttribute('data-cd-id') || '').trim() === rid) {
+        return tr;
+      }
+    }
+  }
+  return null;
+}
+/** Ensure DB upsert always has academic year (bundle rows may omit it). */
+function curriculumRowPayloadForSave(baseRow, patch) {
+  let ay =
+    normalizeAcademicYearInput(patch?.academicYear) ||
+    normalizeAcademicYearInput(baseRow?.academicYear) ||
+    normalizeAcademicYearInput(state.curriculumAcademicYearFilter) ||
+    normalizeAcademicYearInput(state.termAcademicYear) ||
+    DEFAULT_ACADEMIC_YEAR;
+  return { ...baseRow, ...patch, academicYear: ay };
 }
 /** Read inline curriculum table inputs and upsert all rows (same semester block). */
 async function commitCurriculumTableInlineSave(tableId) {
-  if (!tableId || state.curriculumTableEditId !== tableId) return;
+  let tid = String(tableId || '').trim();
+  if (!tid || String(state.curriculumTableEditId || '').trim() !== tid) {
+    showToast('Save failed: table is not in edit mode. Click Edit on the semester block first.');
+    return;
+  }
   if (!canUserMutateCurriculum(state.currentUser)) return;
-  let root = document.getElementById(tableId);
-  if (!root) return;
+  let root = document.getElementById(tid);
+  if (!root) {
+    showToast('Save failed: could not find the curriculum table.');
+    return;
+  }
   let tbody = root.querySelector('tbody');
   if (!tbody) return;
   let updates = [];
   for (let tr of tbody.querySelectorAll('tr')) {
     let firstInp = tr.querySelector('.curriculum-inline-input');
     if (!firstInp) continue;
-    let rid = firstInp.dataset.cdId;
+    let rid = String(firstInp.getAttribute('data-cd-id') || firstInp.dataset.cdId || '').trim();
     if (!rid) continue;
     let fields = {};
     tr.querySelectorAll('.curriculum-inline-input').forEach(inp => {
-      fields[inp.dataset.cdField] = inp.value;
+      let k = inp.dataset.cdField || inp.getAttribute('data-cd-field');
+      if (k) fields[k] = inp.value;
     });
-    let orig = state.curriculum.find(c => c.id === rid);
+    let orig = getStateCurriculumRowById(rid);
     if (!orig) continue;
     let courseCode = (fields.courseCode || '').trim();
     let subjectName = (fields.subjectName || '').trim();
@@ -1651,19 +1822,21 @@ async function commitCurriculumTableInlineSave(tableId) {
     let units = Number.isFinite(unitU) ? unitU : lecUnits + labUnits;
     let hoursU = parseFloat(fields.requiredHours);
     let requiredHours = Number.isFinite(hoursU) ? hoursU : computedCurriculumHoursFromUnits(lecUnits, labUnits);
-    updates.push({
-      ...orig,
-      courseCode,
-      subjectName,
-      lecUnits,
-      labUnits,
-      units,
-      requiredHours,
-      subjectCode: (courseCode || '').replace(/\s+/g, '') || orig.subjectCode || '',
-      courseName: subjectName,
-    });
+    updates.push(
+      curriculumRowPayloadForSave(orig, {
+        courseCode,
+        subjectName,
+        lecUnits,
+        labUnits,
+        units,
+        requiredHours,
+        subjectCode: (courseCode || '').replace(/\s+/g, '') || orig.subjectCode || '',
+        courseName: subjectName,
+      }),
+    );
   }
   if (!updates.length) {
+    showToast('Nothing to save (no editable rows found).');
     state.curriculumTableEditId = null;
     render();
     return;
@@ -1677,7 +1850,7 @@ async function commitCurriculumTableInlineSave(tableId) {
     }
   }
   for (let row of updates) {
-    let i = state.curriculum.findIndex(c => c.id === row.id);
+    let i = state.curriculum.findIndex(c => String(c.id) === String(row.id));
     if (i >= 0) state.curriculum[i] = row;
     if (Number.isFinite(Number(row.requiredHours))) rememberCurriculumRequiredHours(row.id, row.requiredHours);
   }
@@ -1687,25 +1860,33 @@ async function commitCurriculumTableInlineSave(tableId) {
 }
 /** Save one inline-edited curriculum row (same semester table); keeps table in edit mode. */
 async function commitCurriculumTableInlineSaveRow(tableId, rowId) {
-  if (!tableId || !rowId || state.curriculumTableEditId !== tableId) return;
-  if (!canUserMutateCurriculum(state.currentUser)) return;
-  let root = document.getElementById(tableId);
-  if (!root) return;
-  let tr = null;
-  for (let r of root.querySelectorAll('tbody tr')) {
-    let firstInp = r.querySelector('.curriculum-inline-input');
-    if (firstInp && firstInp.dataset.cdId === rowId) {
-      tr = r;
-      break;
-    }
+  let tid = String(tableId || '').trim();
+  let rid = String(rowId || '').trim();
+  if (!tid || !rid || String(state.curriculumTableEditId || '').trim() !== tid) {
+    showToast('Save failed: table is not in edit mode. Click Edit on the semester block first.');
+    return;
   }
-  if (!tr) return;
+  if (!canUserMutateCurriculum(state.currentUser)) return;
+  let root = document.getElementById(tid);
+  if (!root) {
+    showToast('Save failed: could not find the curriculum table.');
+    return;
+  }
+  let tr = findCurriculumInlineEditRow(root, rid);
+  if (!tr) {
+    showToast('Save failed: could not find that row. Try Cancel, then Edit again.');
+    return;
+  }
   let fields = {};
   tr.querySelectorAll('.curriculum-inline-input').forEach(inp => {
-    fields[inp.dataset.cdField] = inp.value;
+    let k = inp.dataset.cdField || inp.getAttribute('data-cd-field');
+    if (k) fields[k] = inp.value;
   });
-  let orig = state.curriculum.find(c => c.id === rowId);
-  if (!orig) return;
+  let orig = getStateCurriculumRowById(rid);
+  if (!orig) {
+    showToast('Save failed: curriculum row not found in data.');
+    return;
+  }
   let courseCode = (fields.courseCode || '').trim();
   let subjectName = (fields.subjectName || '').trim();
   if (!courseCode || !subjectName) {
@@ -1720,8 +1901,7 @@ async function commitCurriculumTableInlineSaveRow(tableId, rowId) {
   let units = Number.isFinite(unitU) ? unitU : lecUnits + labUnits;
   let hoursU = parseFloat(fields.requiredHours);
   let requiredHours = Number.isFinite(hoursU) ? hoursU : computedCurriculumHoursFromUnits(lecUnits, labUnits);
-  let updated = {
-    ...orig,
+  let updated = curriculumRowPayloadForSave(orig, {
     courseCode,
     subjectName,
     lecUnits,
@@ -1730,7 +1910,7 @@ async function commitCurriculumTableInlineSaveRow(tableId, rowId) {
     requiredHours,
     subjectCode: (courseCode || '').replace(/\s+/g, '') || orig.subjectCode || '',
     courseName: subjectName,
-  };
+  });
   if (!window.confirm(MSG_CONFIRM_SAVE_CURRICULUM_EDIT)) return;
   if (hasSupabaseClient()) {
     const { error } = await upsertCurriculumDb([updated]);
@@ -1739,7 +1919,7 @@ async function commitCurriculumTableInlineSaveRow(tableId, rowId) {
       return;
     }
   }
-  let i = state.curriculum.findIndex(c => c.id === rowId);
+  let i = state.curriculum.findIndex(c => String(c.id) === rid);
   if (i >= 0) state.curriculum[i] = updated;
   if (Number.isFinite(Number(updated.requiredHours))) rememberCurriculumRequiredHours(updated.id, updated.requiredHours);
   showToast('Row saved');
@@ -2258,14 +2438,7 @@ function curriculumSubjectHasLabUnits(dept, year, sem, subjectId, ay) {
 function curriculumSubjectAllowedHours(dept, year, sem, subjectId, ay) {
   let row = curriculumRowForScheduleSubject(dept, year, sem, subjectId, ay);
   if (!row) return null;
-  let lec = Number(row.lecUnits != null ? row.lecUnits : row.lec_units);
-  let lab = Number(row.labUnits != null ? row.labUnits : row.lab_units);
-  if (Number.isFinite(lec) || Number.isFinite(lab)) {
-    return computedCurriculumHoursFromUnits(Number.isFinite(lec) ? lec : 0, Number.isFinite(lab) ? lab : 0);
-  }
-  let h = Number(row.requiredHours != null ? row.requiredHours : row.required_hours);
-  if (Number.isFinite(h) && h > 0) return h;
-  return null;
+  return curriculumRequiredHoursEffectiveNumber(row);
 }
 function scheduleWeeklyHoursFromEntry(entry) {
   let start = parseTimeToMinutes(entry?.timeStart);
@@ -2648,6 +2821,50 @@ function timeDuration(s, e) {
   // do not overlap and generate malformed table columns.
   let slots = Math.ceil(diff / 30);
   return Math.max(1, slots);
+}
+function timesEqualClock(a, b) {
+  let ma = parseTimeToMinutes(a);
+  let mb = parseTimeToMinutes(b);
+  return Number.isFinite(ma) && Number.isFinite(mb) && ma === mb;
+}
+/** Another schedule on the same day starts exactly at `timeStart` (blocks rowspan extension through that row). */
+function hasScheduleStartingAtOnDay(scheds, day, timeStart, excludeId) {
+  return scheds.some(
+    s =>
+      s &&
+      s.id !== excludeId &&
+      Array.isArray(s.days) &&
+      s.days.includes(day) &&
+      timesEqualClock(s.timeStart, timeStart),
+  );
+}
+/** Rowspan through the time row labeled with the end clock when duration is a multiple of 30m beyond one slot, unless back-to-back. */
+function timeDurationForTimetableGridDisplay(schedule, day, allScheds) {
+  let d = timeDuration(schedule.timeStart, schedule.timeEnd);
+  let diff = parseTimeToMinutes(schedule.timeEnd) - parseTimeToMinutes(schedule.timeStart);
+  if (!Number.isFinite(diff) || diff <= 30 || diff % 30 !== 0) return d;
+  if (hasScheduleStartingAtOnDay(allScheds, day, schedule.timeEnd, schedule.id)) return d;
+  return d + 1;
+}
+function hasScheduleStartingAtForRoomDay(scheds, day, roomId, timeStart, excludeId) {
+  if (!roomId) return false;
+  return scheds.some(
+    s =>
+      s &&
+      s.id !== excludeId &&
+      s.roomId === roomId &&
+      Array.isArray(s.days) &&
+      s.days.includes(day) &&
+      timesEqualClock(s.timeStart, timeStart),
+  );
+}
+function timeDurationForRoomDayGridDisplay(schedule, day, roomSchedsSameDay) {
+  let d = timeDuration(schedule.timeStart, schedule.timeEnd);
+  let diff = parseTimeToMinutes(schedule.timeEnd) - parseTimeToMinutes(schedule.timeStart);
+  if (!Number.isFinite(diff) || diff <= 30 || diff % 30 !== 0) return d;
+  if (hasScheduleStartingAtForRoomDay(roomSchedsSameDay, day, schedule.roomId, schedule.timeEnd, schedule.id))
+    return d;
+  return d + 1;
 }
 function pendingRequestsForUser() {
   let u = state.currentUser;
@@ -3243,12 +3460,12 @@ function renderTimetableGrid(scheds, gridOpts) {
   // Place schedules into grid
   scheds.forEach(s => {
     const startRow = timeToRow(s.timeStart);
-    const duration = timeDuration(s.timeStart, s.timeEnd);
     const sub = getSubject(s.subjectId);
-    
+
     s.days.forEach(day => {
       const col = dayCols.indexOf(day);
       if (col >= 0 && startRow >= 0) {
+        const duration = timeDurationForTimetableGridDisplay(s, day, scheds);
         grid[startRow][col] = { schedule: s, sub, duration };
       }
     });
@@ -3489,7 +3706,7 @@ function renderDashboardRoomSummaryGrid(scheds, day) {
     let col = roomList.findIndex(r => r.id === s.roomId);
     if (col < 0) return;
     let startRow = timeToRow(s.timeStart);
-    let duration = timeDuration(s.timeStart, s.timeEnd);
+    let duration = timeDurationForRoomDayGridDisplay(s, day, dayScheds);
     if (startRow < 0 || duration < 1) return;
     if (grid[startRow][col]) return;
     let sub = getSubject(s.subjectId);
@@ -3740,12 +3957,8 @@ function exportCurriculumTableCsv() {
     let units = '';
     if (c.units != null && Number.isFinite(Number(c.units))) units = String(Number(c.units));
     else if (lecS || labS) units = String((Number.isFinite(lecN) ? lecN : 0) + (Number.isFinite(labN) ? labN : 0));
-    let hours = '';
-    let lecH = Number.isFinite(lecN) ? lecN : 0;
-    let labH = Number.isFinite(labN) ? labN * 3 : 0;
-    if (Number.isFinite(lecN) || Number.isFinite(labN)) hours = String(lecH + labH);
-    else if (Number.isFinite(Number(c.requiredHours))) hours = String(Number(c.requiredHours));
-    else if (Number.isFinite(Number(c.units)) && Number(c.units) > 0) hours = String(Number(c.units));
+    let hoursN = curriculumRequiredHoursEffectiveNumber(c);
+    let hours = hoursN != null && Number.isFinite(hoursN) ? String(hoursN) : '';
     return [
       curriculumAyFilter,
       d?.code || curriculumFilterDept(c) || '',
@@ -4151,11 +4364,18 @@ function renderRequests() {
               isPendingRequestStatus(r.status) || r.status === 'approved_teaching' || requestHasPendingRoom(r)
             );
             const approvedOut = outgoing.filter(r => r.status === 'approved' && !requestHasPendingRoom(r));
-            const declinedOut = outgoing.filter(r => r.status === 'declined');
-            const renderOutgoingStatusColumn = (title, list) => `
+            const declinedOut = outgoing.filter(r => isRequestStatusDeclined(r.status));
+            const renderOutgoingStatusColumn = (title, list, bucket) => `
               <div class="outgoing-status-col">
                 <div class="outgoing-status-col-header">
-                  <div class="outgoing-status-col-title">${escapeHtml(title)} <span class="outgoing-status-count">${list.length}</span></div>
+                  <div class="outgoing-status-col-header-row">
+                    <div class="outgoing-status-col-title">${escapeHtml(title)} <span class="outgoing-status-count">${list.length}</span></div>
+                    ${
+                      list.length > 0
+                        ? `<button type="button" class="btn btn-outline btn-sm outgoing-clear-all-btn" data-clear-outgoing-requests="${escapeHtml(bucket)}">Clear all</button>`
+                        : ''
+                    }
+                  </div>
                 </div>
                 <div class="outgoing-status-col-body">
                   <div class="requests-list ${list.length === 0 ? 'requests-list--empty' : ''}">
@@ -4178,9 +4398,11 @@ function renderRequests() {
                               const badgeDept = getDept(deptForBadge);
                               const isApprovedFamily =
                                 (r.status === 'approved' || r.status === 'approved_teaching') && !waitingRoomApproval;
-                              const statusIcon = isApprovedFamily ? 'check' : (r.status === 'declined' ? 'close' : 'refresh');
-                              const statusIconColor = isApprovedFamily ? '#16A34A' : (r.status === 'declined' ? '#DC2626' : '#D97706');
-                              const statusIconBg = isApprovedFamily ? '#F0FDF4' : (r.status === 'declined' ? '#FEF2F2' : '#FFFBEB');
+                              const isDeclined = isRequestStatusDeclined(r.status);
+                              const declineNote = requestDeclineReasonDisplayText(r);
+                              const statusIcon = isApprovedFamily ? 'check' : (isDeclined ? 'close' : 'refresh');
+                              const statusIconColor = isApprovedFamily ? '#16A34A' : (isDeclined ? '#DC2626' : '#D97706');
+                              const statusIconBg = isApprovedFamily ? '#F0FDF4' : (isDeclined ? '#FEF2F2' : '#FFFBEB');
                               const roomFollowPending = hasPendingRoomRequestForTeachingParent(r.id);
                               /** Same row is listed under Incoming for “Book a room”; avoid a second clickable button here. */
                               const bookRoomActionInIncoming = needsRequesterRoomBooking(r, u.dept);
@@ -4202,9 +4424,13 @@ function renderRequests() {
                                     <div class="request-title">${titleMain} from <span class="badge-dept ${deptForBadge}">${badgeDept?.code || '?'}</span></div>
                                     <div class="request-meta">${sub?.code || '?'} · ${r.section} · ${r.professorId ? escapeHtml(professorDisplayLineFromPick(r.professorId, r.professorOtherName)) + ' · ' : ''}${r.days.map(d => d.slice(0, 3)).join(', ')} ${fmt12(r.timeStart)}–${fmt12(r.timeEnd)}</div>
                                     <div style="margin-top: 6px;"><span class="badge-status ${badgeClass}">${statusLabel}</span></div>
-                                    ${r.status === 'declined' && String(r.declineReason || '').trim()
-                                      ? `<div class="incoming-request-reason request-decline-reason"><strong>Decline reason:</strong> ${escapeHtml(String(r.declineReason).trim())}</div>`
-                                      : ''}
+                                    ${
+                                      isDeclined && declineNote
+                                        ? `<div class="incoming-request-reason request-decline-reason" role="status"><strong>Decline comment:</strong> ${escapeHtml(declineNote)}</div>`
+                                        : isDeclined && !declineNote
+                                          ? `<div class="incoming-request-reason request-decline-reason request-decline-reason--empty" role="status"><strong>Decline comment:</strong> <span style="color:var(--text-muted);font-style:italic;">Not recorded.</span></div>`
+                                          : ''
+                                    }
                                     ${
                                       canBookRoom
                                         ? `<div style="margin-top:8px;"><button type="button" class="btn btn-outline btn-sm" data-book-room-request="${escapeHtml(r.id)}">Book a room</button></div>`
@@ -4224,9 +4450,9 @@ function renderRequests() {
             `;
             return `
               <div class="outgoing-status-grid" style="display:grid;grid-template-columns:repeat(3,minmax(0,1fr));gap:12px;">
-                ${renderOutgoingStatusColumn('Pending', pendingOut)}
-                ${renderOutgoingStatusColumn('Approved', approvedOut)}
-                ${renderOutgoingStatusColumn('Declined', declinedOut)}
+                ${renderOutgoingStatusColumn('Pending', pendingOut, 'pending')}
+                ${renderOutgoingStatusColumn('Approved', approvedOut, 'approved')}
+                ${renderOutgoingStatusColumn('Declined', declinedOut, 'declined')}
               </div>
             `;
           })()}
@@ -4265,6 +4491,9 @@ function renderCurriculumForm(d, opts) {
   if (!Number.isFinite(labV)) labV = 0;
   let totV = lecV + labV;
   let hoursV = computedCurriculumHoursFromUnits(lecV, labV);
+  if (Number.isFinite(Number(d.requiredHours)) && Number(d.requiredHours) >= 0) {
+    hoursV = Number(d.requiredHours);
+  }
   let isAdminCurr = state.currentUser?.role === 'admin';
   let currDeptId = isAdminCurr ? (d.dept || '') : (state.currentUser?.dept || d.dept || '');
   let deptOpts = isAdminCurr
@@ -4283,7 +4512,7 @@ function renderCurriculumForm(d, opts) {
     <div class="form-grid curriculum-form-year-sem"><div class="form-group"><label class="form-label" for="cc_year">Year</label><select class="form-select" id="cc_year" ${dis}><option value="">Select year...</option>${yearOpts}${ySel}</select></div><div class="form-group"><label class="form-label" for="cc_semester">Semester</label><select class="form-select" id="cc_semester" ${dis}><option value="">Select semester...</option>${semOpts}${sSel}</select></div></div>
     <div class="form-group full"><label class="form-label" for="cc_ay">Academic Year</label><input class="form-input" id="cc_ay" value="${escapeHtml(ayVal)}" placeholder="2025-2026" ${roInp}></div>
     <div class="form-grid curriculum-form-code-subject"><div class="form-group"><label class="form-label" for="cc_courseCode">Code</label><input class="form-input" id="cc_courseCode" placeholder="e.g. IE 100" value="${escapeHtml(d.courseCode || '')}" ${roInp}></div><div class="form-group"><label class="form-label" for="cc_subject">Subject</label><input class="form-input" id="cc_subject" placeholder="Subject title" value="${escapeHtml(d.subjectName || '')}" ${roInp}></div></div>
-    <div class="form-grid curriculum-form-units"><div class="form-group"><label class="form-label" for="cc_lecUnits">Lec (units)</label><input class="form-input" id="cc_lecUnits" type="number" min="0" max="12" step="1" value="${escapeHtml(String(lecV))}" ${roInp}></div><div class="form-group"><label class="form-label" for="cc_labUnits">Lab (units)</label><input class="form-input" id="cc_labUnits" type="number" min="0" max="12" step="1" value="${escapeHtml(String(labV))}" ${roInp}></div><div class="form-group"><label class="form-label" for="cc_units_total">Total unit/s</label><input class="form-input" id="cc_units_total" type="text" readonly tabindex="-1" value="${escapeHtml(String(totV))}" aria-live="polite"></div><div class="form-group"><label class="form-label" for="cc_hours">Hours</label><input class="form-input" id="cc_hours" type="number" min="0" max="40" step="0.5" value="${escapeHtml(String(hoursV))}" readonly tabindex="-1" aria-readonly="true"></div></div>
+    <div class="form-grid curriculum-form-units"><div class="form-group"><label class="form-label" for="cc_lecUnits">Lec (units)</label><input class="form-input" id="cc_lecUnits" type="number" min="0" max="12" step="1" value="${escapeHtml(String(lecV))}" ${roInp}></div><div class="form-group"><label class="form-label" for="cc_labUnits">Lab (units)</label><input class="form-input" id="cc_labUnits" type="number" min="0" max="12" step="1" value="${escapeHtml(String(labV))}" ${roInp}></div><div class="form-group"><label class="form-label" for="cc_units_total">Total unit/s</label><input class="form-input" id="cc_units_total" type="text" readonly tabindex="-1" value="${escapeHtml(String(totV))}" aria-live="polite"></div><div class="form-group"><label class="form-label" for="cc_hours">Hours</label><input class="form-input" id="cc_hours" type="number" min="0" max="120" step="0.5" value="${escapeHtml(String(hoursV))}" ${readOnly ? 'readonly tabindex="-1" aria-readonly="true"' : ''} title="${readOnly ? '' : 'Adjust if needed; changing Lec/Lab updates this to the default formula until you edit again.'}"></div></div>
   </div><input type="hidden" id="cc_edit_id" value="${escapeHtml(d.id || '')}">`;
 }
 
@@ -4417,15 +4646,8 @@ function renderCurriculum() {
     let actionsCol = isEditing ? '<col class="curriculum-col-actions" />' : '';
     let columnHeadRow = `<tr><th scope="col">Code</th><th scope="col">Subject</th><th scope="col" class="curriculum-th-num">Lec</th><th scope="col" class="curriculum-th-num">Lab</th><th scope="col" class="curriculum-th-num">Unit/s</th><th scope="col" class="curriculum-th-hours">Hours</th>${schedTh}${actionsHead}</tr>`;
     function numericHoursDefault(c) {
-      let lec = Number(c.lecUnits);
-      let lab = Number(c.labUnits);
-      let lecH = Number.isFinite(lec) ? lec : 0;
-      let labH = Number.isFinite(lab) ? lab * 3 : 0;
-      if (Number.isFinite(lec) || Number.isFinite(lab)) return String(lecH + labH);
-      if (Number.isFinite(Number(c.requiredHours))) return String(Number(c.requiredHours));
-      let u = Number(c.units);
-      if (Number.isFinite(u) && u > 0) return String(u);
-      return '';
+      let n = curriculumRequiredHoursEffectiveNumber(c);
+      return n != null && Number.isFinite(n) ? String(n) : '';
     }
     function renderBodyRow(c) {
       if (!isEditing) {
@@ -5863,6 +6085,25 @@ function requestReasonDisplayText(req) {
   return String(req?.reason || '').replace(REQUEST_ROOM_PENDING_MARKER, '').trim();
 }
 
+/** Match DB / legacy casing (`Declined`, spaces). */
+function normalizeRequestStatusFromDb(raw) {
+  let s = String(raw ?? 'pending').trim().toLowerCase().replace(/\s+/g, '_');
+  return s || 'pending';
+}
+
+function isRequestStatusDeclined(status) {
+  return normalizeRequestStatusFromDb(status) === 'declined';
+}
+
+/** Text the approver entered when declining; supports alternate column names from older schemas. */
+function requestDeclineReasonDisplayText(req) {
+  if (!req) return '';
+  for (let v of [req.declineReason, req.decline_reason, req.declineComment, req.decline_comment]) {
+    if (v != null && String(v).trim() !== '') return String(v).trim();
+  }
+  return '';
+}
+
 function needsRequesterRoomBooking(req, userDept) {
   if (!req || !userDept) return false;
   if (req.fromDept !== userDept || req.parentTeachingRequestId) return false;
@@ -5875,6 +6116,102 @@ function hasPendingRoomRequestForTeachingParent(parentRequestId) {
   if (!parentRequestId) return false;
   let p = getStateRequestById(parentRequestId);
   return p ? pendingTeachingRoomFollowupsForParent(p).length > 0 : false;
+}
+
+/** Outgoing requests the chair sent (same scope as dashboard “My Outgoing Requests”). */
+function outgoingRequestsForChairDeptAndTerm(u, term = currentTermFilter()) {
+  if (!u || u.role !== 'chairperson' || !u.dept) return [];
+  return state.requests.filter(r => r.fromDept === u.dept && requestMatchesCurrentTerm(r, term));
+}
+
+function partitionOutgoingRequestsByStatusColumn(outgoing) {
+  return {
+    pending: outgoing.filter(
+      r => isPendingRequestStatus(r.status) || r.status === 'approved_teaching' || requestHasPendingRoom(r),
+    ),
+    approved: outgoing.filter(r => r.status === 'approved' && !requestHasPendingRoom(r)),
+    declined: outgoing.filter(r => isRequestStatusDeclined(r.status)),
+  };
+}
+
+/** Delete order: children before parents (FK `parent_teaching_request_id`). */
+function sortRequestRowDeleteIdsChildFirst(rows) {
+  let rowById = new Map(rows.map(r => [String(r.id), r]));
+  let remaining = new Set(rows.map(r => String(r.id)));
+  let out = [];
+  while (remaining.size) {
+    let batch = [...remaining].filter(id => {
+      let childStill = [...remaining].some(cid => {
+        if (cid === id) return false;
+        let c = rowById.get(cid);
+        return c && String(c.parentTeachingRequestId || '') === id;
+      });
+      return !childStill;
+    });
+    if (!batch.length) batch = [[...remaining][0]];
+    for (let b of batch) {
+      out.push(b);
+      remaining.delete(b);
+    }
+  }
+  return out;
+}
+
+/**
+ * Remove all outgoing requests in one dashboard column for the current chair’s department and term only.
+ * Deletes linked teaching follow-ups from the same department when their parent is in the cleared set.
+ */
+async function clearOutgoingRequestsForBucket(bucket) {
+  const allowed = new Set(['pending', 'approved', 'declined']);
+  if (!allowed.has(bucket)) return;
+  let u = state.currentUser;
+  if (!u || u.role !== 'chairperson' || !u.dept) return;
+  let term = currentTermFilter();
+  let outgoing = outgoingRequestsForChairDeptAndTerm(u, term);
+  let parts = partitionOutgoingRequestsByStatusColumn(outgoing);
+  let list = parts[bucket] || [];
+  if (!list.length) {
+    showToast(`No ${bucket} outgoing requests to clear.`);
+    return;
+  }
+  let deptLabel = getDept(u.dept)?.code || 'your department';
+  if (
+    !window.confirm(
+      `Permanently delete all ${list.length} ${bucket} outgoing request(s) from ${deptLabel} for this term (${term.sem}, ${term.ay})?\n\nOther departments are not affected. This cannot be undone.`,
+    )
+  ) {
+    return;
+  }
+  let idSet = new Set(list.map(r => String(r.id)));
+  let expanded = [...list];
+  for (let r of list) {
+    for (let ch of requestsLinkedToTeachingParent(r.id)) {
+      if (ch.fromDept !== u.dept || !requestMatchesCurrentTerm(ch, term)) continue;
+      let cid = String(ch.id);
+      if (!idSet.has(cid)) {
+        idSet.add(cid);
+        expanded.push(ch);
+      }
+    }
+  }
+  let orderedIds = sortRequestRowDeleteIdsChildFirst(expanded);
+  if (hasSupabaseClient()) {
+    for (let id of orderedIds) {
+      const { error } = await window.cenSupabase.from('requests').delete().eq('id', id);
+      if (error) {
+        window.alert(`Could not delete requests: ${error.message}`);
+        await syncRequestsFromSupabase();
+        render();
+        return;
+      }
+    }
+    await syncRequestsFromSupabase();
+  } else {
+    let remove = new Set(orderedIds.map(String));
+    state.requests = state.requests.filter(r => !remove.has(String(r.id)));
+  }
+  showToast(`Removed ${orderedIds.length} request(s).`);
+  render();
 }
 
 function renderTeachingApprovalForm() {
@@ -5932,8 +6269,13 @@ function renderDeclineRequestForm() {
   let alertInner = !r
     ? `<div class="alert form-validation-alert" role="alert">${icon('alertTriangle', 18)}<span class="form-validation-alert-text">This request was not found in the current list. Close and open Decline again from <strong>Incoming Requests</strong>.</span></div>`
     : '';
+  let requesterNote = r ? (requestReasonCommentDisplayText(r) || requestReasonDisplayText(r) || '').trim() : '';
+  let requesterNoteBlock = requesterNote
+    ? `<div class="decline-modal-requester-note"><strong>Requester&rsquo;s note</strong><span class="decline-modal-requester-note-text">${escapeHtml(requesterNote)}</span></div>`
+    : '';
   return `<div class="request-room-form schedule-form-wrapper decline-request-form">
     <div id="declineRequestAlert">${alertInner}</div>
+    ${requesterNoteBlock}
     <p class="form-hint decline-request-summary" style="margin-bottom:12px;">${summary}</p>
     <div class="form-group full">
       <label class="form-label" for="decline_reason_comment">Reason for declining <span class="label-req" aria-hidden="true">*</span></label>
@@ -6251,7 +6593,13 @@ function renderSubjectForm(d){
 function renderProfessorForm(d){
   d = d || {};
   let deptOpts=DEPARTMENTS.map(dept=>`<option value="${escapeHtml(dept.id)}" ${d.dept===dept.id?'selected':''}>${escapeHtml(dept.code)} — ${escapeHtml(dept.name)}</option>`).join('');
-  return `<div class="form-grid form-grid-stacked"><input type="hidden" id="fp_edit_id" value="${escapeHtml(d.id||'')}"><div class="form-group full"><label class="form-label" for="fp_name">Full name</label><input class="form-input" id="fp_name" placeholder="Full Name" value="${escapeHtml(d.name||'')}"></div><div class="form-group full"><label class="form-label" for="fp_short">Short name</label><input class="form-input" id="fp_short" placeholder="Short Name" value="${escapeHtml(d.short||'')}"></div><div class="form-group full"><label class="form-label" for="fp_dept">Department</label><select class="form-select" id="fp_dept">${deptOpts}</select></div><div class="form-group full"><label class="form-label" for="fp_note">Note</label><textarea class="form-input" id="fp_note" rows="3" placeholder="Optional">${escapeHtml(d.note||'')}</textarea></div></div>`;
+  let st = professorStatusValue(d);
+  let statusOpts = [
+    ['active', 'Active'],
+    ['on_leave', 'On Leave'],
+    ['inactive', 'Inactive'],
+  ].map(([v, lab]) => `<option value="${escapeHtml(v)}" ${st === v ? 'selected' : ''}>${escapeHtml(lab)}</option>`).join('');
+  return `<div class="form-grid form-grid-stacked"><input type="hidden" id="fp_edit_id" value="${escapeHtml(d.id||'')}"><div class="form-group full"><label class="form-label" for="fp_name">Full name</label><input class="form-input" id="fp_name" placeholder="Full Name" value="${escapeHtml(d.name||'')}"></div><div class="form-group full"><label class="form-label" for="fp_short">Short name</label><input class="form-input" id="fp_short" placeholder="Short Name" value="${escapeHtml(d.short||'')}"></div><div class="form-group full"><label class="form-label" for="fp_dept">Department</label><select class="form-select" id="fp_dept">${deptOpts}</select></div><div class="form-group full"><label class="form-label" for="fp_status">Status</label><select class="form-select" id="fp_status" aria-label="Faculty status">${statusOpts}</select></div><div class="form-group full"><label class="form-label" for="fp_note">Note</label><textarea class="form-input" id="fp_note" rows="3" placeholder="Optional">${escapeHtml(d.note||'')}</textarea></div></div>`;
 }
 
 function renderRequestForm() {
@@ -6429,11 +6777,65 @@ function renderRequestForm() {
   </div>`;
 }
 
+/** Inline / table Delete for curriculum rows (delegated click also calls this). */
+async function commitCurriculumRowDelete(rawIdFromDom) {
+  if (!canUserMutateCurriculum(state.currentUser)) {
+    showToast('Only chairs and administrators can delete curriculum rows.');
+    return;
+  }
+  if (!window.confirm(MSG_CONFIRM_PERM_DELETE_CURRICULUM)) return;
+  let delKey = curriculumRowIdKey(rawIdFromDom);
+  if (!delKey) {
+    showToast('Delete failed: missing row id.');
+    return;
+  }
+  let rowSnapshot = getStateCurriculumRowById(delKey);
+  if (hasSupabaseClient()) {
+    const { data: deletedRows, error } = await window.cenSupabase.from('curriculum').delete().eq('id', delKey).select('id');
+    if (error) {
+      window.alert(`Unable to delete curriculum row in Supabase: ${error.message}`);
+      return;
+    }
+    if (!deletedRows || deletedRows.length === 0) {
+      window.alert(
+        'No row was deleted in the database (wrong id, or your account lacks delete permission). It will still be hidden in this browser until you clear site data.',
+      );
+    }
+  }
+  if (!Array.isArray(state.suppressedCurriculumIds)) state.suppressedCurriculumIds = [];
+  if (!state.suppressedCurriculumIds.includes(delKey)) state.suppressedCurriculumIds.push(delKey);
+  if (rowSnapshot) {
+    let sk = curriculumRowSuppressionKey(rowSnapshot);
+    if (sk) {
+      if (!Array.isArray(state.suppressedCurriculumKeys)) state.suppressedCurriculumKeys = [];
+      if (!state.suppressedCurriculumKeys.includes(sk)) state.suppressedCurriculumKeys.push(sk);
+    }
+  }
+  state.curriculum = state.curriculum.filter(c => curriculumRowIdKey(c.id) !== delKey);
+  showToast('Row removed');
+  render();
+}
+
 // Event binding
 function bindGlobal(){
   if (!window.__cenHashPageSyncBound) {
     window.__cenHashPageSyncBound = '1';
     window.addEventListener('hashchange', syncPageFromLocationHash);
+  }
+  if (!window.__cenCurriculumDeleteDelegated) {
+    window.__cenCurriculumDeleteDelegated = '1';
+    document.addEventListener(
+      'click',
+      e => {
+        let t = e.target;
+        if (!t || typeof t.closest !== 'function') return;
+        let btn = t.closest('[data-delcrow]');
+        if (!btn) return;
+        e.preventDefault();
+        void commitCurriculumRowDelete(btn.getAttribute('data-delcrow'));
+      },
+      true,
+    );
   }
   document.getElementById('logoutBtn')?.addEventListener('click', async ()=>{
     if (!window.confirm(MSG_CONFIRM_LOGOUT)) return;
@@ -6445,6 +6847,11 @@ function bindGlobal(){
       // Continue local logout flow even if remote sign-out fails.
     }
     sessionStorage.clear();
+    try {
+      localStorage.removeItem(CEN_CURRICULUM_TOMBSTONES_KEY);
+    } catch (_) {
+      /* ignore */
+    }
     state.loggedIn = false;
     window.location.replace('login.html?logged_out=1');
   });
@@ -7238,13 +7645,16 @@ function bindPage(){
     if (mt === 'addProfessor') {
       let editId = (document.getElementById('fp_edit_id')?.value || '').trim();
       let prev = editId ? state.professors.find(p => p.id === editId) : null;
+      let statusPick = (document.getElementById('fp_status')?.value || 'active').trim().toLowerCase();
+      if (!['active', 'on_leave', 'inactive'].includes(statusPick)) statusPick = 'active';
       let prof = {
         id: editId || genId(),
         name: document.getElementById('fp_name').value,
         short: document.getElementById('fp_short').value,
         dept: document.getElementById('fp_dept').value,
         note: (document.getElementById('fp_note')?.value || '').trim(),
-        active: prev ? prev.active !== false : true,
+        status: statusPick,
+        active: statusPick !== 'inactive',
       };
       if (prof.name && prof.short) {
         if (!window.confirm(MSG_CONFIRM_SAVE_PROFESSOR)) return;
@@ -7275,7 +7685,11 @@ function bindPage(){
       let lecUnits = Number.isFinite(lecU) ? lecU : 0;
       let labUnits = Number.isFinite(labU) ? labU : 0;
       let units = lecUnits + labUnits;
-      let requiredHours = computedCurriculumHoursFromUnits(lecUnits, labUnits);
+      let hoursParsed = parseFloat(String(document.getElementById('cc_hours')?.value || '').trim());
+      let requiredHours =
+        Number.isFinite(hoursParsed) && hoursParsed >= 0
+          ? hoursParsed
+          : computedCurriculumHoursFromUnits(lecUnits, labUnits);
       let row = {
         dept: document.getElementById('cc_dept')?.value,
         year: (document.getElementById('cc_year')?.value || '').trim(),
@@ -7520,6 +7934,12 @@ function bindPage(){
     };
     render();
   }));
+  document.querySelectorAll('[data-clear-outgoing-requests]').forEach(el =>
+    el.addEventListener('click', () => {
+      let bucket = String(el.getAttribute('data-clear-outgoing-requests') || '').trim();
+      void clearOutgoingRequestsForBucket(bucket);
+    }),
+  );
   document.querySelectorAll('[data-approve]').forEach(el=>el.addEventListener('click', async ()=>{
     let r = getStateRequestById(el.dataset.approve);
     if (!r) return;
@@ -7624,24 +8044,14 @@ function bindPage(){
   );
   document.querySelectorAll('[data-editcrow]').forEach(el=>el.addEventListener('click',()=>{
     if (!canUserMutateCurriculum(state.currentUser)) return;
-    let c = state.curriculum.find(x => x.id === el.dataset.editcrow);
+    let want = curriculumRowIdKey(el.dataset.editcrow);
+    let c = state.curriculum.find(x => curriculumRowIdKey(x.id) === want);
     if (c) openModal({ type: 'addCurriculum', data: { ...c } });
   }));
   document.querySelectorAll('[data-viewcrow]').forEach(el=>el.addEventListener('click',()=>{
-    let c = state.curriculum.find(x => x.id === el.dataset.viewcrow);
+    let want = curriculumRowIdKey(el.dataset.viewcrow);
+    let c = state.curriculum.find(x => curriculumRowIdKey(x.id) === want);
     if (c) openModal({ type: 'addCurriculum', data: { ...c } });
-  }));
-  document.querySelectorAll('[data-delcrow]').forEach(el=>el.addEventListener('click', async ()=>{
-    if (!canUserMutateCurriculum(state.currentUser)) return;
-    if (!window.confirm(MSG_CONFIRM_PERM_DELETE_CURRICULUM)) return;
-    if (hasSupabaseClient()) {
-      const { error } = await window.cenSupabase.from('curriculum').delete().eq('id', el.dataset.delcrow);
-      if (error) {
-        window.alert(`Unable to delete curriculum row in Supabase: ${error.message}`);
-        return;
-      }
-    }
-    state.curriculum=state.curriculum.filter(c=>c.id!==el.dataset.delcrow);showToast('Row removed');render();
   }));
   document.getElementById('curriculumYearFilter')?.addEventListener('change', e => {
     state.curriculumYearFilter = e.target.value || 'all';
@@ -8378,7 +8788,6 @@ state.page = resolveInitialPage();
 forceRootUrlInAddressBar();
 if (sessionStorage.getItem('cen_user') && hasSupabaseClient()) {
   syncCoreDataFromSupabase().finally(() => {
-    mergePersistedTermPreferences();
     render();
   });
 } else {
