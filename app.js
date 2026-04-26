@@ -3596,7 +3596,8 @@ function renderRequests() {
           <div class="card-title card-title-with-icon">${icon('inbox', 18)} Incoming Requests ${pending.length ? `<span style="background: var(--red); color: #fff; font-size: 10px; padding: 2px 6px; border-radius: 10px; margin-left: 6px;">${pending.length}</span>` : ''}</div>
         </div>
         <div class="card-body requests-queue-card-body">
-          <div class="requests-list ${pending.length === 0 ? 'requests-list--empty' : ''}">
+          <div class="requests-incoming-list-wrap${pending.length === 0 ? ' requests-incoming-list-wrap--empty' : ''}">
+            <div class="requests-list ${pending.length === 0 ? 'requests-list--empty' : ''}">
             ${
               pending.length === 0
                 ? `<div class="requests-list-empty-state"><div class="requests-list-empty-icon">${icon('checkCircle', 40)}</div><p>No pending requests.</p></div>`
@@ -3627,6 +3628,7 @@ function renderRequests() {
                     })
                     .join('')
             }
+            </div>
           </div>
         </div>
       </div>

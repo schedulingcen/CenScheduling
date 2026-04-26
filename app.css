@@ -79,7 +79,7 @@
   grid-template-columns: minmax(260px, 0.72fr) minmax(0, 1.78fr);
   gap: 20px;
   margin-bottom: 20px;
-  align-items: start;
+  align-items: stretch;
 }
 .requests-queue-card--incoming .card-header,
 .requests-queue-card--outgoing .card-header {
@@ -264,38 +264,80 @@ html[data-theme="dark"] .request-sheet-schedule th {
   background: var(--table-header-bg);
   color: var(--text-primary);
 }
+/* Request queues: cap list at ~1.5 cards, then scroll. Short lists use natural height (no min-height on list). */
 .card.requests-queue-card {
+  --request-queue-card-h: 170px;
   min-height: 0;
   display: flex;
   flex-direction: column;
-  height: auto;
   max-height: none;
-  align-self: start;
   width: 100%;
+  max-width: 100%;
   overflow: visible;
+}
+.card.requests-queue-card.requests-queue-card--incoming {
+  --request-queue-card-h: 200px;
+}
+/* Both queue cards share the same row height so the white panels align. */
+.requests-queue-grid > .card.requests-queue-card {
+  min-height: 0;
+  align-self: stretch;
+  justify-self: stretch;
+  height: 100%;
 }
 .card.requests-queue-card .card-header {
   flex-shrink: 0;
 }
 .card.requests-queue-card .card-body.requests-queue-card-body {
   min-height: 0;
-  flex: 0 0 auto;
+  flex: 1 1 auto;
   display: flex;
   flex-direction: column;
+  align-items: stretch;
   padding: 12px 16px;
 }
-/* Lists hug content height; only grow up to cap when there are many cards (then scroll) */
-.requests-list {
+.requests-list:not(.requests-list--empty) {
   flex: 0 0 auto;
+  flex-grow: 0;
   min-height: 0;
-  height: fit-content;
-  max-height: min(70vh, 480px);
+  height: auto;
+  /* height:auto + max-height: caps tall stacks; one short card is only as tall as that card */
+  max-height: calc(var(--request-queue-card-h) * 1.5 + 12px);
   overflow-y: auto;
   overflow-x: hidden;
   -webkit-overflow-scrolling: touch;
   scrollbar-gutter: auto;
   padding-right: 4px;
   box-sizing: border-box;
+  width: 100%;
+}
+/* Incoming: grow with the card so extra space matches Outgoing; inner list still scrolls. */
+.card.requests-queue-card--incoming .requests-incoming-list-wrap {
+  display: flex;
+  flex: 1 1 auto;
+  min-height: 0;
+  flex-direction: column;
+}
+.card.requests-queue-card--incoming .requests-incoming-list-wrap--empty {
+  justify-content: center;
+}
+/* Incoming: scroll the wrapper so flex layout does not block overflow (outgoing columns still use .requests-list as scrollport) */
+.card.requests-queue-card--incoming .requests-incoming-list-wrap:not(.requests-incoming-list-wrap--empty) {
+  min-height: 0;
+  max-height: calc(var(--request-queue-card-h) * 1.5 + 12px);
+  overflow-y: auto;
+  overflow-x: hidden;
+  -webkit-overflow-scrolling: touch;
+  scrollbar-gutter: auto;
+  padding-right: 4px;
+  box-sizing: border-box;
+  width: 100%;
+}
+.card.requests-queue-card--incoming .requests-incoming-list-wrap .requests-list:not(.requests-list--empty) {
+  max-height: none;
+  overflow: visible;
+  padding-right: 0;
+  flex: 0 0 auto;
 }
 .requests-list.requests-list--empty {
   display: flex;
@@ -327,26 +369,32 @@ html[data-theme="dark"] .request-sheet-schedule th {
 .requests-list .request-card:last-child {
   margin-bottom: 0;
 }
+.requests-queue-card--outgoing .outgoing-status-grid {
+  flex: 1 1 auto;
+  min-height: 0;
+  width: 100%;
+}
 .outgoing-status-grid {
   display: grid;
   grid-template-columns: repeat(3, minmax(0, 1fr));
   gap: 12px;
   width: 100%;
-  align-items: start;
-  align-content: start;
-  grid-auto-rows: min-content;
+  align-items: stretch;
+  align-content: stretch;
+  grid-auto-rows: 1fr;
 }
 .outgoing-status-col {
+  --request-queue-card-h: 132px;
   background: var(--surface);
   border: 1px solid var(--border-ui);
   border-radius: 12px;
   min-height: 0;
   display: flex;
   flex-direction: column;
-  height: auto;
+  height: 100%;
   width: 100%;
   max-height: none;
-  align-self: start;
+  align-self: stretch;
   justify-content: flex-start;
 }
 .request-card--outgoing {
@@ -380,7 +428,9 @@ html[data-theme="dark"] .request-sheet-schedule th {
 .outgoing-status-col-body {
   padding: 10px;
   min-height: 0;
-  flex: 0 1 auto;
+  flex: 1 1 auto;
+  display: flex;
+  flex-direction: column;
 }
 @media (max-width: 768px) {
   .requests-queue-grid {
@@ -388,6 +438,7 @@ html[data-theme="dark"] .request-sheet-schedule th {
   }
   .outgoing-status-grid {
     grid-template-columns: 1fr;
+    grid-auto-rows: minmax(0, auto);
   }
   .request-card {
     flex-direction: column;
