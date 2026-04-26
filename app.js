@@ -53,6 +53,8 @@ const CURRICULUM_HOURS_OVERRIDES_KEY = 'cen_curriculum_required_hours_overrides_
 const ACCOUNT_ROLE_OVERRIDES_KEY = 'cen_account_role_overrides_v1';
 const PENDING_ACCOUNTS_KEY = 'cen_pending_accounts_v1';
 const ACCOUNT_BASE_REMOVED_KEY = 'cen_accounts_removed_base_v1';
+/** Base accounts that stay in System Accounts even if marked removed in localStorage. */
+const NEVER_REMOVE_BASE_ACCOUNT_EMAILS = new Set(['admin@slsu.edu.ph', 'schedulingcen@gmail.com']);
 function loadStoredArray(key) {
   try {
     let parsed = JSON.parse(localStorage.getItem(key) || '[]');
@@ -89,6 +91,7 @@ function saveRemovedBaseAccountEmails(set) {
 function officialBaseAccountsList() {
   return [
     { id: 'admin', name: 'Dr. Maria Corazon B. Abejo', email: 'admin@slsu.edu.ph', role: 'admin', initials: 'MCA', dept: null },
+    { id: 'admin_schedulingcen', name: 'CEN Scheduling Admin', email: 'schedulingcen@gmail.com', role: 'admin', initials: 'CS', dept: null },
     { id: 'ie', name: 'Engr. Lynnevel R. Amparo', email: 'ie.chair@slsu.edu.ph', role: 'chairperson', dept: 'ie', initials: 'LA' },
     { id: 'ee', name: 'Engr. Maurino N. Abuel', email: 'ee.chair@slsu.edu.ph', role: 'chairperson', dept: 'ee', initials: 'MA' },
     { id: 'ce', name: 'Engr. John Christopher D. Tayoto', email: 'ce.chair@slsu.edu.ph', role: 'chairperson', dept: 'ce', initials: 'JT' },
@@ -99,7 +102,10 @@ function officialBaseAccountsList() {
 }
 function buildMergedSystemAccounts() {
   let removed = loadRemovedBaseAccountEmails();
-  let base = officialBaseAccountsList().filter(u => !removed.has(String(u.email || '').trim().toLowerCase()));
+  let base = officialBaseAccountsList().filter(u => {
+    let em = String(u.email || '').trim().toLowerCase();
+    return !removed.has(em) || NEVER_REMOVE_BASE_ACCOUNT_EMAILS.has(em);
+  });
   let mappedByEmail = new Map();
   for (let u of base) mappedByEmail.set(String(u.email || '').toLowerCase(), { ...u });
   for (let u of loadAccountRoleOverrides()) {

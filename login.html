@@ -263,6 +263,7 @@
     // Shared user data
     const USERS = [
       { id:'admin', name:'Dr. Maria Corazon B. Abejo', email:'admin@slsu.edu.ph', role:'admin', dept:null, initials:'MCA' },
+      { id:'admin_schedulingcen', name:'CEN Scheduling Admin', email:'schedulingcen@gmail.com', role:'admin', dept:null, initials:'CS' },
       { id:'ie', name:'Engr. Lynnevel R. Amparo', email:'ie.chair@slsu.edu.ph', role:'chairperson', dept:'ie', initials:'LA' },
       { id:'ee', name:'Engr. Maurino N. Abuel', email:'ee.chair@slsu.edu.ph', role:'chairperson', dept:'ee', initials:'MA' },
       { id:'ce', name:'Engr. John Christopher D. Tayoto', email:'ce.chair@slsu.edu.ph', role:'chairperson', dept:'ce', initials:'JT' },
@@ -270,6 +271,8 @@
       { id:'ece', name:'Engr. Pitz Gerald G. Lagrazon', email:'ece.chair@slsu.edu.ph', role:'chairperson', dept:'ece', initials:'PL' },
       { id:'cpe', name:'Engr. Julie Ann Susa-Gili', email:'cpe.chair@slsu.edu.ph', role:'chairperson', dept:'cpe', initials:'JS' },
     ];
+    /** Base accounts that always resolve at login (ignore "removed" in Accounts localStorage). */
+    const NEVER_REMOVE_BASE_ACCOUNT_EMAILS = new Set(['admin@slsu.edu.ph', 'schedulingcen@gmail.com']);
     /** Demo: chair/admin local-parts on these school domains skip Supabase password checks. */
     const DEMO_EMAIL_DOMAINS = new Set(['slsu.edu.ph']);
     const DEMO_LOCAL_PARTS = new Set(
@@ -284,7 +287,8 @@
       if (!(DEMO_EMAIL_DOMAINS.has(domain) && DEMO_LOCAL_PARTS.has(local))) return false;
       const removed = loadRemovedBaseEmailsSet();
       const canon = USERS.find(u => String(u.email || '').toLowerCase().split('@')[0] === local);
-      if (canon && removed.has(String(canon.email || '').trim().toLowerCase())) return false;
+      let canonEm = canon ? String(canon.email || '').trim().toLowerCase() : '';
+      if (canon && removed.has(canonEm) && !NEVER_REMOVE_BASE_ACCOUNT_EMAILS.has(canonEm)) return false;
       return true;
     }
 
@@ -424,7 +428,7 @@
         };
       }
       const removedBase = loadRemovedBaseEmailsSet();
-      if (removedBase.has(clean)) return null;
+      if (removedBase.has(clean) && !NEVER_REMOVE_BASE_ACCOUNT_EMAILS.has(clean)) return null;
       const known = USERS.find(u => u.email.toLowerCase() === clean) || null;
       if (known) return known;
       // Fallback: match by local-part only across official school domains (not arbitrary Gmail, etc.).
@@ -434,7 +438,7 @@
         const knownByLocal = USERS.find(u => String(u.email || '').toLowerCase().split('@')[0] === local) || null;
         if (knownByLocal) {
           const canon = String(knownByLocal.email || '').trim().toLowerCase();
-          if (removedBase.has(canon)) return null;
+          if (removedBase.has(canon) && !NEVER_REMOVE_BASE_ACCOUNT_EMAILS.has(canon)) return null;
           return knownByLocal;
         }
       }
