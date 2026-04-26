@@ -4414,6 +4414,33 @@ function countSchedulesUsingRoom(roomId) {
   return state.schedules.filter(s => s.roomId === roomId).length;
 }
 
+function countRequestsUsingRoom(roomId) {
+  if (!roomId || roomId === ROOM_OTHER_ID) return 0;
+  return state.requests.filter(r => r.roomId === roomId).length;
+}
+
+/** Clear Supabase FKs so `rooms` row can be deleted: drop requests for this room; reassign schedules to custom room label. */
+async function supabaseDetachRoomDependents(roomId, orphanRoomLabel) {
+  let label = (orphanRoomLabel && String(orphanRoomLabel).trim()) || 'Room removed';
+  const { error: reqErr } = await window.cenSupabase.from('requests').delete().eq('room_id', roomId);
+  if (reqErr) return reqErr;
+  let patch = { room_id: null, room_other_name: label };
+  let { error: schErr } = await window.cenSupabase.from('schedules').update(patch).eq('room_id', roomId);
+  if (schErr && isSupabaseMissingColumnError(schErr, 'room_other_name')) {
+    schErr = (await window.cenSupabase.from('schedules').update({ room_id: null }).eq('room_id', roomId)).error;
+  }
+  if (schErr) return schErr;
+  return null;
+}
+
+function applyLocalRoomDeleteSideEffects(roomId, rec) {
+  let label = (rec?.name && String(rec.name).trim()) || 'Room removed';
+  state.schedules = state.schedules.map(s =>
+    s.roomId === roomId ? { ...s, roomId: ROOM_OTHER_ID, roomOtherName: label } : s,
+  );
+  state.requests = state.requests.filter(r => r.roomId !== roomId);
+}
+
 function renderRoomPage() {
   let u = state.currentUser;
   if (!(u?.role === 'admin' || u?.role === 'chairperson')) {
@@ -7376,18 +7403,30 @@ function bindPage(){
       let u = state.currentUser;
       if (!(u?.role === 'admin' || u?.role === 'chairperson')) return;
       if (u.role === 'chairperson' && rec.dept !== u.dept) return;
-      let nUse = countSchedulesUsingRoom(roomId);
+      let nSch = countSchedulesUsingRoom(roomId);
+      let nReq = countRequestsUsingRoom(roomId);
+      let delExtra = [];
+      if (nSch) delExtra.push(`${nSch} timetable row(s) will keep their times but use “Other room” with this room’s name`);
+      if (nReq) delExtra.push(`${nReq} room request(s) will be deleted`);
       let delMsg =
-        nUse > 0
-          ? `This room is used by ${nUse} schedule row(s). ${MSG_CONFIRM_PERM_DELETE_ROOM}`
-          : MSG_CONFIRM_PERM_DELETE_ROOM;
+        delExtra.length > 0 ? `${delExtra.join('. ')}.\n\n${MSG_CONFIRM_PERM_DELETE_ROOM}` : MSG_CONFIRM_PERM_DELETE_ROOM;
       if (!window.confirm(delMsg)) return;
       if (hasSupabaseClient()) {
+        const fkErr = await supabaseDetachRoomDependents(roomId, rec.name || '');
+        if (fkErr) {
+          window.alert(`Unable to clear room usage: ${fkErr.message}`);
+          return;
+        }
         const { error } = await window.cenSupabase.from('rooms').delete().eq('id', roomId);
         if (error) {
           window.alert(`Unable to delete room: ${error.message}`);
           return;
         }
+        let okSch = await syncSchedulesFromSupabase();
+        let okReq = await syncRequestsFromSupabase();
+        if (!okSch || !okReq) applyLocalRoomDeleteSideEffects(roomId, rec);
+      } else {
+        applyLocalRoomDeleteSideEffects(roomId, rec);
       }
       /** Hide row even when the room only existed in bundled `ROOMS` merge (not in `state.rooms`), and after DB delete so bundle merge cannot show it again this session. */
       if (!state.suppressedRoomIds.includes(roomId)) state.suppressedRoomIds.push(roomId);
