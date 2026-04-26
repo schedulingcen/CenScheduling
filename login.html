@@ -12,7 +12,6 @@
     * { margin: 0; padding: 0; box-sizing: border-box; }
     body {
       font-family: 'DM Sans', sans-serif;
-      /* Maroon / burgundy field: echoes seal & keeps contrast with white card + #CC0000 button */
       background:
         radial-gradient(ellipse 95% 85% at 50% 0%, rgba(120, 32, 42, 0.55) 0%, transparent 52%),
         radial-gradient(ellipse 80% 70% at 100% 100%, rgba(90, 18, 28, 0.35) 0%, transparent 45%),
@@ -25,63 +24,142 @@
       padding: 20px;
     }
     .login-card {
-      background: #FFFFFF;
-      border-radius: 20px;
-      padding: 48px 40px;
-      width: 420px;
+      width: 430px;
       max-width: 100%;
-      box-shadow: 0 24px 80px rgba(0,0,0,0.3);
+      background: #fff;
+      border-radius: 14px;
+      padding: 28px 24px 22px;
+      box-shadow: 0 22px 72px rgba(0, 0, 0, 0.28);
     }
-    .login-logo { text-align: center; margin-bottom: 32px; }
+    .login-logo { text-align: center; margin-bottom: 18px; }
     .login-logo-img {
-      display: block;
-      width: 152px;
-      height: auto;
-      max-height: 120px;
-      margin: 0 auto 12px;
+      width: 72px;
+      height: 72px;
       object-fit: contain;
+      margin-bottom: 8px;
     }
-    .login-logo h1 { font-size: 20px; font-weight: 800; color: #1A1A2E; }
-    .login-logo p { font-size: 13px; color: #616161; margin-top: 4px; }
+    .login-logo h1 {
+      font-size: 31px;
+      line-height: 1.2;
+      color: #111827;
+      font-weight: 800;
+      margin-bottom: 2px;
+    }
+    .login-logo p {
+      font-size: 14px;
+      color: #6B7280;
+      font-weight: 500;
+    }
     .login-form { display: flex; flex-direction: column; gap: 16px; }
-    .form-group { display: flex; flex-direction: column; gap: 6px; }
-    .form-label { font-size: 12px; font-weight: 600; color: #1A1A2E; }
+    .form-group { display: flex; flex-direction: column; gap: 10px; }
+    .form-label { font-size: 13px; line-height: 1; color: #4B5563; font-weight: 600; }
     .form-input {
-      padding: 9px 12px;
+      width: 100%;
+      height: 44px;
       border-radius: 8px;
-      border: 1px solid #E0E0E0;
-      font-family: 'DM Sans', sans-serif;
-      font-size: 13px;
-      transition: all 0.15s;
+      border: 1px solid #D9DDE3;
+      padding: 0 12px;
+      font-size: 14px;
+      color: #111827;
+      transition: border-color .15s, box-shadow .15s;
     }
+    .form-input::placeholder { color: #C7CDD4; }
     .form-input:focus {
       outline: none;
       border-color: #CC0000;
-      box-shadow: 0 0 0 3px rgba(204,0,0,0.1);
+      box-shadow: 0 0 0 5px rgba(204, 0, 0, 0.12);
+    }
+    .password-field { position: relative; }
+    .password-field .form-input { padding-right: 44px; }
+    .password-toggle {
+      position: absolute;
+      right: 8px;
+      top: 50%;
+      transform: translateY(-50%);
+      width: 36px;
+      height: 36px;
+      border: none;
+      border-radius: 8px;
+      background: transparent;
+      color: #6B7280;
+      cursor: pointer;
+      display: inline-flex;
+      align-items: center;
+      justify-content: center;
+      padding: 0;
+      transition: color .15s, background-color .15s;
+    }
+    .password-toggle:hover { color: #CC0000; background: rgba(204, 0, 0, 0.06); }
+    .password-toggle:focus-visible {
+      outline: 2px solid #CC0000;
+      outline-offset: 2px;
+    }
+    .password-toggle svg { display: block; }
+    .password-toggle .icon-eye-off { display: none; }
+    .password-toggle.is-visible .icon-eye { display: none; }
+    .password-toggle.is-visible .icon-eye-off { display: block; }
+    .btn-primary, .btn-outline {
+      width: 100%;
+      height: 46px;
+      border-radius: 8px;
+      border: none;
+      font-size: 15px;
+      font-weight: 700;
+      cursor: pointer;
+      display: inline-flex;
+      align-items: center;
+      justify-content: center;
+      gap: 14px;
+      transition: filter .15s, background-color .15s, border-color .15s;
     }
     .btn-primary {
+      margin-top: 6px;
       background: #CC0000;
       color: #fff;
-      padding: 12px;
-      border-radius: 8px;
-      font-size: 13px;
-      font-weight: 600;
-      cursor: pointer;
-      border: none;
-      width: 100%;
-      justify-content: center;
-      transition: background 0.15s;
     }
-    .btn-primary:hover { background: #990000; }
-    .login-footer {
+    .btn-primary:hover { filter: brightness(0.92); }
+    .btn-outline {
+      background: #fff4f4;
+      color: #CC0000;
+      border: 1px solid #f2d0d0;
+    }
+    .btn-outline:hover { background: #ffe9e9; border-color: #e8bcbc; }
+    .btn-google-badge {
+      width: 24px;
+      height: 24px;
+      border-radius: 50%;
+      background: #fff;
+      border: 1px solid #e5e7eb;
+      color: #CC0000;
+      display: inline-flex;
+      align-items: center;
+      justify-content: center;
+      font-weight: 800;
+      font-size: 14px;
+      line-height: 1;
+    }
+    .login-switch {
+      margin-top: 8px;
       text-align: center;
-      margin-top: 24px;
+      font-size: 13px;
+      color: #9CA3AF;
+    }
+    .login-switch a {
+      color: #CC0000;
+      text-decoration: none;
+      font-weight: 700;
+    }
+    .login-switch a:hover { text-decoration: underline; }
+    .muted-note {
+      margin-top: 6px;
+      text-align: center;
+      color: #6B7280;
       font-size: 12px;
-      color: #9E9E9E;
+      line-height: 1.45;
     }
     .alert {
-      padding: 12px 16px;
-      border-radius: 8px;
+      padding: 14px 16px;
+      border-radius: 12px;
       font-size: 13px;
       display: flex;
       align-items: flex-start;
@@ -89,35 +167,89 @@
       background: #FEE2E2;
       color: #991B1B;
       border: 1px solid #FCA5A5;
+      margin-bottom: 4px;
     }
     .alert svg { flex-shrink: 0; margin-top: 1px; }
+    .alert span { white-space: pre-line; }
+    .mode-login .create-only { display: none !important; }
+    .mode-register .login-only { display: none !important; }
+    .hidden-panel { display: none !important; }
+    @media (max-width: 860px) {
+      .login-card { width: 100%; padding: 24px 18px; border-radius: 12px; }
+      .login-logo h1 { font-size: 27px; }
+      .form-label { font-size: 12px; }
+      .form-input { height: 42px; font-size: 14px; border-radius: 8px; }
+      .btn-primary, .btn-outline { height: 44px; font-size: 14px; border-radius: 8px; }
+      .btn-google-badge { width: 22px; height: 22px; font-size: 12px; }
+      .login-switch { font-size: 12px; }
+      .muted-note { font-size: 11px; }
+      .alert { font-size: 14px; }
+    }
   </style>
 </head>
 <body>
   <div class="login-card">
     <div class="login-logo">
       <img class="login-logo-img" src="assets/cen_logo.png" alt="College of Engineering">
-      <h1>College of Engineering</h1>
-      <p><b>Southern Luzon State University</b></p>
+      <h1 id="formTitle">College of Engineering</h1>
+      <p id="formSubtitle">Southern Luzon State University</p>
     </div>
+    <div id="loginErr"></div>
     <form class="login-form" id="loginForm" action="#" method="post" novalidate>
-      <div id="loginErr"></div>
-      <div class="form-group">
-        <label class="form-label" for="loginEmail">Email Address</label>
-        <input class="form-input" id="loginEmail" name="email" type="email" placeholder="Enter your email address" value="admin@slsu.edu.ph" autocomplete="username">
+      <div class="login-only">
+        <div class="form-group">
+          <label class="form-label" for="loginEmail">Email</label>
+          <input class="form-input" id="loginEmail" name="email" type="email" placeholder="Enter your email" autocomplete="username">
+        </div>
+        <div class="form-group">
+          <label class="form-label" for="loginPass">Password</label>
+          <div class="password-field">
+            <input class="form-input" id="loginPass" name="password" type="password" placeholder="Enter your password" autocomplete="current-password">
+            <button type="button" class="password-toggle" id="togglePassBtn" aria-label="Show password" title="Show password">
+              <svg class="icon-eye" xmlns="http://www.w3.org/2000/svg" width="20" height="20" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true"><path d="M1 12s4-7 11-7 11 7 11 7-4 7-11 7-11-7-11-7z"/><circle cx="12" cy="12" r="3"/></svg>
+              <svg class="icon-eye-off" xmlns="http://www.w3.org/2000/svg" width="20" height="20" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true"><path d="M17.94 17.94A10.07 10.07 0 0 1 12 20c-7 0-11-8-11-8a18.45 18.45 0 0 1 5.06-5.94M9.9 4.24A9.12 9.12 0 0 1 12 4c7 0 11 8 11 8a18.5 18.5 0 0 1-2.16 3.19m-6.72-1.07a3 3 0 1 1-4.24-4.24"/><line x1="1" y1="1" x2="23" y2="23"/></svg>
+            </button>
+          </div>
+        </div>
       </div>
-      <div class="form-group">
-        <label class="form-label" for="loginPass">Password</label>
-        <input class="form-input" id="loginPass" name="password" type="password" placeholder="Enter your password" value="password" autocomplete="current-password">
+      <div class="create-only">
+        <p class="muted-note" style="text-align:left;margin-top:0;">Step 1: sign in with Google. Step 2: create your password for this site.</p>
+        <button class="btn-primary" type="button" id="googleBtn"><span class="btn-google-badge">G</span> Continue with Google</button>
       </div>
-      <button class="btn-primary" type="submit" id="loginBtn">Sign In &rarr;</button>
+      <button class="btn-primary login-only" type="submit" id="submitBtn">Sign In</button>
+      <p class="login-switch login-only">Don't have an account yet? <a href="#" id="registerLink">Register</a></p>
+      <p class="login-switch create-only">Already have an account? <a href="#" id="loginNowLink">Log in</a></p>
+      <p class="muted-note create-only">New emails stay pending until dean assigns a role.</p>
     </form>
-    <div class="login-footer">
-      <strong>Demo accounts:</strong> admin@slsu.edu.ph &middot; ie.chair@slsu.edu.ph &middot; cpe.chair@slsu.edu.ph<br>
-      (any password works)
+    <div class="login-form hidden-panel" id="postGooglePasswordPanel">
+      <p class="muted-note" style="text-align:left;margin-top:0;">Signed in as <strong id="postGoogleEmailRo"></strong>. Set a password you can use on this login page (in addition to Google).</p>
+      <div class="form-group">
+        <label class="form-label" for="regPass">Password</label>
+        <div class="password-field">
+          <input class="form-input" id="regPass" type="password" placeholder="Enter your password" autocomplete="new-password">
+          <button type="button" class="password-toggle" id="toggleRegPassBtn" aria-label="Show password" title="Show password">
+            <svg class="icon-eye" xmlns="http://www.w3.org/2000/svg" width="20" height="20" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true"><path d="M1 12s4-7 11-7 11 7 11 7-4 7-11 7-11-7-11-7z"/><circle cx="12" cy="12" r="3"/></svg>
+            <svg class="icon-eye-off" xmlns="http://www.w3.org/2000/svg" width="20" height="20" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true"><path d="M17.94 17.94A10.07 10.07 0 0 1 12 20c-7 0-11-8-11-8a18.45 18.45 0 0 1 5.06-5.94M9.9 4.24A9.12 9.12 0 0 1 12 4c7 0 11 8 11 8a18.5 18.5 0 0 1-2.16 3.19m-6.72-1.07a3 3 0 1 1-4.24-4.24"/><line x1="1" y1="1" x2="23" y2="23"/></svg>
+          </button>
+        </div>
+      </div>
+      <div class="form-group">
+        <label class="form-label" for="regPass2">Re-enter password</label>
+        <div class="password-field">
+          <input class="form-input" id="regPass2" type="password" placeholder="Re-enter your password" autocomplete="new-password">
+          <button type="button" class="password-toggle" id="toggleRegPass2Btn" aria-label="Show password" title="Show password">
+            <svg class="icon-eye" xmlns="http://www.w3.org/2000/svg" width="20" height="20" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true"><path d="M1 12s4-7 11-7 11 7 11 7-4 7-11 7-11-7-11-7z"/><circle cx="12" cy="12" r="3"/></svg>
+            <svg class="icon-eye-off" xmlns="http://www.w3.org/2000/svg" width="20" height="20" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true"><path d="M17.94 17.94A10.07 10.07 0 0 1 12 20c-7 0-11-8-11-8a18.45 18.45 0 0 1 5.06-5.94M9.9 4.24A9.12 9.12 0 0 1 12 4c7 0 11 8 11 8a18.5 18.5 0 0 1-2.16 3.19m-6.72-1.07a3 3 0 1 1-4.24-4.24"/><line x1="1" y1="1" x2="23" y2="23"/></svg>
+          </button>
+        </div>
+      </div>
+      <button class="btn-primary" type="button" id="saveRegPasswordBtn">Save password</button>
+      <button class="btn-outline" type="button" id="cancelRegPasswordBtn">Cancel</button>
     </div>
   </div>
 
+  <script src="https://cdn.jsdelivr.net/npm/@supabase/supabase-js@2"></script>
+  <script src="supabase.js?v=1"></script>
   <script>
     // Shared user data
     const USERS = [
@@ -129,39 +261,355 @@
       { id:'ece', name:'Engr. Pitz Gerald G. Lagrazon', email:'ece.chair@slsu.edu.ph', role:'chairperson', dept:'ece', initials:'PL' },
       { id:'cpe', name:'Engr. Julie Ann Susa-Gili', email:'cpe.chair@slsu.edu.ph', role:'chairperson', dept:'cpe', initials:'JS' },
     ];
+    /** Demo: chair/admin local-parts on these school domains skip Supabase password checks. */
+    const DEMO_EMAIL_DOMAINS = new Set(['slsu.edu.ph']);
+    const DEMO_LOCAL_PARTS = new Set(
+      [...new Set(USERS.map(u => String(u.email || '').trim().toLowerCase().split('@')[0]))].filter(Boolean),
+    );
+    function isDemoAnyPasswordEmail(cleanEmail) {
+      const s = String(cleanEmail || '').trim().toLowerCase();
+      const i = s.indexOf('@');
+      if (i < 0) return false;
+      const local = s.slice(0, i);
+      const domain = s.slice(i + 1);
+      if (!(DEMO_EMAIL_DOMAINS.has(domain) && DEMO_LOCAL_PARTS.has(local))) return false;
+      const removed = loadRemovedBaseEmailsSet();
+      const canon = USERS.find(u => String(u.email || '').toLowerCase().split('@')[0] === local);
+      if (canon && removed.has(String(canon.email || '').trim().toLowerCase())) return false;
+      return true;
+    }
 
     const loginForm = document.getElementById('loginForm');
-    // If a session already exists, skip login screen.
-    if (sessionStorage.getItem('cen_user')) {
-      window.location.replace('dashboard.html');
-    }
-    loginForm.addEventListener('submit', e => {
-      e.preventDefault();
-      doLogin();
-    });
-    // Enter from email/password: some browsers skip implicit submit for type="email" or block it behind validation.
-    loginForm.addEventListener('keydown', e => {
-      if (e.key !== 'Enter' || e.repeat || e.isComposing) return;
-      if (e.target && e.target.tagName === 'INPUT') {
-        e.preventDefault();
-        doLogin();
-      }
-    });
+    const googleBtn = document.getElementById('googleBtn');
+    const loginNowLink = document.getElementById('loginNowLink');
+    const registerLink = document.getElementById('registerLink');
+    const submitBtn = document.getElementById('submitBtn');
+    const formTitle = document.getElementById('formTitle');
+    const formSubtitle = document.getElementById('formSubtitle');
+    const errEl = document.getElementById('loginErr');
+    const loginPassEl = document.getElementById('loginPass');
+    const togglePassBtn = document.getElementById('togglePassBtn');
+    const postGooglePasswordPanel = document.getElementById('postGooglePasswordPanel');
+    const postGoogleEmailRo = document.getElementById('postGoogleEmailRo');
+    const regPassEl = document.getElementById('regPass');
+    const regPass2El = document.getElementById('regPass2');
+    const toggleRegPassBtn = document.getElementById('toggleRegPassBtn');
+    const toggleRegPass2Btn = document.getElementById('toggleRegPass2Btn');
+    const saveRegPasswordBtn = document.getElementById('saveRegPasswordBtn');
+    const cancelRegPasswordBtn = document.getElementById('cancelRegPasswordBtn');
+    const REDIRECT_TO = window.location.origin + window.location.pathname;
+    const ACCOUNT_ROLE_OVERRIDES_KEY = 'cen_account_role_overrides_v1';
+    const PENDING_ACCOUNTS_KEY = 'cen_pending_accounts_v1';
+    const ACCOUNT_BASE_REMOVED_KEY = 'cen_accounts_removed_base_v1';
+    const SS_PW_AFTER_GOOGLE = 'cen_pw_after_google';
+    let authMode = 'login';
 
-    function doLogin() {
-      const email = document.getElementById('loginEmail').value.trim();
-      const user = USERS.find(u => u.email === email);
-      const errEl = document.getElementById('loginErr');
-      
-      if (!user) {
-        errEl.innerHTML = `<div class="alert"><svg xmlns="http://www.w3.org/2000/svg" width="18" height="18" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true"><path d="M10.29 3.86L1.82 18a2 2 0 0 0 1.71 3h16.94a2 2 0 0 0 1.71-3L13.71 3.86a2 2 0 0 0-3.42 0z"/><line x1="12" y1="9" x2="12" y2="13"/><line x1="12" y1="17" x2="12.01" y2="17"/></svg><span>No account found with that email address.</span></div>`;
+    const __pwToggleBound = new WeakMap();
+    function setPasswordToggleState(inputEl, btnEl, show) {
+      if (!inputEl || !btnEl) return;
+      inputEl.type = show ? 'text' : 'password';
+      btnEl.classList.toggle('is-visible', !!show);
+      btnEl.setAttribute('aria-label', show ? 'Hide password' : 'Show password');
+      btnEl.setAttribute('title', show ? 'Hide password' : 'Show password');
+      btnEl.setAttribute('aria-pressed', show ? 'true' : 'false');
+    }
+    function bindPasswordToggle(inputEl, btnEl) {
+      if (!inputEl || !btnEl || __pwToggleBound.get(btnEl)) return;
+      __pwToggleBound.set(btnEl, true);
+      btnEl.addEventListener('click', () => {
+        setPasswordToggleState(inputEl, btnEl, inputEl.type === 'password');
+      });
+      setPasswordToggleState(inputEl, btnEl, false);
+    }
+
+    function setPasswordFieldVisible(show) {
+      if (!loginPassEl || !togglePassBtn) return;
+      loginPassEl.type = show ? 'text' : 'password';
+      togglePassBtn.classList.toggle('is-visible', !!show);
+      togglePassBtn.setAttribute('aria-label', show ? 'Hide password' : 'Show password');
+      togglePassBtn.setAttribute('title', show ? 'Hide password' : 'Show password');
+      togglePassBtn.setAttribute('aria-pressed', show ? 'true' : 'false');
+    }
+    function resetLoginPasswordVisibility() {
+      setPasswordFieldVisible(false);
+    }
+    function resetRegPasswordFields() {
+      if (regPassEl) regPassEl.value = '';
+      if (regPass2El) regPass2El.value = '';
+      setPasswordToggleState(regPassEl, toggleRegPassBtn, false);
+      setPasswordToggleState(regPass2El, toggleRegPass2Btn, false);
+    }
+
+    function showErr(msg) {
+      errEl.innerHTML = `<div class="alert"><svg xmlns="http://www.w3.org/2000/svg" width="18" height="18" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true"><path d="M10.29 3.86L1.82 18a2 2 0 0 0 1.71 3h16.94a2 2 0 0 0 1.71-3L13.71 3.86a2 2 0 0 0-3.42 0z"/><line x1="12" y1="9" x2="12" y2="13"/><line x1="12" y1="17" x2="12.01" y2="17"/></svg><span>${msg}</span></div>`;
+    }
+    function showOk(msg) {
+      errEl.innerHTML = `<div class="alert" style="background:#ECFDF5;color:#065F46;border-color:#6EE7B7;"><span>${msg}</span></div>`;
+    }
+    function initialsFromName(name) {
+      const parts = String(name || '').trim().split(/\s+/).filter(Boolean);
+      if (!parts.length) return 'U';
+      if (parts.length === 1) return parts[0].slice(0, 2).toUpperCase();
+      return (parts[0][0] + parts[parts.length - 1][0]).toUpperCase();
+    }
+    function loadStoredArray(key) {
+      try {
+        const parsed = JSON.parse(localStorage.getItem(key) || '[]');
+        return Array.isArray(parsed) ? parsed : [];
+      } catch (_) {
+        return [];
+      }
+    }
+    function saveStoredArray(key, arr) {
+      try { localStorage.setItem(key, JSON.stringify(Array.isArray(arr) ? arr : [])); } catch (_) {}
+    }
+    function loadRemovedBaseEmailsSet() {
+      return new Set(
+        loadStoredArray(ACCOUNT_BASE_REMOVED_KEY)
+          .map(x => String(x || '').trim().toLowerCase())
+          .filter(Boolean),
+      );
+    }
+    function resolveOverrideByEmail(email) {
+      const clean = String(email || '').trim().toLowerCase();
+      const list = loadStoredArray(ACCOUNT_ROLE_OVERRIDES_KEY);
+      return list.find(x => String(x?.email || '').trim().toLowerCase() === clean) || null;
+    }
+    function registerPendingAccount(email, profile) {
+      const clean = String(email || '').trim().toLowerCase();
+      if (!clean) return;
+      const list = loadStoredArray(PENDING_ACCOUNTS_KEY);
+      const existing = list.find(x => String(x?.email || '').trim().toLowerCase() === clean);
+      if (existing) return;
+      list.push({
+        email: clean,
+        name: String(profile?.name || '').trim() || 'Google User',
+        provider: 'google',
+        createdAt: new Date().toISOString(),
+      });
+      saveStoredArray(PENDING_ACCOUNTS_KEY, list);
+    }
+    function resolveUserByEmail(email) {
+      const clean = String(email || '').trim().toLowerCase();
+      const mapped = resolveOverrideByEmail(clean);
+      if (mapped) {
+        return {
+          id: String(mapped.id || `mapped_${clean}`),
+          name: String(mapped.name || clean.split('@')[0] || 'User'),
+          email: clean,
+          role: mapped.role === 'admin' ? 'admin' : 'chairperson',
+          dept: mapped.role === 'admin' ? null : String(mapped.dept || ''),
+          initials: String(mapped.initials || initialsFromName(mapped.name || clean)),
+        };
+      }
+      const removedBase = loadRemovedBaseEmailsSet();
+      if (removedBase.has(clean)) return null;
+      const known = USERS.find(u => u.email.toLowerCase() === clean) || null;
+      if (known) return known;
+      // Fallback: match by local-part only across official school domains (not arbitrary Gmail, etc.).
+      const local = clean.split('@')[0];
+      const domain = clean.split('@')[1] || '';
+      if (local && DEMO_EMAIL_DOMAINS.has(domain)) {
+        const knownByLocal = USERS.find(u => String(u.email || '').toLowerCase().split('@')[0] === local) || null;
+        if (knownByLocal) {
+          const canon = String(knownByLocal.email || '').trim().toLowerCase();
+          if (removedBase.has(canon)) return null;
+          return knownByLocal;
+        }
+      }
+      return null;
+    }
+    async function startGoogleSignIn(flow) {
+      if (!window.cenSupabase) {
+        showErr('Supabase client not loaded.');
         return;
       }
-      
-      // Store user in sessionStorage and redirect to main app (fresh demo data for new login)
+      let q = 'auth_attempt=1';
+      if (flow === 'set_password') q += '&flow=set_password';
+      try {
+        if (flow === 'set_password') sessionStorage.setItem(SS_PW_AFTER_GOOGLE, '1');
+        else sessionStorage.removeItem(SS_PW_AFTER_GOOGLE);
+      } catch (_) {}
+      const authRedirect = `${REDIRECT_TO}?${q}`;
+      const { error } = await window.cenSupabase.auth.signInWithOAuth({
+        provider: 'google',
+        options: { redirectTo: authRedirect },
+      });
+      if (error) showErr(`Google sign-in failed: ${error.message}`);
+    }
+    function showPostGooglePasswordUI(email) {
+      try { sessionStorage.setItem(SS_PW_AFTER_GOOGLE, '1'); } catch (_) {}
+      errEl.innerHTML = '';
+      loginForm.classList.add('hidden-panel');
+      postGooglePasswordPanel.classList.remove('hidden-panel');
+      formTitle.textContent = 'Set your password';
+      formSubtitle.textContent = 'Step 2 of 2';
+      postGoogleEmailRo.textContent = email;
+      resetRegPasswordFields();
+    }
+    function hidePostGooglePasswordUI() {
+      postGooglePasswordPanel.classList.add('hidden-panel');
+      loginForm.classList.remove('hidden-panel');
+      try { sessionStorage.removeItem(SS_PW_AFTER_GOOGLE); } catch (_) {}
+    }
+    async function bootstrapSessionFromSupabase() {
+      const params = new URLSearchParams(window.location.search);
+      const fromAuthAttempt = params.get('auth_attempt') === '1';
+      const flow = params.get('flow') || '';
+      if (params.get('logged_out') === '1') {
+        if (window.cenSupabase) {
+          try { await window.cenSupabase.auth.signOut({ scope: 'local' }); } catch (_) {}
+        }
+        window.history.replaceState({}, '', window.location.pathname);
+        return;
+      }
+      if (!window.cenSupabase) return;
+      const { data, error } = await window.cenSupabase.auth.getSession();
+      if (error || !data?.session?.user?.email) return;
+      let wantSetPassword = flow === 'set_password';
+      if (!wantSetPassword) {
+        try {
+          wantSetPassword = sessionStorage.getItem(SS_PW_AFTER_GOOGLE) === '1';
+        } catch (_) {}
+      }
+      if (fromAuthAttempt && wantSetPassword) {
+        window.history.replaceState({}, '', window.location.pathname);
+        showPostGooglePasswordUI(data.session.user.email);
+        return;
+      }
+      await completeAppLoginForEmail(data.session.user.email, fromAuthAttempt, data.session.user.user_metadata || {});
+    }
+    async function completeAppLoginForEmail(email, showPendingWarning, profile) {
+      const appUser = resolveUserByEmail(email);
+      if (!appUser) {
+        registerPendingAccount(email, profile || {});
+        if (showPendingWarning) {
+          showErr('Your account is pending dean approval. Please wait for role assignment in Accounts.');
+        }
+        window.history.replaceState({}, '', window.location.pathname);
+        return false;
+      }
       sessionStorage.removeItem('cen_app_state');
-      sessionStorage.setItem('cen_user', JSON.stringify(user));
-      window.location.href = 'dashboard.html';
+      sessionStorage.setItem('cen_user', JSON.stringify(appUser));
+      window.location.replace('dashboard.html');
+      return true;
+    }
+    function setAuthMode(mode) {
+      authMode = mode === 'register' ? 'register' : 'login';
+      document.body.classList.toggle('mode-register', authMode === 'register');
+      document.body.classList.toggle('mode-login', authMode === 'login');
+      errEl.innerHTML = '';
+      hidePostGooglePasswordUI();
+      if (authMode === 'register') {
+        formTitle.textContent = 'Create an account';
+        formSubtitle.textContent = 'College of Engineering';
+      } else {
+        formTitle.textContent = 'College of Engineering';
+        formSubtitle.textContent = 'Southern Luzon State University';
+        submitBtn.textContent = 'Sign In';
+        if (loginPassEl) loginPassEl.setAttribute('autocomplete', 'current-password');
+      }
+      resetLoginPasswordVisibility();
+    }
+
+    bootstrapSessionFromSupabase();
+    setAuthMode('login');
+    bindPasswordToggle(regPassEl, toggleRegPassBtn);
+    bindPasswordToggle(regPass2El, toggleRegPass2Btn);
+
+    loginForm.addEventListener('submit', async e => {
+      e.preventDefault();
+      if (authMode === 'register') return;
+      await loginWithPassword();
+    });
+
+    googleBtn?.addEventListener('click', async () => {
+      errEl.innerHTML = '';
+      await startGoogleSignIn(authMode === 'register' ? 'set_password' : '');
+    });
+    loginNowLink?.addEventListener('click', async e => {
+      e.preventDefault();
+      setAuthMode('login');
+    });
+    registerLink?.addEventListener('click', e => {
+      e.preventDefault();
+      setAuthMode('register');
+    });
+    togglePassBtn?.addEventListener('click', () => {
+      const show = loginPassEl && loginPassEl.type === 'password';
+      setPasswordFieldVisible(show);
+    });
+    saveRegPasswordBtn?.addEventListener('click', async () => {
+      errEl.innerHTML = '';
+      if (!window.cenSupabase) {
+        showErr('Supabase client not loaded.');
+        return;
+      }
+      const a = String(regPassEl?.value || '');
+      const b = String(regPass2El?.value || '');
+      if (!a || !b) {
+        showErr('Enter and confirm your password.');
+        return;
+      }
+      if (a !== b) {
+        showErr('Passwords do not match.');
+        return;
+      }
+      if (a.length < 6) {
+        showErr('Password must be at least 6 characters.');
+        return;
+      }
+      const { error } = await window.cenSupabase.auth.updateUser({ password: a });
+      if (error) {
+        showErr(`Could not save password: ${error.message}`);
+        return;
+      }
+      let showPending = true;
+      try {
+        showPending = sessionStorage.getItem(SS_PW_AFTER_GOOGLE) === '1';
+      } catch (_) {}
+      const { data } = await window.cenSupabase.auth.getUser();
+      const em = String(data?.user?.email || postGoogleEmailRo.textContent || '').trim().toLowerCase();
+      try { sessionStorage.removeItem(SS_PW_AFTER_GOOGLE); } catch (_) {}
+      hidePostGooglePasswordUI();
+      await completeAppLoginForEmail(em, showPending, data?.user?.user_metadata || {});
+    });
+    cancelRegPasswordBtn?.addEventListener('click', async () => {
+      errEl.innerHTML = '';
+      if (window.cenSupabase) {
+        try { await window.cenSupabase.auth.signOut({ scope: 'local' }); } catch (_) {}
+      }
+      try { sessionStorage.removeItem(SS_PW_AFTER_GOOGLE); } catch (_) {}
+      hidePostGooglePasswordUI();
+      setAuthMode('register');
+    });
+    async function loginWithPassword() {
+      const email = document.getElementById('loginEmail').value.trim();
+      const password = document.getElementById('loginPass').value;
+      errEl.innerHTML = '';
+      const cleanEmail = String(email || '').trim().toLowerCase();
+      if (!cleanEmail) {
+        showErr('Enter your email to log in.');
+        return;
+      }
+      if (isDemoAnyPasswordEmail(cleanEmail)) {
+        await completeAppLoginForEmail(cleanEmail, true, {});
+        return;
+      }
+      if (!window.cenSupabase) {
+        showErr('Supabase client not loaded.');
+        return;
+      }
+      if (!password) {
+        showErr('Enter email and password to log in.');
+        return;
+      }
+      const { data, error } = await window.cenSupabase.auth.signInWithPassword({ email: cleanEmail, password });
+      if (error) {
+        showErr(`Login failed: ${error.message}`);
+        return;
+      }
+      await completeAppLoginForEmail(data?.user?.email || cleanEmail, true, data?.user?.user_metadata || {});
     }
   </script>
 </body>

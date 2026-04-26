@@ -50,6 +50,103 @@ function toggleAppTheme() {
 
 const CEN_STATE_KEY = 'cen_app_state';
 const CURRICULUM_HOURS_OVERRIDES_KEY = 'cen_curriculum_required_hours_overrides_v1';
+const ACCOUNT_ROLE_OVERRIDES_KEY = 'cen_account_role_overrides_v1';
+const PENDING_ACCOUNTS_KEY = 'cen_pending_accounts_v1';
+const ACCOUNT_BASE_REMOVED_KEY = 'cen_accounts_removed_base_v1';
+function loadStoredArray(key) {
+  try {
+    let parsed = JSON.parse(localStorage.getItem(key) || '[]');
+    return Array.isArray(parsed) ? parsed : [];
+  } catch (_) {
+    return [];
+  }
+}
+function saveStoredArray(key, arr) {
+  try { localStorage.setItem(key, JSON.stringify(Array.isArray(arr) ? arr : [])); } catch (_) {}
+}
+function loadAccountRoleOverrides() {
+  return loadStoredArray(ACCOUNT_ROLE_OVERRIDES_KEY).filter(x => x && x.email);
+}
+function saveAccountRoleOverrides(rows) {
+  saveStoredArray(ACCOUNT_ROLE_OVERRIDES_KEY, rows);
+}
+function loadPendingAccounts() {
+  return loadStoredArray(PENDING_ACCOUNTS_KEY).filter(x => x && x.email);
+}
+function savePendingAccounts(rows) {
+  saveStoredArray(PENDING_ACCOUNTS_KEY, rows);
+}
+function loadRemovedBaseAccountEmails() {
+  return new Set(
+    loadStoredArray(ACCOUNT_BASE_REMOVED_KEY)
+      .map(x => String(x || '').trim().toLowerCase())
+      .filter(Boolean),
+  );
+}
+function saveRemovedBaseAccountEmails(set) {
+  saveStoredArray(ACCOUNT_BASE_REMOVED_KEY, [...set]);
+}
+function officialBaseAccountsList() {
+  return [
+    { id: 'admin', name: 'Dr. Maria Corazon B. Abejo', email: 'admin@slsu.edu.ph', role: 'admin', initials: 'MCA', dept: null },
+    { id: 'ie', name: 'Engr. Lynnevel R. Amparo', email: 'ie.chair@slsu.edu.ph', role: 'chairperson', dept: 'ie', initials: 'LA' },
+    { id: 'ee', name: 'Engr. Maurino N. Abuel', email: 'ee.chair@slsu.edu.ph', role: 'chairperson', dept: 'ee', initials: 'MA' },
+    { id: 'ce', name: 'Engr. John Christopher D. Tayoto', email: 'ce.chair@slsu.edu.ph', role: 'chairperson', dept: 'ce', initials: 'JT' },
+    { id: 'me', name: 'Engr. Ronnel S. Nombrefia', email: 'me.chair@slsu.edu.ph', role: 'chairperson', dept: 'me', initials: 'RN' },
+    { id: 'ece', name: 'Engr. Pitz Gerald G. Lagrazon', email: 'ece.chair@slsu.edu.ph', role: 'chairperson', dept: 'ece', initials: 'PL' },
+    { id: 'cpe', name: 'Engr. Julie Ann Susa-Gili', email: 'cpe.chair@slsu.edu.ph', role: 'chairperson', dept: 'cpe', initials: 'JS' },
+  ];
+}
+function buildMergedSystemAccounts() {
+  let removed = loadRemovedBaseAccountEmails();
+  let base = officialBaseAccountsList().filter(u => !removed.has(String(u.email || '').trim().toLowerCase()));
+  let mappedByEmail = new Map();
+  for (let u of base) mappedByEmail.set(String(u.email || '').toLowerCase(), { ...u });
+  for (let u of loadAccountRoleOverrides()) {
+    let email = String(u.email || '').trim().toLowerCase();
+    if (!email) continue;
+    mappedByEmail.set(email, {
+      id: String(u.id || `mapped_${email}`),
+      name: String(u.name || email.split('@')[0] || 'User'),
+      email,
+      role: u.role === 'admin' ? 'admin' : 'chairperson',
+      dept: u.role === 'admin' ? null : String(u.dept || ''),
+      initials: String(u.initials || initialsFromName(u.name || email)),
+    });
+  }
+  return [...mappedByEmail.values()].sort((a, b) => String(a.name || '').localeCompare(String(b.name || '')));
+}
+function getMergedSystemAccountByEmail(email) {
+  let clean = String(email || '').trim().toLowerCase();
+  return buildMergedSystemAccounts().find(u => String(u.email || '').trim().toLowerCase() === clean) || null;
+}
+function renderSystemAccountEditForm(d) {
+  let deptOpts = DEPARTMENTS.map(x =>
+    `<option value="${escapeHtml(x.id)}" ${x.id === d.dept ? 'selected' : ''}>${escapeHtml(x.code)} - ${escapeHtml(x.name)}</option>`,
+  ).join('');
+  let roleAdminSel = d.role === 'admin' ? 'selected' : '';
+  let roleChairSel = d.role === 'admin' ? '' : 'selected';
+  return `<div class="form-grid" id="acctEditRoot">
+    <div class="form-group full"><label for="acct_edit_name">Full name</label><input class="form-input" id="acct_edit_name" value="${escapeHtml(d.name || '')}" autocomplete="off"></div>
+    <div class="form-group full"><label for="acct_edit_email">Email</label><input class="form-input" id="acct_edit_email" type="email" value="${escapeHtml(d.email || '')}" autocomplete="off"></div>
+    <div class="form-group"><label for="acct_edit_role">Role</label><select class="form-select" id="acct_edit_role"><option value="chairperson" ${roleChairSel}>Chairperson</option><option value="admin" ${roleAdminSel}>Admin (Dean)</option></select></div>
+    <div class="form-group" id="acct_edit_dept_wrap"><label for="acct_edit_dept">Department</label><select class="form-select" id="acct_edit_dept">${deptOpts}</select></div>
+  </div><div id="acctEditAlert"></div>`;
+}
+function syncSystemAccountDeptFieldUi() {
+  let roleEl = document.getElementById('acct_edit_role');
+  let wrap = document.getElementById('acct_edit_dept_wrap');
+  if (!roleEl || !wrap) return;
+  let isAdmin = roleEl.value === 'admin';
+  wrap.style.opacity = isAdmin ? '0.55' : '1';
+  wrap.querySelectorAll('select,input').forEach(el => { el.disabled = isAdmin; });
+}
+function initialsFromName(name) {
+  let parts = String(name || '').trim().split(/\s+/).filter(Boolean);
+  if (!parts.length) return 'U';
+  if (parts.length === 1) return parts[0].slice(0, 2).toUpperCase();
+  return (parts[0][0] + parts[parts.length - 1][0]).toUpperCase();
+}
 const PAGE_TO_HTML = {
   dashboard: 'dashboard.html',
   schedule: 'schedule.html',
@@ -195,6 +292,8 @@ const REQUEST_ROOM_REASON_CHOICES = [
   'Room Shortage: Requesting a room from another department',
   'Teaching Assignment: Professor is from another department',
 ];
+const REQUEST_ROOM_PENDING_ID = '__room_pending__';
+const REQUEST_ROOM_PENDING_MARKER = '__PENDING_ROOM_BOOKING__';
 
 /** Append catalog rows from data.js that are not yet in arr (by id). */
 function mergeMissingCurriculumRowsInto(arr) {
@@ -359,6 +458,7 @@ function hydratePersistedData() {
     }
     if (o.curriculumDeptFilter != null) state.curriculumDeptFilter = o.curriculumDeptFilter;
     if (o.curriculumYearFilter != null) state.curriculumYearFilter = o.curriculumYearFilter;
+    if (o.curriculumSectionFilter != null) state.curriculumSectionFilter = o.curriculumSectionFilter;
     if (o.curriculumAcademicYearFilter != null) state.curriculumAcademicYearFilter = o.curriculumAcademicYearFilter;
     if (o.curriculumSemFilter != null) state.curriculumSemFilter = migrateCurriculumSemFilterStored(o.curriculumSemFilter);
     if (o.termSemester != null) state.termSemester = o.termSemester;
@@ -462,6 +562,7 @@ function persistAppData() {
       curriculum: state.curriculum,
       curriculumDeptFilter: state.curriculumDeptFilter,
       curriculumYearFilter: state.curriculumYearFilter,
+      curriculumSectionFilter: state.curriculumSectionFilter,
       curriculumAcademicYearFilter: state.curriculumAcademicYearFilter,
       curriculumSemFilter: state.curriculumSemFilter,
       termSemester: state.termSemester,
@@ -514,6 +615,7 @@ let state = {
   curriculum: [...CURRICULUM_DATA],
   curriculumDeptFilter: 'all',
   curriculumYearFilter: 'all',
+  curriculumSectionFilter: 'all',
   curriculumAcademicYearFilter: DEFAULT_ACADEMIC_YEAR,
   curriculumSemFilter: CURRICULUM_SEM_FILTER_FIRST_AND_SECOND,
   /** When set, that semester table (`curriculum-*-first` etc.) is in inline edit mode. */
@@ -867,6 +969,7 @@ function normalizeRequestFromDb(row) {
     reasonComment: row.reason_comment || '',
     status: row.status || 'pending',
     created: row.created || null,
+    parentTeachingRequestId: row.parent_teaching_request_id || null,
   };
 }
 
@@ -892,16 +995,32 @@ function normalizeRequestToDb(req) {
     reason_comment: req.reasonComment || '',
     status: req.status || 'pending',
     created: req.created || null,
+    parent_teaching_request_id: req.parentTeachingRequestId || null,
   };
 }
 
 async function insertRequestDb(req) {
   let payload = normalizeRequestToDb(req);
-  let res = await window.cenSupabase.from('requests').insert([payload]);
-  if (!res.error || !isSupabaseMissingColumnError(res.error, 'reason_comment')) return res;
-  let fallback = [{ ...payload }];
-  delete fallback[0].reason_comment;
-  return window.cenSupabase.from('requests').insert(fallback);
+  let working = [{ ...payload }];
+  let res = await window.cenSupabase.from('requests').insert(working);
+  if (!res.error) return res;
+  let dropped = new Set();
+  while (res.error) {
+    let droppedAny = false;
+    if (isSupabaseMissingColumnError(res.error, 'reason_comment') && !dropped.has('reason_comment')) {
+      delete working[0].reason_comment;
+      dropped.add('reason_comment');
+      droppedAny = true;
+    }
+    if (isSupabaseMissingColumnError(res.error, 'parent_teaching_request_id') && !dropped.has('parent_teaching_request_id')) {
+      delete working[0].parent_teaching_request_id;
+      dropped.add('parent_teaching_request_id');
+      droppedAny = true;
+    }
+    if (!droppedAny) return res;
+    res = await window.cenSupabase.from('requests').insert(working);
+  }
+  return res;
 }
 
 async function syncRequestsFromSupabase() {
@@ -1300,6 +1419,7 @@ function curriculumScheduledWeeklyHoursTotalForRow(c, ayFilter) {
   let year = curriculumFilterYear(c);
   let sem = curriculumFilterSemester(c);
   let ay = normalizeAcademicYearInput(ayFilter) || DEFAULT_ACADEMIC_YEAR;
+  let sectionFilter = state.curriculumSectionFilter || 'all';
   let subjectIds = subjectIdsForCurriculumRow(c);
   if (!subjectIds.size) return null;
   let total = 0;
@@ -1308,6 +1428,7 @@ function curriculumScheduledWeeklyHoursTotalForRow(c, ayFilter) {
     if ((s.schYear || '').trim() !== year) continue;
     if ((s.schSem || '').trim() !== sem) continue;
     if (scheduleAcademicYearForFilter(s) !== ay) continue;
+    if (sectionFilter !== 'all' && String(s.section || '').trim() !== sectionFilter) continue;
     if (!s.subjectId || !subjectIds.has(s.subjectId)) continue;
     total += scheduleWeeklyHoursFromEntry(s);
   }
@@ -1750,7 +1871,14 @@ function sectionOptionsForDeptYear(deptIds, yearLabel) {
       .map(s => String(s.section || '').trim())
       .filter(Boolean),
   );
-  return all.filter(s => fromScheduleYear.has(String(s).trim()) || sectionYearFromLabel(s) === yearLabel);
+  return all.filter(s => {
+    let section = String(s || '').trim();
+    let labeledYear = sectionYearFromLabel(section);
+    // Keep explicit year labels strict; only fallback to schedule-year membership
+    // when a legacy section label has no recognizable year token.
+    if (labeledYear) return labeledYear === yearLabel;
+    return fromScheduleYear.has(section);
+  });
 }
 /** Placeholder for section text fields (shown when the field is empty). */
 function sectionInputPlaceholder() {
@@ -2212,7 +2340,10 @@ function pendingRequestsForUser() {
   if (!u) return 0;
   if (u.role === 'admin') return 0;
   let term = currentTermFilter();
-  return state.requests.filter(r => r.toDept === u.dept && r.status === 'pending' && requestMatchesCurrentTerm(r, term)).length;
+  return state.requests.filter(r =>
+    requestMatchesCurrentTerm(r, term) &&
+    (r.toDept === u.dept && isPendingRequestStatus(r.status) || needsRequesterRoomBooking(r, u.dept))
+  ).length;
 }
 
 function checkConflicts(entry, excludeId=null) {
@@ -2501,7 +2632,10 @@ function renderDashboard() {
   let roomCount = ROOMS.filter(r => u.role === 'admin' || r.dept === u.dept).length;
   let pendingCount = u.role === 'admin'
     ? 0
-    : state.requests.filter(r => r.status === 'pending' && r.toDept === u.dept && requestMatchesCurrentTerm(r, term)).length;
+    : state.requests.filter(r =>
+      requestMatchesCurrentTerm(r, term) &&
+      (isPendingRequestStatus(r.status) && r.toDept === u.dept || needsRequesterRoomBooking(r, u.dept))
+    ).length;
   let statIc = 'stat-icon dashboard-stat-icon';
   let summaryDayList = dashboardSummaryDayOptionsForUser(u);
   let summaryDay = state.dashboardSummaryDay || 'Monday';
@@ -2606,7 +2740,7 @@ function renderSchedulePage() {
   let termSem = state.termSemester || '1st Semester';
   let termAy = normalizeAcademicYearInput(state.termAcademicYear) || DEFAULT_ACADEMIC_YEAR;
   let scheds =
-    u.role === 'admin' || state.filterMode === 'room'
+    u.role === 'admin' || state.filterMode === 'room' || state.filterMode === 'faculty'
       ? state.schedules
       : state.schedules.filter(s => s.dept === u.dept);
   scheds = scheds.filter(s =>
@@ -3585,7 +3719,10 @@ function renderRequests() {
   let outgoing = [];
 
   if (u.role === 'chairperson') {
-    pending = state.requests.filter(r => r.toDept === u.dept && r.status === 'pending' && requestMatchesCurrentTerm(r, term));
+    pending = state.requests.filter(r =>
+      requestMatchesCurrentTerm(r, term) &&
+      (r.toDept === u.dept && isPendingRequestStatus(r.status) || needsRequesterRoomBooking(r, u.dept))
+    );
     outgoing = state.requests.filter(r => r.fromDept === u.dept && requestMatchesCurrentTerm(r, term));
   }
 
@@ -3603,24 +3740,29 @@ function renderRequests() {
                 ? `<div class="requests-list-empty-state"><div class="requests-list-empty-icon">${icon('checkCircle', 40)}</div><p>No pending requests.</p></div>`
                 : pending
                     .map(r => {
+                      const requesterBooking = needsRequesterRoomBooking(r, u.dept);
                       const room = getRoom(r.roomId);
-                      const from = getDept(r.fromDept);
+                      const from = getDept(requesterBooking ? r.toDept : r.fromDept);
                       const sub = getSubject(r.subjectId);
                       const daysShort = Array.isArray(r.days) ? r.days.map(d => d.slice(0, 3)).join(', ') : '—';
                       const professorPart = r.professorId
                         ? escapeHtml(professorDisplayLineFromPick(r.professorId, r.professorOtherName)) + ' · '
                         : '';
-                      const noteText = (r.reasonComment || r.reason || '').trim();
+                      const noteText = (requestReasonCommentDisplayText(r) || requestReasonDisplayText(r) || '').trim();
+                      const roomPending = requestHasPendingRoom(r);
+                      const actionButtons = requesterBooking
+                        ? `<button type="button" class="btn btn-outline btn-sm" data-book-room-request="${escapeHtml(r.id)}">${icon('calendar', 14)} Book a room</button>`
+                        : `<button type="button" class="btn btn-green btn-sm" data-approve="${r.id}">${icon('check', 14)} Accept</button>
+                      <button type="button" class="btn btn-danger btn-sm" data-decline="${r.id}">${icon('close', 14)} Decline</button>`;
                       return `
                 <div class="request-card request-card--incoming">
                   <div class="request-icon request-icon-pending">${icon('refresh', 20)}</div>
                   <div class="request-info">
-                    <div class="request-title">${room?.name || 'Unknown Room'} from <span class="badge-dept ${r.fromDept}">${from?.code || '?'}</span></div>
+                    <div class="request-title">${roomPending ? 'Room To Be Requested' : (room?.name || 'Unknown Room')} from <span class="badge-dept ${requesterBooking ? r.toDept : r.fromDept}">${from?.code || '?'}</span></div>
                     <div class="request-meta">${escapeHtml(sub?.code || '—')} · ${escapeHtml(r.section || '—')} · ${professorPart}${escapeHtml(daysShort)} ${fmt12(r.timeStart)}\u2013${fmt12(r.timeEnd)}</div>
                     ${noteText ? `<div class="incoming-request-reason">"${escapeHtml(noteText)}"</div>` : ''}
                     <div class="request-actions incoming-request-actions">
-                      <button type="button" class="btn btn-green btn-sm" data-approve="${r.id}">${icon('check', 14)} Accept</button>
-                      <button type="button" class="btn btn-danger btn-sm" data-decline="${r.id}">${icon('close', 14)} Decline</button>
+                      ${actionButtons}
                     </div>
                   </div>
                 </div>
@@ -3640,8 +3782,10 @@ function renderRequests() {
         </div>
         <div class="card-body requests-queue-card-body">
           ${(() => {
-            const pendingOut = outgoing.filter(r => r.status === 'pending');
-            const approvedOut = outgoing.filter(r => r.status === 'approved');
+            const pendingOut = outgoing.filter(r =>
+              isPendingRequestStatus(r.status) || r.status === 'approved_teaching' || requestHasPendingRoom(r)
+            );
+            const approvedOut = outgoing.filter(r => r.status === 'approved' && !requestHasPendingRoom(r));
             const declinedOut = outgoing.filter(r => r.status === 'declined');
             const renderOutgoingStatusColumn = (title, list) => `
               <div class="outgoing-status-col">
@@ -3658,16 +3802,25 @@ function renderRequests() {
                               const room = getRoom(r.roomId);
                               const to = getDept(r.toDept);
                               const sub = getSubject(r.subjectId);
-                              const statusIcon = r.status === 'approved' ? 'check' : (r.status === 'declined' ? 'close' : 'refresh');
-                              const statusIconColor = r.status === 'approved' ? '#16A34A' : (r.status === 'declined' ? '#DC2626' : '#D97706');
-                              const statusIconBg = r.status === 'approved' ? '#F0FDF4' : (r.status === 'declined' ? '#FEF2F2' : '#FFFBEB');
+                              const isApprovedFamily = r.status === 'approved' || r.status === 'approved_teaching';
+                              const statusIcon = isApprovedFamily ? 'check' : (r.status === 'declined' ? 'close' : 'refresh');
+                              const statusIconColor = isApprovedFamily ? '#16A34A' : (r.status === 'declined' ? '#DC2626' : '#D97706');
+                              const statusIconBg = isApprovedFamily ? '#F0FDF4' : (r.status === 'declined' ? '#FEF2F2' : '#FFFBEB');
+                              const needsRoomBooking = r.status === 'approved_teaching' || (isTeachingAssignmentRequest(r) && requestHasPendingRoom(r));
+                              const roomPending = requestHasPendingRoom(r);
+                              const canBookRoom = needsRoomBooking && roomPending && !hasPendingRoomRequestForTeachingParent(r.id);
+                              const statusLabel = needsRoomBooking
+                                ? 'Approved — Book Room'
+                                : (r.status.charAt(0).toUpperCase() + r.status.slice(1));
+                              const badgeClass = needsRoomBooking ? 'pending' : (r.status === 'approved' ? 'approved' : r.status);
                               return `
                                 <div class="request-card request-card--outgoing">
                                   <div class="request-icon request-icon-${escapeHtml(r.status || 'pending')}" style="color:${statusIconColor};background:${statusIconBg};">${icon(statusIcon, 20)}</div>
                                   <div class="request-info">
-                                    <div class="request-title">${room?.name || 'Unknown Room'} from <span class="badge-dept ${r.toDept}">${to?.code || '?'}</span></div>
+                                    <div class="request-title">${roomPending ? 'Room To Be Requested' : (room?.name || (needsRoomBooking ? 'Room To Be Requested' : 'Unknown Room'))} from <span class="badge-dept ${r.toDept}">${to?.code || '?'}</span></div>
                                     <div class="request-meta">${sub?.code || '?'} · ${r.section} · ${r.professorId ? escapeHtml(professorDisplayLineFromPick(r.professorId, r.professorOtherName)) + ' · ' : ''}${r.days.map(d => d.slice(0, 3)).join(', ')} ${fmt12(r.timeStart)}–${fmt12(r.timeEnd)}</div>
-                                    <div style="margin-top: 6px;"><span class="badge-status ${r.status}">${r.status.charAt(0).toUpperCase() + r.status.slice(1)}</span></div>
+                                    <div style="margin-top: 6px;"><span class="badge-status ${badgeClass}">${statusLabel}</span></div>
+                                    ${canBookRoom ? `<div style="margin-top:8px;"><button type="button" class="btn btn-outline btn-sm" data-book-room-request="${escapeHtml(r.id)}">Book a room</button></div>` : ''}
                                   </div>
                                 </div>
                               `;
@@ -3784,6 +3937,15 @@ function renderCurriculum() {
               : rawLabel;
     return `<option value="${escapeHtml(y)}" ${state.curriculumYearFilter === y ? 'selected' : ''}>${escapeHtml(label)}</option>`;
   }).join('');
+  let sectionScopeDept = chairDept || adminDeptFilter || '';
+  let sectionScopeYear = state.curriculumYearFilter === 'all' ? '' : state.curriculumYearFilter;
+  let sectionChoices = sectionScopeDept ? sectionOptionsForDeptYear([sectionScopeDept], sectionScopeYear) : [];
+  if (state.curriculumSectionFilter !== 'all' && !sectionChoices.includes(state.curriculumSectionFilter)) {
+    state.curriculumSectionFilter = 'all';
+  }
+  let sectionFilterOpts = [`<option value="all" ${state.curriculumSectionFilter === 'all' ? 'selected' : ''}>All Sections</option>`]
+    .concat(sectionChoices.map(sec => `<option value="${escapeHtml(sec)}" ${state.curriculumSectionFilter === sec ? 'selected' : ''}>${escapeHtml(sec)}</option>`))
+    .join('');
   let academicYearFilterOpts = curriculumAyOptions
     .map(ay => `<option value="${escapeHtml(ay)}" ${curriculumAyFilter === ay ? 'selected' : ''}>${escapeHtml(ay)}</option>`)
     .join('');
@@ -3818,6 +3980,9 @@ function renderCurriculum() {
       </div>
       <div class="curriculum-filter-field curriculum-filter-field--inline">
         <select class="filter-select curriculum-filter-select curriculum-toolbar-filter-select" id="curriculumYearFilter" aria-label="Year level filter">${yearFilterOpts}</select>
+      </div>
+      <div class="curriculum-filter-field curriculum-filter-field--inline">
+        <select class="filter-select curriculum-filter-select curriculum-toolbar-filter-select" id="curriculumSectionFilter" aria-label="Section filter">${sectionFilterOpts}</select>
       </div>
       <div class="curriculum-filter-field curriculum-filter-field--inline">
         <select class="filter-select curriculum-filter-select curriculum-toolbar-filter-select" id="curriculumAcademicYearFilter" aria-label="Academic year filter">${academicYearFilterOpts}</select>
@@ -5003,14 +5168,24 @@ function renderFaculty() {
 }
 
 function renderAccounts() {
-  let USERS=[{id:'admin',name:'Dr. Maria Corazon B. Abejo',email:'admin@plm.edu.ph',role:'admin',initials:'MCA',dept:null},
-    {id:'ie',name:'Engr. Lynnevel R. Amparo',email:'ie.chair@plm.edu.ph',role:'chairperson',dept:'ie',initials:'LA'},
-    {id:'ee',name:'Engr. Maurino N. Abuel',email:'ee.chair@plm.edu.ph',role:'chairperson',dept:'ee',initials:'MA'},
-    {id:'ce',name:'Engr. John Christopher D. Tayoto',email:'ce.chair@plm.edu.ph',role:'chairperson',dept:'ce',initials:'JT'},
-    {id:'me',name:'Engr. Ronnel S. Nombrefia',email:'me.chair@plm.edu.ph',role:'chairperson',dept:'me',initials:'RN'},
-    {id:'ece',name:'Engr. Pitz Gerald G. Lagrazon',email:'ece.chair@plm.edu.ph',role:'chairperson',dept:'ece',initials:'PL'},
-    {id:'cpe',name:'Engr. Julie Ann Susa-Gili',email:'cpe.chair@plm.edu.ph',role:'chairperson',dept:'cpe',initials:'JS'}];
-  return `<div class="page-header"><div><h2>System Accounts</h2></div></div><div class="table-wrap"><table><thead><tr><th>Name</th><th>Email</th><th>Role</th><th>Department</th></tr></thead><tbody>${USERS.map(u=>`<tr><td><strong>${u.name}</strong></td><td>${u.email}</td><td><span class="badge-status ${u.role==='admin'?'approved':'active'}">${u.role==='admin'?'Admin':'Chairperson'}</span></td><td>${u.dept?`<span class="badge-dept ${u.dept}">${getDept(u.dept)?.code}</span>`:'—'}</td></tr>`).join('')}</tbody></table></div>`;
+  let baseByEmail = new Map(officialBaseAccountsList().map(u => [String(u.email || '').toLowerCase(), u]));
+  let mappedUsers = buildMergedSystemAccounts();
+  let overrideEmailSet = new Set(loadAccountRoleOverrides().map(x => String(x?.email || '').trim().toLowerCase()).filter(Boolean));
+  let pendingRows = loadPendingAccounts().sort((a, b) => String(a.email || '').localeCompare(String(b.email || '')));
+  let deptOpts = `<option value="" selected>Please assign</option>${
+    DEPARTMENTS.map(d => `<option value="${escapeHtml(d.id)}">${escapeHtml(d.code)} - ${escapeHtml(d.name)}</option>`).join('')
+  }`;
+  let mappedTable = `<div class="table-wrap"><table><thead><tr><th>Name</th><th>Email</th><th>Role</th><th>Department</th><th>Actions</th></tr></thead><tbody>${mappedUsers.map(u => {
+    let em = String(u.email || '').trim().toLowerCase();
+    let base = baseByEmail.get(em) || null;
+    let hasOverride = overrideEmailSet.has(em);
+    let source = base ? 'base' : 'override';
+    return `<tr><td><strong>${escapeHtml(u.name || '')}</strong></td><td>${escapeHtml(u.email || '')}</td><td><span class="badge-status ${u.role === 'admin' ? 'approved' : 'active'}">${u.role === 'admin' ? 'Admin' : 'Chairperson'}</span></td><td>${u.dept ? `<span class="badge-dept ${escapeHtml(u.dept)}">${escapeHtml(getDept(u.dept)?.code || u.dept)}</span>` : '—'}</td><td><button type="button" class="btn btn-outline btn-sm" data-edit-mapped="${escapeHtml(em)}" data-mapped-source="${escapeHtml(source)}" data-has-override="${hasOverride ? '1' : '0'}">Edit</button> <button type="button" class="btn btn-danger btn-sm" data-del-mapped="${escapeHtml(em)}" data-mapped-source="${escapeHtml(source)}" data-has-override="${hasOverride ? '1' : '0'}">Delete</button></td></tr>`;
+  }).join('')}</tbody></table></div>`;
+  let pendingTable = pendingRows.length
+    ? `<div class="table-wrap" style="margin-top:14px;"><table><thead><tr><th>Name</th><th>Email</th><th>Requested Access</th><th>Assign Department</th><th>Action</th></tr></thead><tbody>${pendingRows.map(p => `<tr><td><strong>${escapeHtml(p.name || 'Google User')}</strong></td><td>${escapeHtml(p.email || '')}</td><td><span class="badge-status pending">Pending</span></td><td><select class="form-select pending-assign-dept">${deptOpts}</select></td><td style="white-space:nowrap;"><button type="button" class="btn btn-primary btn-sm" data-assign-pending="${escapeHtml(p.email || '')}">Assign as Chair</button> <button type="button" class="btn btn-danger btn-sm" data-del-pending="${escapeHtml(p.email || '')}">Delete</button></td></tr>`).join('')}</tbody></table></div>`
+    : `<div class="card" style="margin-top:14px;"><div class="card-body" style="padding:14px 16px;">No pending Google sign-ins waiting for dean assignment.</div></div>`;
+  return `<div class="page-header"><div><h2>System Accounts</h2><p style="color:var(--gray-600);margin-top:4px;">Dean can assign pending Google users to a department chair role.</p></div></div>${mappedTable}${pendingTable}`;
 }
 
 function renderMyAccount() {
@@ -5070,8 +5245,19 @@ function renderModal() {
     return modalWrap(title, renderCurriculumForm(d, { readOnly: viewOnly }), footer, 'modal-curriculum');
   }
   if (type === 'newRequest') {
-    const reqFooter = `<button class="btn btn-secondary" id="modalClose2">Cancel</button><button class="btn btn-primary" id="modalSaveBtn">Submit Request</button>`;
+    let requestStep = currentRequestFormStep();
+    const reqFooter = requestStep === 1
+      ? `<button class="btn btn-secondary" id="modalClose2">Cancel</button><button type="button" class="btn btn-primary" id="rqNextStepBtn">Next</button>`
+      : `<button type="button" class="btn btn-secondary" id="rqPrevStepBtn">Back</button><button class="btn btn-primary" id="modalSaveBtn">Submit Request</button>`;
     return modalWrap('Request a room', renderRequestForm(), reqFooter, 'modal-request', 'Borrow a room from another department');
+  }
+  if (type === 'approveTeachingAssignment') {
+    let footer = `<button type="button" class="btn btn-secondary" id="modalClose2">Cancel</button><button type="button" class="btn btn-primary" id="modalSaveBtn">Approve Request</button>`;
+    return modalWrap('Approve Teaching Assignment', renderTeachingApprovalForm(), footer, 'modal-request', 'Select faculty before approving this request');
+  }
+  if (type === 'bookTeachingRoom') {
+    let footer = `<button type="button" class="btn btn-secondary" id="modalClose2">Cancel</button><button type="button" class="btn btn-primary" id="modalSaveBtn">Send Room Request</button>`;
+    return modalWrap('Book Room For Teaching', renderTeachingRoomBookingForm(), footer, 'modal-request', 'Request a room after teaching assignment approval');
   }
   if (type === 'scheduleExportWizard') {
     const sewFooter = `<button type="button" class="btn btn-secondary" id="modalClose2">Cancel</button><button type="button" class="btn btn-primary" id="scheduleExportWizardConfirmBtn">${icon('fileText', 16)} Export</button>`;
@@ -5103,6 +5289,11 @@ function renderModal() {
     }
     let listFoot = `<button type="button" class="btn btn-secondary" id="modalClose2">Close</button>`;
     return modalWrap('Schedule conflicts', renderDashboardConflictListBody(schedulesToCheck), listFoot, 'modal-conflicts', 'Select an entry to see what it overlaps with');
+  }
+  if (type === 'editSystemAccount') {
+    let d = state.modal.data || {};
+    let foot = `<button type="button" class="btn btn-secondary" id="modalClose2">Cancel</button><button type="button" class="btn btn-primary" id="modalSaveBtn">Save</button>`;
+    return modalWrap('Edit account', renderSystemAccountEditForm(d), foot, 'modal-account-edit', 'Changes are stored for this browser (local dean tools).');
   }
   return '';
 }
@@ -5154,6 +5345,148 @@ function resolveRequestFormToDeptId(u, preferredDeptId) {
 /** Request form: do not pre-fill section (schedules may still list legacy names like BSIE IGK from the DB). */
 function requestFormDefaultSection() {
   return '';
+}
+
+function currentRequestFormStep() {
+  if (state.modal?.type !== 'newRequest') return 1;
+  return state.modal.requestStep === 2 ? 2 : 1;
+}
+
+function validateRequestFormStepOne(showBanner = true) {
+  let reasonRq = (document.getElementById('rq_reason')?.value || '').trim();
+  if (!reasonRq) {
+    if (showBanner) showFormValidationBanner('rqFormAlert', 'Select a reason to continue.');
+    return false;
+  }
+  return true;
+}
+
+function isTeachingAssignmentRequest(req) {
+  let reason = String(req?.reason || '').trim().toLowerCase();
+  let note = String(req?.reasonComment || '').trim().toLowerCase();
+  return reason.includes('teaching assignment') || note.includes('teaching assignment');
+}
+
+function requestHasPendingRoom(req) {
+  if (!req) return true;
+  if (req.status === 'approved_teaching' || req.status === 'pending_teaching_room') return true;
+  if (isTeachingAssignmentRequest(req) && req.status === 'approved' && !req.parentTeachingRequestId) {
+    let children = state.requests.filter(x => x.parentTeachingRequestId === req.id);
+    if (!children.length) return true;
+    let hasApprovedChild = children.some(x => x.status === 'approved');
+    return !hasApprovedChild;
+  }
+  // Backward compatibility: older teaching requests (before pending_teaching_room rollout)
+  // were stored as plain "pending" with a real room id fallback.
+  if (isTeachingAssignmentRequest(req) && isPendingRequestStatus(req.status) && !req.parentTeachingRequestId) return true;
+  if (req.roomId == null || req.roomId === '' || req.roomId === REQUEST_ROOM_PENDING_ID) return true;
+  return String(req.reasonComment || '').includes(REQUEST_ROOM_PENDING_MARKER)
+    || String(req.reason || '').includes(REQUEST_ROOM_PENDING_MARKER);
+}
+
+function isPendingRequestStatus(status) {
+  return status === 'pending' || status === 'pending_teaching_room';
+}
+
+function requestReasonCommentDisplayText(req) {
+  return String(req?.reasonComment || '').replace(REQUEST_ROOM_PENDING_MARKER, '').trim();
+}
+
+function requestReasonDisplayText(req) {
+  return String(req?.reason || '').replace(REQUEST_ROOM_PENDING_MARKER, '').trim();
+}
+
+function needsRequesterRoomBooking(req, userDept) {
+  if (!req || !userDept) return false;
+  return req.fromDept === userDept
+    && req.status === 'approved_teaching'
+    && requestHasPendingRoom(req)
+    && !hasPendingRoomRequestForTeachingParent(req.id);
+}
+
+function hasPendingRoomRequestForTeachingParent(parentRequestId) {
+  if (!parentRequestId) return false;
+  return state.requests.some(r => r.parentTeachingRequestId === parentRequestId && isPendingRequestStatus(r.status));
+}
+
+function renderTeachingApprovalForm() {
+  let reqId = state.modal?.requestId;
+  let r = state.requests.find(x => x.id === reqId);
+  if (!r) {
+    return `<div id="taApproveAlert"><div class="form-validation-alert"><span class="form-validation-alert-text">Request not found.</span></div></div>`;
+  }
+  let approverDept = r.toDept || state.currentUser?.dept || '';
+  let approverDeptInfo = getDept(approverDept);
+  let profChoices = state.professors
+    .filter(p => p.dept === approverDept && professorStatusValue(p) === 'active')
+    .sort((a, b) => a.name.localeCompare(b.name));
+  let profOpts = profChoices.map(p => `<option value="${escapeHtml(p.id)}">${escapeHtml(p.name)} (${escapeHtml(p.short)})</option>`).join('');
+  return `<div class="request-room-form schedule-form-wrapper">
+    <div id="taApproveAlert"></div>
+    <div class="form-group full">
+      <label class="form-label">Requesting from</label>
+      <input class="form-input" readonly tabindex="-1" value="${escapeHtml(getDept(r.fromDept)?.code || r.fromDept || '—')} — ${escapeHtml(getDept(r.fromDept)?.name || '')}">
+    </div>
+    <div class="form-group full">
+      <label class="form-label">Approving department</label>
+      <input class="form-input" readonly tabindex="-1" value="${escapeHtml(approverDeptInfo?.code || approverDept || '—')} — ${escapeHtml(approverDeptInfo?.name || '')}">
+    </div>
+    <div class="form-group full">
+      <label class="form-label" for="ta_approve_prof">Assign faculty for this subject <span class="label-req" aria-hidden="true">*</span></label>
+      <select class="form-select" id="ta_approve_prof" required ${profChoices.length ? '' : 'disabled'}>
+        <option value="">${profChoices.length ? 'Select faculty...' : 'No active faculty available in this department'}</option>
+        ${profOpts}
+      </select>
+      <p class="form-hint">Required before approving a Teaching Assignment request.</p>
+    </div>
+  </div>`;
+}
+
+function renderTeachingRoomBookingForm() {
+  let baseId = state.modal?.requestId;
+  let base = state.requests.find(x => x.id === baseId);
+  if (!base) {
+    return `<div id="bookRoomAlert"><div class="form-validation-alert"><span class="form-validation-alert-text">Teaching approval request not found.</span></div></div>`;
+  }
+  let u = state.currentUser;
+  let toDeptChoices = requestFormToDepartmentChoices(u);
+  let selectedToDeptId = state.modal?.bookToDept || resolveRequestFormToDeptId(u, state.requestTimetableDept);
+  if (!toDeptChoices.some(d => d.id === selectedToDeptId)) selectedToDeptId = toDeptChoices[0]?.id || '';
+  state.modal.bookToDept = selectedToDeptId;
+  let roomsPickAll = roomsFreeForBorrowing(u, Array.isArray(base.days) ? base.days : [], base.timeStart || '', base.timeEnd || '');
+  let roomsPick = selectedToDeptId ? roomsPickAll.filter(r => r.dept === selectedToDeptId) : [];
+  let roomOpts = roomsPick.map(r => `<option value="${escapeHtml(r.id)}">${escapeHtml(r.name)}</option>`).join('');
+  let toDeptOpts = toDeptChoices.map(d => `<option value="${escapeHtml(d.id)}" ${d.id === selectedToDeptId ? 'selected' : ''}>${escapeHtml(d.code)} — ${escapeHtml(d.name)}</option>`).join('');
+  let roomPlaceholder = !selectedToDeptId
+    ? 'Select a department first'
+    : roomsPick.length
+      ? 'Select available room'
+      : 'No rooms free for this slot — adjust department';
+  let profLine = professorDisplayLineFromPick(base.professorId, base.professorOtherName);
+  return `<div class="request-room-form schedule-form-wrapper">
+    <div id="bookRoomAlert"></div>
+    <div class="schedule-form-inline-row request-room-form-inline-pair">
+      <div class="form-group">
+        <label class="form-label">Faculty assigned</label>
+        <input class="form-input" readonly tabindex="-1" value="${escapeHtml(profLine)}">
+      </div>
+      <div class="form-group">
+        <label class="form-label">Subject</label>
+        <input class="form-input" readonly tabindex="-1" value="${escapeHtml(getSubject(base.subjectId)?.code || '—')} — ${escapeHtml(base.section || '—')}">
+      </div>
+    </div>
+    <div class="schedule-form-inline-row request-room-form-inline-pair">
+      <div class="form-group">
+        <label class="form-label" for="book_to_dept">Request room from <span class="label-req" aria-hidden="true">*</span></label>
+        <select class="form-select" id="book_to_dept" ${toDeptChoices.length ? '' : 'disabled'}><option value="">${toDeptChoices.length ? 'Select department...' : 'No available departments'}</option>${toDeptOpts}</select>
+      </div>
+      <div class="form-group">
+        <label class="form-label" for="book_room">Available room <span class="label-req" aria-hidden="true">*</span></label>
+        <select class="form-select" id="book_room" ${selectedToDeptId ? '' : 'disabled'}><option value="">${escapeHtml(roomPlaceholder)}</option>${roomOpts}</select>
+      </div>
+    </div>
+    <p class="form-hint">Pick any department/room for the same day/time, then send a room request for approval.</p>
+  </div>`;
 }
 
 function modalWrap(title, body, footer = `<button class="btn btn-secondary" id="modalClose2">Cancel</button><button class="btn btn-primary" id="modalSaveBtn">Save</button>`, panelClass = '', subtitle = '') {
@@ -5400,6 +5733,8 @@ function renderProfessorForm(d){
 function renderRequestForm() {
   let u = state.currentUser;
   let m = state.modal && state.modal.type === 'newRequest' ? state.modal : null;
+  let requestStep = currentRequestFormStep();
+  if (m) m.requestStep = requestStep;
   let slot = m?.requestSlot || null;
   let prefillBorrowRoomId = m?.prefillBorrowRoomId || '';
   let daysForRooms = slot && slot.day ? [slot.day] : [];
@@ -5430,6 +5765,9 @@ function renderRequestForm() {
       ? 'Select available room'
       : 'No rooms free for this slot — adjust days or times';
   let prefillOk = !!(prefillBorrowRoomId && roomsPick.some(r => r.id === prefillBorrowRoomId));
+  let roomAnotherDeptOption = isTeachingAssignmentReason && selectedToDeptId
+    ? '<option value="__another_dept_hint__">select from another department</option>'
+    : '';
   let roomOpts = roomsPick.map(r => `<option value="${escapeHtml(r.id)}" ${prefillOk && prefillBorrowRoomId === r.id ? 'selected' : ''}>${escapeHtml(r.name)}</option>`).join('');
   let myDept = getDept(u.dept);
   let toDeptOpts = toDeptChoices.map(d => `<option value="${escapeHtml(d.id)}" ${d.id === selectedToDeptId ? 'selected' : ''}>${escapeHtml(d.code)} — ${escapeHtml(d.name)}</option>`).join('');
@@ -5459,30 +5797,44 @@ function renderRequestForm() {
   let semHtml = scheduleSemSelectHtml('rq_sem', '', 'required');
   return `<div class="request-room-form schedule-form-wrapper">
     <div id="rqFormAlert"></div>
-    <div class="form-group full request-room-form-reason">
-      <label class="form-label" for="rq_reason">Reason ${req}</label>
-      <select class="form-select" id="rq_reason" aria-label="Reason for room request" required>
-        <option value="">Select reason</option>
-        ${rqReasonOpts}
-      </select>
-      <p class="form-hint">Helps the receiving department understand why you need to borrow a room.</p>
+    <div class="request-form-stepper" aria-label="Request form steps">
+      <span class="request-form-stepper-pill ${requestStep === 1 ? 'active' : ''}">1. Request details</span>
+      <span class="request-form-stepper-pill ${requestStep === 2 ? 'active' : ''}">2. Schedule details</span>
     </div>
-    <div class="schedule-form-inline-row request-room-form-inline-pair" role="group" aria-label="Requesting department and requester">
-      <div class="form-group">
-        <label class="form-label" for="rq_from_dept_read">Requesting from:</label>
-        <input class="form-input" id="rq_from_dept_read" readonly tabindex="-1" value="${escapeHtml(myDept?.code || '')} — ${escapeHtml(myDept?.name || '')}">
-      </div>
-      <div class="form-group">
-        <label class="form-label" for="rq_requester_read">Requested by:</label>
-        <input class="form-input" id="rq_requester_read" readonly tabindex="-1" value="${escapeHtml(u.name || '')}">
+    <div class="request-form-step${requestStep === 1 ? '' : ' hidden'}" data-rq-step="1">
+      <div class="form-group full request-room-form-reason">
+        <label class="form-label" for="rq_reason">Reason ${req}</label>
+        <select class="form-select" id="rq_reason" aria-label="Reason for room request" required>
+          <option value="">Select reason</option>
+          ${rqReasonOpts}
+        </select>
+        <p class="form-hint">Helps the receiving department understand why you need to borrow a room.</p>
       </div>
     </div>
-    <div class="schedule-form-inline-row request-room-form-inline-pair" role="group" aria-label="Target department and instructor">
-      <div class="form-group">
-        <label class="form-label" for="rq_to_dept">Requesting to: ${req}</label>
-        ${toDeptSelect}
+    <div class="request-form-step${requestStep === 2 ? '' : ' hidden'}" data-rq-step="2">
+      <div class="schedule-form-inline-row request-room-form-inline-pair" role="group" aria-label="Requesting department and requester">
+        <div class="form-group">
+          <label class="form-label" for="rq_from_dept_read">Requesting from:</label>
+          <input class="form-input" id="rq_from_dept_read" readonly tabindex="-1" value="${escapeHtml(myDept?.code || '')} — ${escapeHtml(myDept?.name || '')}">
+        </div>
+        <div class="form-group">
+          <label class="form-label" for="rq_requester_read">Requested by:</label>
+          <input class="form-input" id="rq_requester_read" readonly tabindex="-1" value="${escapeHtml(u.name || '')}">
+        </div>
       </div>
-      <div class="form-group professor-select-group">
+      <div class="schedule-form-inline-row request-room-form-inline-pair" role="group" aria-label="Target department and room">
+        <div class="form-group">
+          <label class="form-label" for="rq_to_dept">Requesting to: ${req}</label>
+          ${toDeptSelect}
+        </div>
+        <div class="form-group">
+          <label class="form-label" for="rq_room">Available room ${req}</label>
+          <select class="form-select" id="rq_room" required><option value="">${roomPlaceholder}</option>${roomAnotherDeptOption}${roomOpts}</select>
+        </div>
+      </div>
+      <p class="form-hint">${isTeachingAssignmentReason ? 'Select an available room from your department or the selected department' : 'Select an available room from another department'}</p>
+      ${isTeachingAssignmentReason ? '' : `
+      <div class="form-group full professor-select-group">
         <label class="form-label" id="rq_professor_lb">Faculty / Instructor ${req}</label>
         <div class="professor-field-slot">
           <div id="rq_professor_select_wrap">
@@ -5495,56 +5847,51 @@ function renderRequestForm() {
             </div>
           </div>
         </div>
+      </div>`}
+      <div class="form-group full">
+        <label class="form-label" for="rq_reason_comment">Reason / Comment <span class="form-optional">(optional)</span></label>
+        <textarea class="form-input" id="rq_reason_comment" rows="3" maxlength="300" placeholder="Add extra details for your request (optional)">${escapeHtml(selectedReasonComment)}</textarea>
       </div>
-    </div>
-    <div class="form-group full">
-      <label class="form-label" for="rq_room">Available room ${req}</label>
-      <select class="form-select" id="rq_room" required><option value="">${roomPlaceholder}</option>${roomOpts}</select>
-      <p class="form-hint">${isTeachingAssignmentReason ? 'Select an available room from your department or the selected department' : 'Select an available room from another department'}</p>
-    </div>
-    <div class="schedule-form-inline-row request-room-form-inline-pair">
-      <div class="form-group">
-        <label class="form-label" for="rq_year">Year ${req}</label>
-        ${yearHtml}
+      <div class="schedule-form-inline-row request-room-form-inline-pair">
+        <div class="form-group">
+          <label class="form-label" for="rq_year">Year ${req}</label>
+          ${yearHtml}
+        </div>
+        <div class="form-group">
+          <label class="form-label" for="rq_section">Section ${req}</label>
+          <select class="form-select" id="rq_section" required><option value="">Select section...</option>${rqSecOpts}</select>
+        </div>
       </div>
-      <div class="form-group">
-        <label class="form-label" for="rq_section">Section ${req}</label>
-        <select class="form-select" id="rq_section" required><option value="">Select section...</option>${rqSecOpts}</select>
+      <div class="schedule-form-inline-row request-room-form-inline-pair">
+        <div class="form-group">
+          <label class="form-label" for="rq_sem">Semester ${req}</label>
+          ${semHtml}
+        </div>
+        <div class="form-group">
+          <label class="form-label" for="rq_subject">Subject ${req}</label>
+          <select class="form-select" id="rq_subject" required><option value="">Select subject...</option>${subOpts}</select>
+        </div>
       </div>
-    </div>
-    <div class="schedule-form-inline-row request-room-form-inline-pair">
-      <div class="form-group">
-        <label class="form-label" for="rq_sem">Semester ${req}</label>
-        ${semHtml}
+      <div class="schedule-form-inline-row request-form-days-set-row request-room-form-inline-pair">
+        <div class="form-group">
+          <span class="form-label">Day(s) ${req}</span>
+          <div class="days-check rq-days-check">${rqDayColList.map(d => `<input type="checkbox" class="day-checkbox" id="rqday_${d}" value="${d}" ${slot && slot.day === d ? 'checked' : ''}><label class="day-label" for="rqday_${d}">${d.slice(0, 3)}</label>`).join('')}</div>
+        </div>
+        <div class="form-group">
+          <label class="form-label" for="rq_set" id="rq_set_label">Set</label>
+          ${setSelect}
+        </div>
       </div>
-      <div class="form-group">
-        <label class="form-label" for="rq_subject">Subject ${req}</label>
-        <select class="form-select" id="rq_subject" required><option value="">Select subject...</option>${subOpts}</select>
+      <div class="schedule-form-inline-row request-room-form-inline-pair">
+        <div class="form-group">
+          <label class="form-label" for="rq_timeStart">Time start ${req}</label>
+          <select class="form-select" id="rq_timeStart" required>${ts}</select>
+        </div>
+        <div class="form-group">
+          <label class="form-label" for="rq_timeEnd">Time end ${req}</label>
+          <select class="form-select" id="rq_timeEnd" required>${te}</select>
+        </div>
       </div>
-    </div>
-    <div class="schedule-form-inline-row request-form-days-set-row request-room-form-inline-pair">
-      <div class="form-group">
-        <span class="form-label">Day(s) ${req}</span>
-        <div class="days-check rq-days-check">${rqDayColList.map(d => `<input type="checkbox" class="day-checkbox" id="rqday_${d}" value="${d}" ${slot && slot.day === d ? 'checked' : ''}><label class="day-label" for="rqday_${d}">${d.slice(0, 3)}</label>`).join('')}</div>
-      </div>
-      <div class="form-group">
-        <label class="form-label" for="rq_set" id="rq_set_label">Set</label>
-        ${setSelect}
-      </div>
-    </div>
-    <div class="schedule-form-inline-row request-room-form-inline-pair">
-      <div class="form-group">
-        <label class="form-label" for="rq_timeStart">Time start ${req}</label>
-        <select class="form-select" id="rq_timeStart" required>${ts}</select>
-      </div>
-      <div class="form-group">
-        <label class="form-label" for="rq_timeEnd">Time end ${req}</label>
-        <select class="form-select" id="rq_timeEnd" required>${te}</select>
-      </div>
-    </div>
-    <div class="form-group full">
-      <label class="form-label" for="rq_reason_comment">Reason / Comment <span class="form-optional">(optional)</span></label>
-      <textarea class="form-input" id="rq_reason_comment" rows="3" maxlength="300" placeholder="Add extra details for your request (optional)">${escapeHtml(selectedReasonComment)}</textarea>
     </div>
   </div>`;
 }
@@ -5555,11 +5902,18 @@ function bindGlobal(){
     window.__cenHashPageSyncBound = '1';
     window.addEventListener('hashchange', syncPageFromLocationHash);
   }
-  document.getElementById('logoutBtn')?.addEventListener('click',()=>{
+  document.getElementById('logoutBtn')?.addEventListener('click', async ()=>{
     if (!window.confirm(MSG_CONFIRM_LOGOUT)) return;
+    try {
+      if (hasSupabaseClient()) {
+        await window.cenSupabase.auth.signOut({ scope: 'local' });
+      }
+    } catch (_) {
+      // Continue local logout flow even if remote sign-out fails.
+    }
     sessionStorage.clear();
     state.loggedIn = false;
-    window.location.href = 'login.html';
+    window.location.replace('login.html?logged_out=1');
   });
   document.getElementById('themeToggleBtn')?.addEventListener('click',()=>{toggleAppTheme();render();});
   document.getElementById('hamburger')?.addEventListener('click',()=>{state.sidebarOpen=!state.sidebarOpen;render();});
@@ -5742,6 +6096,7 @@ function bindPage(){
       let u = state.currentUser;
       openModal({
         type: 'newRequest',
+        requestStep: 1,
         requestToDept: resolveRequestFormToDeptId(u, state.requestTimetableDept),
         requestSlot: {
           day: el.dataset.slotDay,
@@ -5797,6 +6152,202 @@ function bindPage(){
     if (isDean && (state.modal.type === 'addSchedule' || state.modal.type === 'viewSchedule')) return;
     if (state.modal.type === 'addCurriculum' && !canUserMutateCurriculum(state.currentUser)) return;
     let mt = state.modal.type;
+    if (mt === 'editSystemAccount') {
+      let meta = state.modal.data || {};
+      let originalEmail = String(meta.originalEmail || '').trim().toLowerCase();
+      let name = String(document.getElementById('acct_edit_name')?.value || '').trim();
+      let email = String(document.getElementById('acct_edit_email')?.value || '').trim().toLowerCase();
+      let role = document.getElementById('acct_edit_role')?.value === 'admin' ? 'admin' : 'chairperson';
+      let dept = String(document.getElementById('acct_edit_dept')?.value || '').trim();
+      if (!originalEmail || !email || !name) {
+        showFormValidationBanner('acctEditAlert', 'Name and email are required.');
+        return;
+      }
+      if (role === 'chairperson' && !dept) {
+        showFormValidationBanner('acctEditAlert', 'Select a department for chair accounts.');
+        return;
+      }
+      if (role === 'admin') dept = '';
+      let baseRow = officialBaseAccountsList().find(u => String(u.email || '').trim().toLowerCase() === originalEmail) || null;
+      let isBase = !!baseRow;
+      let overrides = loadAccountRoleOverrides().filter(x => String(x?.email || '').trim().toLowerCase() !== originalEmail);
+      if (email !== originalEmail) overrides = overrides.filter(x => String(x?.email || '').trim().toLowerCase() !== email);
+      let removed = loadRemovedBaseAccountEmails();
+      if (isBase && originalEmail !== email) removed.add(originalEmail);
+      if (isBase && originalEmail !== email && meta.hadOverride) {
+        /* old slot was shadowed by override; clearing override already handled by filter above */
+      }
+      let id = baseRow?.id || meta.id || `mapped_${email.replace(/[^a-z0-9]/g, '') || 'user'}`;
+      overrides.push({
+        id,
+        name,
+        email,
+        role,
+        dept: role === 'admin' ? '' : dept,
+        initials: initialsFromName(name),
+        updatedAt: new Date().toISOString(),
+      });
+      saveAccountRoleOverrides(overrides);
+      saveRemovedBaseAccountEmails(removed);
+      state.modal = null;
+      showToast('Account updated');
+      render();
+      return;
+    }
+    if (mt === 'approveTeachingAssignment') {
+      let r = state.requests.find(x => x.id === state.modal?.requestId);
+      if (!r) {
+        showFormValidationBanner('taApproveAlert', 'Request not found.');
+        return;
+      }
+      let assignedProfId = (document.getElementById('ta_approve_prof')?.value || '').trim();
+      if (!assignedProfId) {
+        showFormValidationBanner('taApproveAlert', 'Select a faculty member before approving.');
+        return;
+      }
+      if (!window.confirm('Approve this teaching assignment request?')) return;
+      if (hasSupabaseClient()) {
+        const { error } = await window.cenSupabase
+          .from('requests')
+          .update({ status: 'approved', professor_id: assignedProfId, professor_other_name: null })
+          .eq('id', r.id);
+        if (error) {
+          showFormValidationBanner('taApproveAlert', `Unable to approve request in Supabase: ${error.message}`);
+          return;
+        }
+      }
+      r.status = 'approved';
+      r.professorId = assignedProfId;
+      r.professorOtherName = null;
+      if (requestHasPendingRoom(r)) {
+        let pendingTeachReason = r.reason || REQUEST_ROOM_REASON_CHOICES[1];
+        if (!String(pendingTeachReason).includes(REQUEST_ROOM_PENDING_MARKER)) {
+          pendingTeachReason = `${REQUEST_ROOM_PENDING_MARKER}${pendingTeachReason}`;
+        }
+        if (hasSupabaseClient()) {
+          const { error } = await window.cenSupabase
+            .from('requests')
+            .update({ status: 'approved', professor_id: assignedProfId, professor_other_name: null, reason: pendingTeachReason })
+            .eq('id', r.id);
+          if (error) {
+            showFormValidationBanner('taApproveAlert', `Unable to update teaching approval state in Supabase: ${error.message}`);
+            return;
+          }
+        }
+        r.status = 'approved';
+        r.reason = pendingTeachReason;
+        state.modal = null;
+        window.alert('Teaching assignment approved. The requester can now book a room from another department.');
+        render();
+        return;
+      }
+      let assignedProfDept = getProfessor(assignedProfId)?.dept || r.toDept || r.fromDept;
+      let approvedAt = new Date().toISOString();
+      let approvedSched = {
+        id: genId(),
+        subjectId: r.subjectId,
+        professorId: assignedProfId,
+        professorOtherName: null,
+        roomId: r.roomId,
+        roomOtherName: r.roomOtherName || null,
+        dept: assignedProfDept,
+        section: r.section,
+        days: r.days,
+        timeStart: r.timeStart,
+        timeEnd: r.timeEnd,
+        color: 'orange',
+        setLabel: r.setLabel || null,
+        labLabel: r.labLabel || null,
+        schYear: r.schYear || '1st Year',
+        schSem: r.schSem || '1st Semester',
+        schAy: normalizeAcademicYearInput(r.schAy) || normalizeAcademicYearInput(state.termAcademicYear) || DEFAULT_ACADEMIC_YEAR,
+        createdAt: approvedAt,
+      };
+      if (hasSupabaseClient()) {
+        const { error } = await upsertSchedulesDb([approvedSched]);
+        if (error) {
+          showFormValidationBanner('taApproveAlert', `Request approved but schedule insert failed in Supabase: ${error.message}`);
+          return;
+        }
+        await syncSchedulesFromSupabase();
+      } else {
+        state.schedules.push(approvedSched);
+      }
+      state.modal = null;
+      window.alert('This teaching assignment request has been approved and assigned to the selected faculty.');
+      render();
+      return;
+    }
+    if (mt === 'bookTeachingRoom') {
+      let base = state.requests.find(x => x.id === state.modal?.requestId);
+      if (!base) {
+        showFormValidationBanner('bookRoomAlert', 'Teaching approval request not found.');
+        return;
+      }
+      let toDeptPick = (document.getElementById('book_to_dept')?.value || '').trim();
+      let roomId = document.getElementById('book_room')?.value || '';
+      let room = getRoom(roomId);
+      if (!toDeptPick || !roomId) {
+        showFormValidationBanner('bookRoomAlert', MSG_FORM_INCOMPLETE);
+        return;
+      }
+      if (!room || room.dept !== toDeptPick) {
+        showFormValidationBanner('bookRoomAlert', 'Selected room must belong to the selected department.');
+        return;
+      }
+      for (let day of (base.days || [])) {
+        if (roomSlotOccupied(roomId, day, base.timeStart, base.timeEnd)) {
+          showFormValidationBanner('bookRoomAlert', 'That room is no longer free for one of the selected days.');
+          return;
+        }
+      }
+      if (!window.confirm('Send this room request for approval?')) return;
+      let req = {
+        id: genId(),
+        fromDept: base.fromDept,
+        toDept: toDeptPick,
+        roomId,
+        subjectId: base.subjectId,
+        section: base.section,
+        professorId: base.professorId || null,
+        professorOtherName: base.professorOtherName || null,
+        days: Array.isArray(base.days) ? [...base.days] : [],
+        timeStart: base.timeStart,
+        timeEnd: base.timeEnd,
+        schYear: base.schYear,
+        schSem: base.schSem,
+        schAy: normalizeAcademicYearInput(base.schAy) || normalizeAcademicYearInput(state.termAcademicYear) || DEFAULT_ACADEMIC_YEAR,
+        setLabel: base.setLabel || null,
+        labLabel: base.labLabel || null,
+        reason: REQUEST_ROOM_REASON_CHOICES[0],
+        reasonComment: requestReasonCommentDisplayText(base) || 'Room booking after teaching assignment approval',
+        status: 'pending',
+        created: new Date().toISOString().slice(0, 10),
+        parentTeachingRequestId: base.id,
+      };
+      if (hasSupabaseClient()) {
+        insertRequestDb(req)
+          .then(({ error }) => {
+            if (error) {
+              showFormValidationBanner('bookRoomAlert', `Supabase error: ${error.message}`);
+              return;
+            }
+            state.requests.push(req);
+            state.modal = null;
+            showToast('Room request sent');
+            render();
+          })
+          .catch((err) => {
+            showFormValidationBanner('bookRoomAlert', `Supabase error: ${err?.message || 'Unable to save request.'}`);
+          });
+        return;
+      }
+      state.requests.push(req);
+      state.modal = null;
+      showToast('Room request sent');
+      render();
+      return;
+    }
     if (mt === 'viewSchedule') {
       if (state.modal.viewScheduleMode !== 'edit') return;
       let draft = state.modal.data;
@@ -6184,7 +6735,8 @@ function bindPage(){
     }
     if (mt === 'newRequest') {
       let days = [...document.querySelectorAll('#modalBackdrop [id^="rqday_"]:checked')].map(c => c.value);
-      let roomId = document.getElementById('rq_room')?.value || '';
+      let roomChoice = document.getElementById('rq_room')?.value || '';
+      let roomId = roomChoice === '__another_dept_hint__' ? '' : roomChoice;
       let room = getRoom(roomId);
       let section = (document.getElementById('rq_section')?.value || '').trim();
       let timeStart = document.getElementById('rq_timeStart')?.value || '';
@@ -6194,13 +6746,25 @@ function bindPage(){
       let schYear = (document.getElementById('rq_year')?.value || '').trim();
       let schSem = (document.getElementById('rq_sem')?.value || '').trim();
       let schAy = normalizeAcademicYearInput(state.termAcademicYear) || DEFAULT_ACADEMIC_YEAR;
-      let profReq = document.getElementById('rq_professor')?.value || '';
-      let profOtherRq = (document.getElementById('rq_professor_other')?.value || '').trim();
       let toDeptPick = document.getElementById('rq_to_dept')?.value || '';
       let reasonRq = (document.getElementById('rq_reason')?.value || '').trim();
       let reasonCommentRq = (document.getElementById('rq_reason_comment')?.value || '').trim();
       let isTeachingAssignmentReason = reasonRq === REQUEST_ROOM_REASON_CHOICES[1];
-      if (!toDeptPick || !roomId || !subId || !profReq || !section || !days.length || !timeStart || !timeEnd || !schYear || !schSem || !reasonRq) {
+      let needsRoomBookingFollowup = isTeachingAssignmentReason && roomChoice === '__another_dept_hint__';
+      let fallbackRoomIdForPending = '';
+      if (needsRoomBookingFollowup) {
+        let deptRooms = roomsSourceForApp()
+          .filter(x => x.dept === toDeptPick)
+          .sort((a, b) => String(a.name || '').localeCompare(String(b.name || '')));
+        fallbackRoomIdForPending = deptRooms[0]?.id || '';
+        if (!fallbackRoomIdForPending) {
+          showFormValidationBanner('rqFormAlert', 'No room record found for the selected department.');
+          return;
+        }
+      }
+      let profReq = isTeachingAssignmentReason ? '' : (document.getElementById('rq_professor')?.value || '');
+      let profOtherRq = isTeachingAssignmentReason ? '' : (document.getElementById('rq_professor_other')?.value || '').trim();
+      if (!toDeptPick || (!roomId && !needsRoomBookingFollowup) || !subId || (!isTeachingAssignmentReason && !profReq) || !section || !days.length || !timeStart || !timeEnd || !schYear || !schSem || !reasonRq) {
         showFormValidationBanner('rqFormAlert', MSG_FORM_INCOMPLETE);
         return;
       }
@@ -6227,7 +6791,7 @@ function bindPage(){
         return;
       }
       let roomAllowed = room?.dept === toDeptPick || (isTeachingAssignmentReason && room?.dept === state.currentUser.dept);
-      if (!roomAllowed) {
+      if (!needsRoomBookingFollowup && !roomAllowed) {
         showFormValidationBanner('rqFormAlert', isTeachingAssignmentReason
           ? 'Selected room must belong to your department or the selected department.'
           : 'Selected room must belong to the department you are requesting.');
@@ -6241,10 +6805,12 @@ function bindPage(){
         showFormValidationBanner('rqFormAlert', 'End time must be after start time.');
         return;
       }
-      for (let day of days) {
-        if (roomSlotOccupied(roomId, day, timeStart, timeEnd)) {
-          showFormValidationBanner('rqFormAlert', 'That room is no longer free for one of the selected days.');
-          return;
+      if (!needsRoomBookingFollowup) {
+        for (let day of days) {
+          if (roomSlotOccupied(roomId, day, timeStart, timeEnd)) {
+            showFormValidationBanner('rqFormAlert', 'That room is no longer free for one of the selected days.');
+            return;
+          }
         }
       }
       if (!window.confirm(MSG_CONFIRM_SCHEDULE_OR_REQUEST_SAVE)) return;
@@ -6252,11 +6818,11 @@ function bindPage(){
         id: genId(),
         fromDept: state.currentUser.dept,
         toDept: toDeptPick,
-        roomId,
+        roomId: needsRoomBookingFollowup ? fallbackRoomIdForPending : roomId,
         subjectId: subId,
         section,
-        professorId: profReq === PROFESSOR_OTHER_ID ? PROFESSOR_OTHER_ID : profReq || null,
-        professorOtherName: profReq === PROFESSOR_OTHER_ID ? profOtherRq : null,
+        professorId: isTeachingAssignmentReason ? null : (profReq === PROFESSOR_OTHER_ID ? PROFESSOR_OTHER_ID : profReq || null),
+        professorOtherName: isTeachingAssignmentReason ? null : (profReq === PROFESSOR_OTHER_ID ? profOtherRq : null),
         days,
         timeStart,
         timeEnd,
@@ -6265,8 +6831,10 @@ function bindPage(){
         schAy,
         setLabel: setV || null,
         labLabel: null,
-        reason: reasonRq,
-        reasonComment: reasonCommentRq,
+        reason: needsRoomBookingFollowup ? `${REQUEST_ROOM_PENDING_MARKER}${reasonRq}` : reasonRq,
+        reasonComment: needsRoomBookingFollowup
+          ? `${REQUEST_ROOM_PENDING_MARKER}${reasonCommentRq ? ` ${reasonCommentRq}` : ''}`
+          : reasonCommentRq,
         status: 'pending',
         created: new Date().toISOString().slice(0, 10),
       };
@@ -6314,9 +6882,21 @@ function bindPage(){
     let u = state.currentUser;
     openModal({
       type: 'newRequest',
+      requestStep: 1,
       requestToDept: resolveRequestFormToDeptId(u, state.requestTimetableDept),
       ...requestFormBorrowRoomPrefill(),
     });
+  });
+  document.getElementById('rqNextStepBtn')?.addEventListener('click', () => {
+    if (state.modal?.type !== 'newRequest') return;
+    if (!validateRequestFormStepOne(true)) return;
+    state.modal.requestStep = 2;
+    render();
+  });
+  document.getElementById('rqPrevStepBtn')?.addEventListener('click', () => {
+    if (state.modal?.type !== 'newRequest') return;
+    state.modal.requestStep = 1;
+    render();
   });
   document.getElementById('rq_to_dept')?.addEventListener('change', e => {
     if (state.modal?.type !== 'newRequest') return;
@@ -6333,14 +6913,40 @@ function bindPage(){
     if (state.modal?.type !== 'newRequest') return;
     state.modal.requestReasonComment = e.target.value;
   });
+  document.getElementById('rq_room')?.addEventListener('change', e => {
+    if (state.modal?.type !== 'newRequest') return;
+    if (e.target.value !== '__another_dept_hint__') return;
+    document.getElementById('rq_to_dept')?.focus({ preventScroll: true });
+  });
+  document.getElementById('book_to_dept')?.addEventListener('change', e => {
+    if (state.modal?.type !== 'bookTeachingRoom') return;
+    state.modal.bookToDept = e.target.value;
+    render();
+  });
+  document.querySelectorAll('[data-book-room-request]').forEach(el => el.addEventListener('click', () => {
+    let rid = el.getAttribute('data-book-room-request');
+    let base = state.requests.find(x => x.id === rid);
+    if (!base) return;
+    state.modal = {
+      type: 'bookTeachingRoom',
+      requestId: rid,
+      bookToDept: resolveRequestFormToDeptId(state.currentUser, state.requestTimetableDept),
+    };
+    render();
+  }));
   document.querySelectorAll('[data-approve]').forEach(el=>el.addEventListener('click', async ()=>{
     let r=state.requests.find(x=>x.id===el.dataset.approve);
     if (!r) return;
+    if (isTeachingAssignmentRequest(r)) {
+      state.modal = { type: 'approveTeachingAssignment', requestId: r.id };
+      render();
+      return;
+    }
     if (!window.confirm('Are you sure you want to accept this request?')) return;
     if (hasSupabaseClient()) {
       const { error } = await window.cenSupabase
         .from('requests')
-        .update({ status: 'approved' })
+          .update({ status: 'approved' })
         .eq('id', r.id);
       if (error) {
         window.alert(`Unable to accept request in Supabase: ${error.message}`);
@@ -6348,6 +6954,19 @@ function bindPage(){
       }
     }
     r.status='approved';
+    if (r.parentTeachingRequestId) {
+      let parentReq = state.requests.find(x => x.id === r.parentTeachingRequestId);
+      if (parentReq) {
+        parentReq.status = 'approved';
+        parentReq.reason = requestReasonDisplayText(parentReq);
+      }
+      if (hasSupabaseClient()) {
+        await window.cenSupabase
+          .from('requests')
+          .update({ status: 'approved', reason: requestReasonDisplayText(parentReq) })
+          .eq('id', r.parentTeachingRequestId);
+      }
+    }
     let approvedAt = new Date().toISOString();
     let approvedSched = {id:genId(),subjectId:r.subjectId,professorId:r.professorId||null,professorOtherName:r.professorOtherName||null,roomId:r.roomId,roomOtherName:r.roomOtherName||null,dept:r.fromDept,section:r.section,days:r.days,timeStart:r.timeStart,timeEnd:r.timeEnd,color:'orange',setLabel:r.setLabel||null,labLabel:r.labLabel||null,schYear:r.schYear||'1st Year',schSem:r.schSem||'1st Semester',schAy:normalizeAcademicYearInput(r.schAy)||normalizeAcademicYearInput(state.termAcademicYear)||DEFAULT_ACADEMIC_YEAR,createdAt:approvedAt};
     if (hasSupabaseClient()) {
@@ -6429,6 +7048,7 @@ function bindPage(){
   }));
   document.getElementById('curriculumYearFilter')?.addEventListener('change', e => {
     state.curriculumYearFilter = e.target.value || 'all';
+    state.curriculumSectionFilter = 'all';
     state.curriculumTableEditId = null;
     render();
   });
@@ -6748,6 +7368,12 @@ function bindPage(){
   }
   document.getElementById('curriculumDeptFilter')?.addEventListener('change', e => {
     state.curriculumDeptFilter = e.target.value || (DEPARTMENTS[0] && DEPARTMENTS[0].id) || '';
+    state.curriculumSectionFilter = 'all';
+    state.curriculumTableEditId = null;
+    render();
+  });
+  document.getElementById('curriculumSectionFilter')?.addEventListener('change', e => {
+    state.curriculumSectionFilter = e.target.value || 'all';
     state.curriculumTableEditId = null;
     render();
   });
@@ -6786,6 +7412,76 @@ function bindPage(){
       }
     }
     state.professors=state.professors.filter(p=>p.id!==el.dataset.delprof);showToast('Professor deleted');render();
+  }));
+  document.querySelectorAll('[data-assign-pending]').forEach(btn => btn.addEventListener('click', () => {
+    let email = String(btn.getAttribute('data-assign-pending') || '').trim().toLowerCase();
+    if (!email) return;
+    let row = btn.closest('tr');
+    let dept = String(row?.querySelector('.pending-assign-dept')?.value || '').trim();
+    if (!dept) {
+      showToast('Choose a department before assigning.');
+      return;
+    }
+    let pending = loadPendingAccounts();
+    let picked = pending.find(x => String(x?.email || '').trim().toLowerCase() === email);
+    let displayName = String(picked?.name || email.split('@')[0] || 'User').trim();
+    let overrides = loadAccountRoleOverrides().filter(x => String(x?.email || '').trim().toLowerCase() !== email);
+    overrides.push({
+      id: `mapped_${email.replace(/[^a-z0-9]/g, '')}`,
+      name: displayName,
+      email,
+      role: 'chairperson',
+      dept,
+      initials: initialsFromName(displayName),
+      assignedAt: new Date().toISOString(),
+    });
+    saveAccountRoleOverrides(overrides);
+    savePendingAccounts(pending.filter(x => String(x?.email || '').trim().toLowerCase() !== email));
+    showToast(`Assigned ${displayName} as ${String(getDept(dept)?.code || dept)} Chair.`);
+    render();
+  }));
+  document.querySelectorAll('[data-del-pending]').forEach(btn => btn.addEventListener('click', () => {
+    let email = String(btn.getAttribute('data-del-pending') || '').trim().toLowerCase();
+    if (!email) return;
+    if (!window.confirm(`Remove this pending request for ${email}?`)) return;
+    let pending = loadPendingAccounts().filter(x => String(x?.email || '').trim().toLowerCase() !== email);
+    savePendingAccounts(pending);
+    showToast('Pending request removed');
+    render();
+  }));
+  document.querySelectorAll('[data-edit-mapped]').forEach(btn => btn.addEventListener('click', () => {
+    if (state.currentUser?.role !== 'admin') return;
+    let email = String(btn.getAttribute('data-edit-mapped') || '').trim().toLowerCase();
+    if (!email) return;
+    let cur = getMergedSystemAccountByEmail(email);
+    if (!cur) return;
+    let src = String(btn.getAttribute('data-mapped-source') || '');
+    let hadOverride = String(btn.getAttribute('data-has-override') || '') === '1';
+    openModal({
+      type: 'editSystemAccount',
+      data: {
+        ...cur,
+        originalEmail: email,
+        hadOverride,
+        source: src,
+      },
+    });
+  }));
+  document.querySelectorAll('[data-del-mapped]').forEach(btn => btn.addEventListener('click', () => {
+    if (state.currentUser?.role !== 'admin') return;
+    let email = String(btn.getAttribute('data-del-mapped') || '').trim().toLowerCase();
+    if (!email) return;
+    let src = String(btn.getAttribute('data-mapped-source') || '');
+    let hasOverride = String(btn.getAttribute('data-has-override') || '') === '1';
+    if (!window.confirm(`Delete account row for ${email}?`)) return;
+    let overrides = loadAccountRoleOverrides();
+    if (hasOverride) overrides = overrides.filter(x => String(x?.email || '').trim().toLowerCase() !== email);
+    let removed = loadRemovedBaseAccountEmails();
+    if (!hasOverride && src === 'base') removed.add(email);
+    saveAccountRoleOverrides(overrides);
+    saveRemovedBaseAccountEmails(removed);
+    showToast('Account removed from list');
+    render();
   }));
   /** When "Others:" is chosen, swap dropdown for text input in the same slot; "List" restores the dropdown. */
   function bindProfessorOtherSwap(prefix) {
@@ -6870,8 +7566,20 @@ function bindPage(){
   bindRoomOtherSwap('vs_room');
   if (state.modal?.type === 'newRequest') {
     queueMicrotask(() => {
-      document.getElementById('rq_reason')?.focus({ preventScroll: true });
+      if (currentRequestFormStep() === 2) {
+        (document.getElementById('rq_professor') || document.getElementById('rq_to_dept'))?.focus({ preventScroll: true });
+      } else {
+        document.getElementById('rq_reason')?.focus({ preventScroll: true });
+      }
       refreshRequestSetLabUi();
+    });
+  }
+  if (state.modal?.type === 'editSystemAccount') {
+    queueMicrotask(() => {
+      let roleEl = document.getElementById('acct_edit_role');
+      if (roleEl) roleEl.onchange = syncSystemAccountDeptFieldUi;
+      syncSystemAccountDeptFieldUi();
+      document.getElementById('acct_edit_name')?.focus({ preventScroll: true });
     });
   }
   function syncRequestFormSectionAndSubject() {

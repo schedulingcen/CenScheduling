@@ -577,7 +577,7 @@ const REQUESTS = [
   { id:'req7', fromDept:'cpe', toDept:'ee', roomId:'ee_mdhp211', subjectId:'s_cpe_MAT04', section:'BSCPE IGE', professorId:'p_cpe_3', days:['Thursday'], timeStart:'16:00', timeEnd:'17:30', reason:'Make-up class', status:'pending', created:'2026-01-16' },
   { id:'req8', fromDept:'ece', toDept:'ie', roomId:'lab_ie_a', subjectId:'s7', section:'BSECE IGG', professorId:'p_ece_2', days:['Tuesday'], timeStart:'13:30', timeEnd:'16:00', reason:'Lab equipment', status:'declined', created:'2026-01-05' },
   { id:'req9', fromDept:'ee', toDept:'cpe', roomId:'lab_cpe_b', subjectId:'s4', section:'BSEE IGI', professorId:'p_ee_3', days:['Monday','Wednesday'], timeStart:'15:00', timeEnd:'16:30', reason:'Circuits lab overflow', status:'pending', created:'2026-01-17' },
-  /** Prototype incoming (IE chair demo login: ie.chair@plm.edu.ph) — ensures a visible Requests notification. */
+  /** Prototype incoming (IE chair demo login: ie.chair@slsu.edu.ph) — ensures a visible Requests notification. */
   { id:'req_proto_demo', fromDept:'me', toDept:'ie', roomId:'ie_mdhp307', subjectId:'s6', section:'BSME IGM', professorId:'p_me_3', days:['Friday'], timeStart:'10:30', timeEnd:'12:00', reason:'[Demo prototype] Borrow IE classroom for cross-dept activity', status:'pending', created:'2026-04-18' },
 ];
 
