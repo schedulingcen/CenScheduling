@@ -1480,18 +1480,12 @@ function timetableTimeEndChoices() {
 function timetableTimeStartChoices() {
   return timeSlots.filter(t => t < TIMETABLE_DAY_CLOSE);
 }
-/** Timetable day columns: IE is Mon–Fri only; every other program includes Saturday. */
-function timetableDayColumnsForDept(deptId) {
-  if (deptId === 'ie') return DAYS;
+/** Timetable day columns: Mon–Saturday for all programs (including Industrial Engineering). */
+function timetableDayColumnsForDept(_deptId) {
   return DAYS_WITH_SATURDAY;
 }
-/** When a room (or mixed) view can show classes from multiple programs, use Saturday unless every row is IE. */
-function timetableDayColumnsForSchedules(scheds, fallbackDeptId) {
-  if (Array.isArray(scheds) && scheds.length) {
-    let depts = [...new Set(scheds.map(s => s && s.dept).filter(Boolean))];
-    if (depts.length && depts.every(d => d === 'ie')) return DAYS;
-    return DAYS_WITH_SATURDAY;
-  }
+/** Day columns for filtered schedule view; same Mon–Sat grid as single-department view. */
+function timetableDayColumnsForSchedules(_scheds, fallbackDeptId) {
   return timetableDayColumnsForDept(fallbackDeptId);
 }
 /** Department that defines the schedule tab timetable columns for the current user/filters. */
@@ -1499,9 +1493,6 @@ function timetableGridDeptForSchedulePage(u) {
   if (!u) return null;
   if (u.role !== 'admin') return u.dept;
   return state.filterDept && state.filterDept !== 'all' ? state.filterDept : null;
-}
-function saturdayNotAllowedMessage() {
-  return 'Industrial Engineering (IE) does not use Saturday. Uncheck Saturday or pick another department.';
 }
 function timeRangesOverlap(aStart, aEnd, bStart, bEnd) { return aStart < bEnd && aEnd > bStart; }
 function scheduleRoomOccupancyKey(s) {
@@ -2319,9 +2310,8 @@ function dashboardScheduleSummarySchedules() {
   let term = currentTermFilter();
   return state.schedules.filter(s => scheduleMatchesCurrentTerm(s, term));
 }
-/** IE program timetables omit Saturday (see `timetableDayColumnsForDept`); match that here so chairs do not pick Saturday and see an empty summary. */
-function dashboardSummaryDayOptionsForUser(u) {
-  if (u?.role === 'chairperson' && u.dept === 'ie') return DAYS;
+/** Schedule Summary day dropdown: Mon–Sat for all users (same as timetable). */
+function dashboardSummaryDayOptionsForUser(_u) {
   return DAYS_WITH_SATURDAY;
 }
 /** Chairpersons may edit or delete only schedules for their own department (e.g. college-wide Schedule Summary is view-only for others' bookings). */
@@ -2472,8 +2462,8 @@ function renderSidebar() {
       <div class="nav-section-label">Navigation</div>
       ${nav('dashboard','home','Dashboard')}
       ${nav('schedule','calendar','Schedule')}
-      ${u.role === 'chairperson' ? `<a href="${pageHref('forms')}#forms" class="nav-item ${state.page === 'forms' ? 'active' : ''}"><span class="nav-icon">${icon('fileText', 18)}</span>Forms</a>` : ''}
       ${u.role === 'chairperson' || u.role === 'admin' ? nav('requests', 'refresh', 'Requests', requestsExtra) : ''}
+      ${u.role === 'chairperson' ? `<a href="${pageHref('forms')}#forms" class="nav-item ${state.page === 'forms' ? 'active' : ''}"><span class="nav-icon">${icon('fileText', 18)}</span>Forms</a>` : ''}
       <div class="nav-section-label" style="margin-top:8px">Manage</div>
       ${utilitiesNav}
       ${curriculumNav}
@@ -2740,7 +2730,7 @@ function renderTimetableGrid(scheds, gridOpts) {
   let requestView = !!gridOpts.requestView;
   let requestCellClick = requestView && gridOpts.requestCellClick !== false;
   let requestBusyClickable = requestView && gridOpts.requestBusyClickable === true;
-  let dayCols = gridOpts.timetableDays || DAYS;
+  let dayCols = gridOpts.timetableDays || DAYS_WITH_SATURDAY;
   let { conflictSinceById, conflictIds } = syncConflictHighlightsAndIds();
   let emptyTitle = requestView
     ? (requestCellClick
@@ -3545,7 +3535,7 @@ function roomsForRequestDeptTimetable(deptId) {
   });
 }
 
-/** Requests · Available Rooms: always Mon–Sat columns so Saturday appears even when filtering IE classrooms. */
+/** Requests · Available Rooms: Mon–Sat timetable (all programs, including IE). */
 function renderRequestDeptDayTimetable(u) {
   normalizeRequestTimetableFilters();
   let term = currentTermFilter();
@@ -5847,10 +5837,6 @@ function bindPage(){
         showFormValidationBanner('vsConflictAlert', MSG_FORM_INCOMPLETE);
         return;
       }
-      if (deptVal === 'ie' && days.includes('Saturday')) {
-        showFormValidationBanner('vsConflictAlert', saturdayNotAllowedMessage());
-        return;
-      }
       if (profId === PROFESSOR_OTHER_ID && !profOtherTxt) {
         showFormValidationBanner('vsConflictAlert', 'Enter the professor or instructor name when Others is selected.');
         return;
@@ -5988,10 +5974,6 @@ function bindPage(){
       }
       if (timeToRow(entry.timeEnd) <= timeToRow(entry.timeStart)) {
         showFormValidationBanner('conflictAlert', 'End time must be after start time.');
-        return;
-      }
-      if (entryDept === 'ie' && days.includes('Saturday')) {
-        showFormValidationBanner('conflictAlert', saturdayNotAllowedMessage());
         return;
       }
       if (!window.confirm(MSG_CONFIRM_SCHEDULE_OR_REQUEST_SAVE)) return;
@@ -6255,10 +6237,6 @@ function bindPage(){
       }
       if (timeToRow(timeEnd) <= timeToRow(timeStart)) {
         showFormValidationBanner('rqFormAlert', 'End time must be after start time.');
-        return;
-      }
-      if (toDeptPick === 'ie' && days.includes('Saturday')) {
-        showFormValidationBanner('rqFormAlert', saturdayNotAllowedMessage());
         return;
       }
       for (let day of days) {
