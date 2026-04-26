@@ -25,6 +25,8 @@ const ICONS = {
   logOut: '<path d="M9 21H5a2 2 0 0 1-2-2V5a2 2 0 0 1 2-2h4"/><polyline points="16 17 21 12 16 7"/><line x1="21" y1="12" x2="9" y2="12"/>',
   plus: '<line x1="12" y1="5" x2="12" y2="19"/><line x1="5" y1="12" x2="19" y2="12"/>',
   edit: '<path d="M17 3a2.828 2.828 0 1 1 4 4L7.5 20.5 2 22l1.5-5.5L17 3z"/>',
+  download: '<path d="M21 15v4a2 2 0 0 1-2 2H5a2 2 0 0 1-2-2v-4"/><polyline points="7 10 12 15 17 10"/><line x1="12" y1="15" x2="12" y2="3"/>',
+  eye: '<path d="M1 12s4-7 11-7 11 7 11 7-4 7-11 7-11-7-11-7z"/><circle cx="12" cy="12" r="3"/>',
 };
 function icon(name, size = 16) {
   const inner = ICONS[name] || ICONS.close;
@@ -379,6 +381,11 @@ function hydratePersistedData() {
     if (o.dashboardSummaryDay != null && typeof o.dashboardSummaryDay === 'string' && DAYS_WITH_SATURDAY.includes(o.dashboardSummaryDay)) {
       state.dashboardSummaryDay = o.dashboardSummaryDay;
     }
+    if (o.formsAcademicYear != null) state.formsAcademicYear = normalizeAcademicYearInput(o.formsAcademicYear) || '';
+    if (o.formsSemester != null) state.formsSemester = o.formsSemester;
+    if (o.formsYearLevel != null) state.formsYearLevel = o.formsYearLevel;
+    if (o.formsSection != null) state.formsSection = o.formsSection;
+    if (o.formsFacultyId != null) state.formsFacultyId = o.formsFacultyId;
   } catch (e) { /* ignore */ }
 }
 
@@ -435,6 +442,11 @@ function persistAppData() {
       facultySearchQuery: state.facultySearchQuery,
       suppressedRoomIds: state.suppressedRoomIds,
       dashboardSummaryDay: state.dashboardSummaryDay,
+      formsAcademicYear: state.formsAcademicYear,
+      formsSemester: state.formsSemester,
+      formsYearLevel: state.formsYearLevel,
+      formsSection: state.formsSection,
+      formsFacultyId: state.formsFacultyId,
     })
   );
 }
@@ -485,6 +497,12 @@ let state = {
   facultySearchQuery: '',
   /** Without Supabase, deleted bundled-room ids stay hidden until session clears. */
   suppressedRoomIds: [],
+  /** Chair Forms page: default synced from top-bar term on first open (see `normalizeFormsPageState`). */
+  formsAcademicYear: '',
+  formsSemester: '',
+  formsYearLevel: 'all',
+  formsSection: 'all',
+  formsFacultyId: '',
 };
 let nextId = 100;
 const genId = () => `id_${Date.now().toString(36)}_${Math.random().toString(36).slice(2, 10)}`;
@@ -2365,7 +2383,7 @@ function renderSidebar() {
       <div class="nav-section-label">Navigation</div>
       ${nav('dashboard','home','Dashboard')}
       ${nav('schedule','calendar','Schedule')}
-      ${u.role === 'chairperson' ? nav('forms', 'fileText', 'Forms') : ''}
+      ${u.role === 'chairperson' ? `<a href="${pageHref('forms')}#forms" class="nav-item ${state.page === 'forms' ? 'active' : ''}"><span class="nav-icon">${icon('fileText', 18)}</span>Forms</a>` : ''}
       ${u.role === 'chairperson' || u.role === 'admin' ? nav('requests', 'refresh', 'Requests', requestsExtra) : ''}
       <div class="nav-section-label" style="margin-top:8px">Manage</div>
       ${utilitiesNav}
@@ -4066,8 +4084,479 @@ function renderRoomPage() {
     </div></div>`;
 }
 
+const FORMS_DOC_BADGE = {
+  faculty: { class: 'forms-doc-badge--ins', text: 'AA-INS' },
+  preenroll: { class: 'forms-doc-badge--mis', text: 'OP-MIS' },
+  schedule: { class: 'forms-doc-badge--ins2', text: 'AA-INS' },
+};
+
+/** Days → compact schedule label (e.g. MW, TTh, MWF) for form exports. */
+function scheduleDaysToAbbrev(days) {
+  if (!Array.isArray(days) || !days.length) return '—';
+  const order = Array.isArray(DAYS_WITH_SATURDAY) ? DAYS_WITH_SATURDAY : DAYS;
+  const ab = { Monday: 'M', Tuesday: 'T', Wednesday: 'W', Thursday: 'Th', Friday: 'F', Saturday: 'Sat' };
+  const sorted = days.filter(d => order.includes(d)).sort((a, b) => order.indexOf(a) - order.indexOf(b));
+  return sorted.length ? sorted.map(d => ab[d] || d.slice(0, 2)).join('') : '—';
+}
+
+function normalizeFormsPageState() {
+  let ay = normalizeAcademicYearInput(state.formsAcademicYear) || '';
+  if (!ay) {
+    ay = normalizeAcademicYearInput(state.termAcademicYear) || DEFAULT_ACADEMIC_YEAR;
+    state.formsAcademicYear = ay;
+  } else {
+    state.formsAcademicYear = ay;
+  }
+  if (!state.formsSemester || !SCHEDULE_FORM_SEMS.includes(state.formsSemester)) {
+    state.formsSemester = state.termSemester || '1st Semester';
+  }
+  if (!['all', ...SCHEDULE_FORM_YEARS].includes(state.formsYearLevel)) state.formsYearLevel = 'all';
+  if (state.formsSection == null) state.formsSection = 'all';
+}
+
+function formsDeptIdForUser(u) {
+  return (u && u.role === 'chairperson' && u.dept) ? u.dept : '';
+}
+
+function scheduleMatchesFormsFilters(s, f) {
+  if (!s) return false;
+  if (scheduleAcademicYearForFilter(s) !== f.ay) return false;
+  if ((s.schSem || '').trim() !== f.sem) return false;
+  if (s.dept !== f.dept) return false;
+  if (f.yearLevel && f.yearLevel !== 'all') {
+    let sy = (s.schYear || '').trim();
+    if (sy) {
+      if (sy !== f.yearLevel) return false;
+    } else {
+      if (sectionYearFromLabel(s.section) !== f.yearLevel) return false;
+    }
+  }
+  if (f.section && f.section !== 'all') {
+    if (String(s.section || '').trim() !== f.section) return false;
+  }
+  return true;
+}
+
+function getFormsFilterContext() {
+  normalizeFormsPageState();
+  let fsel = typeof document !== 'undefined' && document.getElementById('formsFacultySelect');
+  if (fsel && fsel.value) state.formsFacultyId = fsel.value;
+  let u = state.currentUser;
+  let dept = formsDeptIdForUser(u);
+  if (!dept) {
+    return null;
+  }
+  let ay = normalizeAcademicYearInput(state.formsAcademicYear) || DEFAULT_ACADEMIC_YEAR;
+  let sem = state.formsSemester || '1st Semester';
+  let yearLevel = state.formsYearLevel || 'all';
+  let section = state.formsSection || 'all';
+  let f = { ay, sem, dept, yearLevel, section };
+  let scheds = state.schedules.filter(s => scheduleMatchesFormsFilters(s, f));
+  scheds.sort((a, b) => {
+    let ca = (getSubject(a.subjectId)?.code || '').localeCompare(getSubject(b.subjectId)?.code || '');
+    if (ca !== 0) return ca;
+    return String(a.section || '').localeCompare(String(b.section || ''));
+  });
+  return {
+    ay,
+    sem,
+    dept,
+    yearLevel,
+    section,
+    facultyId: state.formsFacultyId || '',
+    scheds,
+    chair: u,
+    chairName: u?.name || 'Program Chair',
+    deptName: getDept(dept)?.name || 'Engineering',
+    deptCode: getDept(dept)?.code || String(dept).toUpperCase(),
+  };
+}
+
+function formsSemesterSpelled(sem) {
+  if (sem === '2nd Semester') return '2nd';
+  if (sem === '1st Semester') return '1st';
+  return (sem || '').toLowerCase();
+}
+
+function formsPrintShellDocument(title, innerBody) {
+  return `<!DOCTYPE html><html lang="en"><head><meta charset="utf-8"><title>${escapeHtml(
+    title,
+  )}</title><style>
+@page { size: A4; margin: 12mm; }
+body { font-family: 'Times New Roman', Times, serif; font-size: 10.5pt; color: #111; line-height: 1.25; }
+h1.doc-title { text-align: center; font-size: 13pt; margin: 0 0 6px; text-transform: uppercase; letter-spacing: 0.02em; }
+.slu-line { text-align: center; font-size: 10pt; margin: 0; }
+.slu-line.small { font-size: 9pt; color: #333; }
+.meta-block { margin: 10px 0; font-size: 10pt; }
+.meta-row { display: flex; justify-content: space-between; margin: 2px 0; flex-wrap: wrap; }
+table.form-grid { width: 100%; border-collapse: collapse; margin: 8px 0; }
+table.form-grid th, table.form-grid td { border: 1px solid #222; padding: 4px 5px; vertical-align: top; }
+table.form-grid th { background: #f2f2f2; font-size: 8.5pt; text-align: center; }
+.t-right { text-align: right; }
+.t-center { text-align: center; }
+.sig { margin-top: 20px; display: flex; justify-content: space-between; font-size: 9.5pt; }
+.sig-block { text-align: center; min-width: 200px; }
+.footer-ref { font-size: 8pt; margin-top: 16px; color: #444; }
+@media print { body { -webkit-print-color-adjust: exact; print-color-adjust: exact; } }
+</style></head><body>${innerBody}</body></html>`;
+}
+
+function buildFacultyLoadFormHtml(ctx) {
+  let facultyId = ctx.facultyId;
+  if (!facultyId) {
+    return `<p class="slu-line">Select a faculty member on the Forms page, then export again.</p>`;
+  }
+  let prows = ctx.scheds.filter(s => s.professorId === facultyId);
+  if (prows.length === 0) {
+    return `<h1 class="doc-title">Faculty Load Form</h1>
+<p class="slu-line">SOUTHERN LUZON STATE UNIVERSITY</p>
+<p class="slu-line small">Lucban, Quezon &mdash; COLLEGE OF ENGINEERING</p>
+<p style="margin:12px 0">No scheduled classes in the timetable for the selected filters and this faculty. Add or adjust entries in <strong>Timetable Schedule</strong>, or widen the filters (year level / section).</p>`;
+  }
+  let prof = getProfessor(facultyId);
+  let profName = prof?.name || 'Faculty';
+  let semSpell = formsSemesterSpelled(ctx.sem);
+  let bodyIntro = `Please be informed of your teaching load/assignment in the College of Engineering this ${semSpell} sem AY ${ctx.ay}.`;
+  let unitSum = 0;
+  let prepSet = new Set();
+  let contactSum = 0;
+  let rows = prows.map(s => {
+    let sub = getSubject(s.subjectId);
+    let units = sub && Number.isFinite(Number(sub.units)) ? Number(sub.units) : 0;
+    unitSum += units;
+    if (s.subjectId) prepSet.add(s.subjectId);
+    let wk = scheduleWeeklyHoursFromEntry(s);
+    contactSum += wk;
+    return `<tr>
+  <td>${escapeHtml(sub?.code || '—')}</td>
+  <td>${escapeHtml(sub?.name || '—')}</td>
+  <td class="t-center">${escapeHtml(String(units || '—'))}</td>
+  <td class="t-center">${escapeHtml(formatHoursValue(wk))}</td>
+  <td class="t-center">${escapeHtml(scheduleDaysToAbbrev(s.days))}</td>
+  <td class="t-center">${escapeHtml(fmt12(s.timeStart) + '–' + fmt12(s.timeEnd))}</td>
+  <td>${escapeHtml(roomDisplayLineFromPick(s.roomId, s.roomOtherName))}</td>
+  <td>${escapeHtml(s.section || '—')}</td>
+</tr>`;
+  });
+  for (let i = prows.length; i < 9; i++) {
+    rows.push('<tr><td>&nbsp;</td><td></td><td></td><td></td><td></td><td></td><td></td><td></td></tr>');
+  }
+  return `<h1 class="doc-title">Faculty Load (Teaching Assignment)</h1>
+<p class="slu-line">SOUTHERN LUZON STATE UNIVERSITY</p>
+<p class="slu-line small">Lucban, Quezon</p>
+<p class="slu-line small" style="margin-top:2px">COLLEGE OF ENGINEERING</p>
+<div class="meta-block">
+  <div>${escapeHtml(profName)}</div>
+  <div>College of Engineering</div>
+  <div>SLSU-Lucban, Quezon</div>
+  <p style="margin:10px 0 4px">Dear ${escapeHtml(profName)},</p>
+  <p style="margin:0">${escapeHtml(bodyIntro)}</p>
+</div>
+<table class="form-grid">
+<thead><tr>
+  <th>Code</th><th>Subject</th><th>Units</th><th>Hrs</th>
+  <th>Day</th><th>Time</th><th>Room</th><th>Section/Student</th>
+</tr></thead>
+<tbody>
+${rows.join('')}
+</tbody>
+</table>
+<div class="meta-block" style="display:flex; gap:32px; flex-wrap:wrap;">
+  <div>
+    <div>Number of subjects: <strong>${escapeHtml(String(prepSet.size))}</strong></div>
+    <div>Number of preparations: <strong>${escapeHtml(String(prepSet.size))}</strong></div>
+    <div>Number of units: <strong>${escapeHtml(String(unitSum))}</strong></div>
+  </div>
+  <div>
+    <div>Contact hours (weekly): <strong>${escapeHtml(formatHoursValue(contactSum))}</strong></div>
+    <div>Unit workload: <strong>${escapeHtml(String(unitSum))}</strong></div>
+  </div>
+</div>
+<div class="sig">
+  <div class="sig-block">Noted by:<br/><br/><br/><strong>DR. MARIA CORAZON B. ABEJO</strong><br/>Dean, College of Engineering</div>
+  <div class="sig-block">Approved by:<br/><br/><br/><strong>DR. DHENALYN A. DEJELO</strong><br/>VP for Academic Affairs</div>
+</div>
+<div class="footer-ref" style="margin-top:8px">Prepared for records &mdash; ${escapeHtml(ctx.deptName)}. Filtered data: AY ${escapeHtml(
+    ctx.ay,
+  )} &middot; ${escapeHtml(ctx.sem)}.</div>`;
+}
+
+function buildPreEnrollmentFormHtml(ctx) {
+  let sec = ctx.section;
+  if (!sec || sec === 'all') {
+    return `<h1 class="doc-title">Pre-Enrolment Form</h1>
+<p>Choose a <strong>section</strong> in the filter bar (not &ldquo;All sections&rdquo;) so the subject list matches one class block, then export again.</p>`;
+  }
+  let rows0 = ctx.scheds.filter(s => String(s.section || '').trim() === sec);
+  if (rows0.length === 0) {
+    return `<h1 class="doc-title">Pre-Enrolment Form</h1>
+<p class="slu-line">SOUTHERN LUZON STATE UNIVERSITY &mdash; Lucban, Quezon</p>
+<p style="margin-top:12px">No classes scheduled for <strong>${escapeHtml(sec)}</strong> under the current Academic Year, Semester, and year-level filters. Enter timetabled classes first.</p>`;
+  }
+  let totalU = 0;
+  let bodyRows = rows0.map(s => {
+    let sub = getSubject(s.subjectId);
+    let u = sub && Number.isFinite(Number(sub.units)) ? Number(sub.units) : 0;
+    totalU += u;
+    return `<tr>
+  <td>${escapeHtml(sub?.code || '—')}</td>
+  <td>${escapeHtml(sub?.name || '—')}</td>
+  <td class="t-center">${escapeHtml(String(u))}</td>
+  <td class="t-center">${escapeHtml(roomDisplayLineFromPick(s.roomId, s.roomOtherName))}</td>
+  <td class="t-center">${escapeHtml(scheduleDaysToAbbrev(s.days))}</td>
+  <td class="t-center">${escapeHtml(fmt12(s.timeStart) + '–' + fmt12(s.timeEnd))}</td>
+</tr>`;
+  });
+  return `<h1 class="doc-title">Pre-Enrolment Form</h1>
+<p class="slu-line">SOUTHERN LUZON STATE UNIVERSITY</p>
+<p class="slu-line small">Lucban, Quezon</p>
+<div class="meta-block" style="display:grid; grid-template-columns:1fr 1fr; gap:6px; max-width:100%;">
+  <div>STUDENT NUMBER: ___________________________</div>
+  <div>STUDENT NAME: ___________________________</div>
+  <div>COURSE/YEAR: ___________________________</div>
+  <div>PAYMENT: ☐ FULL &nbsp; ☐ PARTIAL</div>
+  <div>SCHOOL YEAR: <strong>${escapeHtml(ctx.ay)}</strong></div>
+  <div>SEMESTER: <strong>${escapeHtml(ctx.sem)}</strong></div>
+</div>
+<p style="text-align:left; margin:8px 0 4px"><strong>${escapeHtml(sec)}</strong> &nbsp; &nbsp; <span style="text-align:center; display:inline-block; width:60%">SUBJECTS TO BE TAKEN:</span></p>
+<table class="form-grid">
+<thead><tr>
+  <th>Subject code</th><th>Subject description</th><th>Units</th><th>Room</th><th>Day</th><th>Time</th>
+</tr></thead>
+<tbody>
+${bodyRows.join('')}
+<tr><td colspan="2" class="t-right">TOTAL</td><td class="t-center"><strong>${escapeHtml(String(totalU))}</strong></td><td colspan="3"></td></tr>
+</tbody>
+</table>
+<div class="footer-ref">OP-MIS-1.06F1, REV.0 &mdash; AY ${escapeHtml(ctx.ay)} ${escapeHtml(ctx.sem)}. Data from timetable.</div>
+<div class="sig" style="justify-content:flex-end">
+  <div class="sig-block">_________________________<br/>(Dean/Adviser)</div>
+</div>`;
+}
+
+function buildScheduleOfSubjectsHtml(ctx) {
+  if (!ctx.scheds.length) {
+    return `<h1 class="doc-title">Schedule of Subject</h1>
+<p class="slu-line">SOUTHERN LUZON STATE UNIVERSITY</p>
+<p style="margin-top:12px">No schedule rows match the current filters. Adjust <strong>Academic Year</strong>, <strong>Semester</strong>, <strong>Year level</strong>, or <strong>Section</strong>, or add classes in the timetable.</p>`;
+  }
+  let bySection = {};
+  for (let s of ctx.scheds) {
+    let k = String(s.section || '—').trim() || '—';
+    if (!bySection[k]) bySection[k] = [];
+    bySection[k].push(s);
+  }
+  let keys = Object.keys(bySection).sort((a, b) => a.localeCompare(b));
+  let parts = keys.map(k => {
+    let list = bySection[k];
+    let totalU = 0;
+    let inner = list
+      .map(s => {
+        let sub = getSubject(s.subjectId);
+        let u = sub && Number.isFinite(Number(sub.units)) ? Number(sub.units) : 0;
+        totalU += u;
+        return `<tr>
+  <td>${escapeHtml(sub?.code || '—')}</td>
+  <td>${escapeHtml(sub?.name || '—')}</td>
+  <td class="t-center">${escapeHtml(String(u))}</td>
+  <td class="t-center">${escapeHtml(scheduleDaysToAbbrev(s.days))}</td>
+  <td class="t-center">${escapeHtml(fmt12(s.timeStart) + '–' + fmt12(s.timeEnd))}</td>
+  <td>${escapeHtml(roomDisplayLineFromPick(s.roomId, s.roomOtherName))}</td>
+  <td>${escapeHtml(professorDisplayLineFromPick(s.professorId, s.professorOtherName))}</td>
+</tr>`;
+      })
+      .join('');
+    return `<h2 style="font-size:11pt; margin:14px 0 6px">${escapeHtml(k)}</h2>
+<table class="form-grid">
+<thead><tr>
+  <th>Code</th><th>Subject/Description</th><th>Units</th><th>Day</th><th>Time</th><th>Room</th><th>Faculty</th>
+</tr></thead>
+<tbody>
+${inner}
+<tr><td colspan="2" class="t-right">TOTAL</td><td class="t-center"><strong>${escapeHtml(
+      String(totalU),
+    )}</strong></td><td colspan="4"></td></tr>
+</tbody>
+</table>`;
+  });
+  let today = new Date();
+  let dateStr = today.toLocaleDateString('en-PH', { year: 'numeric', month: 'long', day: 'numeric' });
+  return `<h1 class="doc-title">Schedule of Subject</h1>
+<p class="slu-line">SOUTHERN LUZON STATE UNIVERSITY</p>
+<div class="meta-block">
+  <div class="meta-row"><span><strong>To:</strong> VP-ACAD</span><span><strong>From:</strong> ${escapeHtml(
+    ctx.deptName,
+  )} (${escapeHtml(ctx.deptCode)})</span></div>
+  <div class="meta-row"><span><strong>Date:</strong> ${escapeHtml(dateStr)}</span><span><strong>Schedule from Sem/AY:</strong> ${escapeHtml(
+    ctx.sem,
+  )} ${escapeHtml(ctx.ay)}</span></div>
+</div>
+${parts.join('')}
+<div class="sig" style="margin-top:20px">
+  <div class="sig-block">Prepared by:<br/><br/><strong>${escapeHtml(ctx.chairName)}</strong><br/>Dept Prog Chair</div>
+  <div class="sig-block">Noted by:<br/><br/><strong>DR. MARIA CORAZON B. ABEJO</strong><br/>Dean, College of Engineering</div>
+</div>
+<div class="footer-ref">AA-INS-1.03F4.Rev.0 &mdash; ${escapeHtml(ctx.deptName)}. Generated from timetabled data.</div>`;
+}
+
+function openFormsOutput(kind, type) {
+  let ctx = getFormsFilterContext();
+  if (!ctx) {
+    showToast('Unable to build export: sign in as a chairperson.');
+    return;
+  }
+  let inner = '';
+  let title = 'Form';
+  if (type === 'faculty') {
+    title = 'Faculty Load Form';
+    inner = buildFacultyLoadFormHtml(ctx);
+  } else if (type === 'preenroll') {
+    title = 'Pre-Enrolment Form';
+    inner = buildPreEnrollmentFormHtml(ctx);
+  } else if (type === 'schedule') {
+    title = 'Schedule of Subjects';
+    inner = buildScheduleOfSubjectsHtml(ctx);
+  }
+  let full = formsPrintShellDocument(title, inner);
+  let w = window.open('', '_blank', 'noopener,noreferrer');
+  if (!w) {
+    showToast('Allow pop-ups to view or print this form.');
+    return;
+  }
+  w.document.write(full);
+  w.document.close();
+  if (kind === 'print') {
+    setTimeout(() => {
+      try {
+        w.focus();
+        w.print();
+      } catch (e) { /* ignore */ }
+    }, 200);
+  }
+  if (type === 'preenroll' && kind === 'print') {
+    let fname = `Pre-Enrolment-${(ctx.section || 'section').replace(/\s+/g, '-')}-${ctx.ay}.doc`;
+    let wordMime = 'application/msword;charset=utf-8';
+    try {
+      downloadTextFile(fname, full.replace('<!DOCTYPE html>', '\uFEFF<!DOCTYPE html>'), wordMime);
+      showToast('Pre-Enrollment .doc downloaded. Use Print in the tab to save a PDF if needed.');
+    } catch (e) { /* ignore */ }
+  } else if (kind === 'print') {
+    showToast('Form opened — use your browser to print or save as PDF.');
+  }
+}
+
 function renderFormsPage() {
-  return `<div class="card"><div class="card-body"></div></div>`;
+  let u = state.currentUser;
+  if (!u || u.role !== 'chairperson' || !u.dept) {
+    return `<div class="card"><div class="card-body"><p>Forms are available to department chair accounts.</p></div></div>`;
+  }
+  normalizeFormsPageState();
+  let dept = u.dept;
+  let ay = normalizeAcademicYearInput(state.formsAcademicYear) || DEFAULT_ACADEMIC_YEAR;
+  let sem = state.formsSemester || '1st Semester';
+  let ayList = mergeAcademicYearOptions(termAcademicYearOptions(), state.termAcademicYearCustomOptions || []);
+  if (!ayList.includes(ay)) ayList.push(ay);
+  ayList.sort((a, b) => String(a).localeCompare(String(b)));
+  let ayOpts = ayList
+    .map(
+      a =>
+        `<option value="${escapeHtml(a)}" ${a === ay ? 'selected' : ''}>${escapeHtml(a)}</option>`,
+    )
+    .join('');
+  let semOpts = SCHEDULE_FORM_SEMS.map(
+    s => `<option value="${escapeHtml(s)}" ${s === sem ? 'selected' : ''}>${escapeHtml(s)}</option>`,
+  ).join('');
+  let yearOpts =
+    `<option value="all" ${state.formsYearLevel === 'all' ? 'selected' : ''}>All year levels</option>` +
+    SCHEDULE_FORM_YEARS.map(
+      y => `<option value="${escapeHtml(y)}" ${state.formsYearLevel === y ? 'selected' : ''}>${escapeHtml(y)}</option>`,
+    ).join('');
+  let sections = mergeSectionOptions([dept]);
+  let secOpts =
+    `<option value="all" ${state.formsSection === 'all' || !state.formsSection ? 'selected' : ''}>All sections</option>` +
+    sections.map(
+      s =>
+        `<option value="${escapeHtml(s)}" ${String(state.formsSection) === s ? 'selected' : ''}>${escapeHtml(s)}</option>`,
+    ).join('');
+  let profs = state.professors.filter(p => p.dept === dept).sort((a, b) => String(a.name).localeCompare(String(b.name)));
+  if (state.formsFacultyId && !profs.some(p => p.id === state.formsFacultyId)) {
+    state.formsFacultyId = profs[0]?.id || '';
+  }
+  if (!state.formsFacultyId && profs[0]) state.formsFacultyId = profs[0].id;
+  let facOpts = profs.length
+    ? profs
+        .map(
+          p =>
+            `<option value="${escapeHtml(p.id)}" ${p.id === state.formsFacultyId ? 'selected' : ''}>${escapeHtml(p.name)}</option>`,
+        )
+        .join('')
+    : '<option value="">(No faculty in roster)</option>';
+
+  let dLabel = getDept(dept);
+  let deptSelectInner = dLabel
+    ? `<option value="${escapeHtml(dept)}">${escapeHtml(dLabel.code + ' — ' + dLabel.name)}</option>`
+    : '<option value="">—</option>';
+  let strip = `<div class="forms-filter-card card">
+  <div class="forms-filter-heading">
+    <span class="forms-filter-title">Filter forms by</span>
+    <span class="forms-filter-hint">— data will apply to the selected form when exported</span>
+  </div>
+  <div class="forms-filter-bar">
+    <div class="forms-filter-item"><label for="formsFilterAy" class="forms-filter-label">Academic Year</label>
+      <select class="form-select" id="formsFilterAy" aria-label="Academic year">${ayOpts}</select></div>
+    <div class="forms-filter-item"><label for="formsFilterSem" class="forms-filter-label">Semester</label>
+      <select class="form-select" id="formsFilterSem" aria-label="Semester">${semOpts}</select></div>
+    <div class="forms-filter-item"><label for="formsFilterDept" class="forms-filter-label">Department</label>
+      <select class="form-select" id="formsFilterDept" aria-label="Department" disabled
+        title="Your program department">${deptSelectInner}</select></div>
+    <div class="forms-filter-item"><label for="formsYearLevel" class="forms-filter-label">Year level</label>
+      <select class="form-select" id="formsYearLevel" aria-label="Year level">${yearOpts}</select></div>
+    <div class="forms-filter-item"><label for="formsSection" class="forms-filter-label">Section</label>
+      <select class="form-select" id="formsSection" aria-label="Section">${secOpts}</select></div>
+    <div class="forms-filter-item forms-filter-item--action">
+      <span class="forms-filter-label">&nbsp;</span>
+      <button type="button" class="btn btn-outline btn-sm forms-filter-clear" id="formsFilterClear" title="Reset filters" aria-label="Clear filters">${icon(
+    'close',
+    16,
+  )}</button>
+    </div>
+  </div>
+</div>`;
+
+  const card = (fid, title, desc, tagClass, tagLabel, docBadge) => {
+    return `<div class="forms-doc-card" data-form-card="${fid}">
+  <div class="forms-doc-thumb" aria-hidden="true">
+    <span class="forms-doc-thumbnail-grid"></span>
+    <span class="forms-doc-badge ${docBadge.class}">${escapeHtml(docBadge.text)}</span>
+  </div>
+  <h3 class="forms-doc-name">${escapeHtml(title)}</h3>
+  <span class="forms-doc-cat ${tagClass}">${escapeHtml(tagLabel)}</span>
+  <p class="forms-doc-desc">${escapeHtml(desc)}</p>
+  ${
+    fid === 'faculty'
+      ? `<div class="forms-card-faculty-row">
+      <label for="formsFacultySelect" class="forms-inline-label">Faculty (for this form)</label>
+      <select class="form-select" id="formsFacultySelect" aria-label="Faculty for faculty load">${facOpts}</select>
+    </div>`
+      : ''
+  }
+  <div class="forms-doc-actions">
+    <button type="button" class="btn btn-primary forms-export-btn" data-form-export="${fid}">${icon('download', 16)} Export</button>
+    <button type="button" class="btn btn-outline forms-preview-btn" data-form-preview="${fid}" title="Preview" aria-label="Preview">${icon(
+    'eye',
+    16,
+  )}</button>
+  </div>
+</div>`;
+  };
+
+  return `${strip}
+<div class="forms-doc-grid">
+  ${card('faculty', 'Faculty Load Form', 'Teaching load and assignment letter per professor for the semester.', 'forms-tag--faculty', 'Per Faculty', FORMS_DOC_BADGE.faculty)}
+  ${card('preenroll', 'Pre-Enrollment Form', 'Subjects to be taken by students per section with room and schedule.', 'forms-tag--section', 'Per Section', FORMS_DOC_BADGE.preenroll)}
+  ${card('schedule', 'Schedule of Subjects', 'Official schedule submitted to VP-ACAD per department and section.', 'forms-tag--section2', 'Per Section', FORMS_DOC_BADGE.schedule)}
+</div>
+<p class="forms-footnote">Export opens a printable document. Use your browser&rsquo;s print dialog to save as PDF. Pre-Enrollment also downloads a Word-compatible <strong>.doc</strong> file. Data is taken from the <strong>Timetable Schedule</strong> for the filters above (and faculty, for the Faculty Load form).</p>`;
 }
 
 function renderFaculty() {
@@ -5604,6 +6093,57 @@ function bindPage(){
       } catch (err) {
         /* ignore */
       }
+    });
+  });
+  document.getElementById('formsFilterAy')?.addEventListener('change', e => {
+    state.formsAcademicYear = normalizeAcademicYearInput(e.target.value) || DEFAULT_ACADEMIC_YEAR;
+    render();
+  });
+  document.getElementById('formsFilterSem')?.addEventListener('change', e => {
+    state.formsSemester = e.target.value || '1st Semester';
+    render();
+  });
+  document.getElementById('formsYearLevel')?.addEventListener('change', e => {
+    state.formsYearLevel = e.target.value || 'all';
+    render();
+  });
+  document.getElementById('formsSection')?.addEventListener('change', e => {
+    let v = e.target.value || 'all';
+    state.formsSection = v === 'all' ? 'all' : v;
+    render();
+  });
+  document.getElementById('formsFacultySelect')?.addEventListener('change', e => {
+    state.formsFacultyId = e.target.value || '';
+    persistAppData();
+  });
+  document.getElementById('formsFilterClear')?.addEventListener('click', () => {
+    state.formsAcademicYear = normalizeAcademicYearInput(state.termAcademicYear) || DEFAULT_ACADEMIC_YEAR;
+    state.formsSemester = state.termSemester || '1st Semester';
+    state.formsYearLevel = 'all';
+    state.formsSection = 'all';
+    let u = state.currentUser;
+    if (u?.dept) {
+      let fp = state.professors
+        .filter(p => p.dept === u.dept)
+        .sort((a, b) => String(a.name).localeCompare(String(b.name)));
+      state.formsFacultyId = fp[0]?.id || '';
+    }
+    render();
+  });
+  document.querySelectorAll('[data-form-preview]').forEach(btn => {
+    btn.addEventListener('click', () => {
+      let t = btn.getAttribute('data-form-preview');
+      let fac = document.getElementById('formsFacultySelect');
+      if (fac) state.formsFacultyId = fac.value;
+      openFormsOutput('view', t);
+    });
+  });
+  document.querySelectorAll('[data-form-export]').forEach(btn => {
+    btn.addEventListener('click', () => {
+      let t = btn.getAttribute('data-form-export');
+      let fac = document.getElementById('formsFacultySelect');
+      if (fac) state.formsFacultyId = fac.value;
+      openFormsOutput('print', t);
     });
   });
   document.getElementById('addSectionBtn')?.addEventListener('click', () => {
