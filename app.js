@@ -236,6 +236,72 @@ function getStateRequestById(requestId) {
   if (requestId === null || requestId === undefined || requestId === '') return null;
   return state.requests.find(x => String(x.id) === String(requestId)) || null;
 }
+/** Child room requests created after teaching approval (`parent_teaching_request_id`). */
+function requestsLinkedToTeachingParent(parentId) {
+  if (parentId == null || parentId === '') return [];
+  let pid = String(parentId);
+  return state.requests.filter(r => r.parentTeachingRequestId != null && String(r.parentTeachingRequestId) === pid);
+}
+function requestDaysSortedKey(req) {
+  return JSON.stringify([...(Array.isArray(req?.days) ? req.days : [])].map(String).sort());
+}
+/**
+ * Pending follow-up room rows for a teaching parent. Uses DB link when present; otherwise a single-row heuristic
+ * when `parent_teaching_request_id` was never persisted (legacy DB).
+ */
+function pendingTeachingRoomFollowupsForParent(parentReq) {
+  if (!parentReq) return [];
+  let linked = requestsLinkedToTeachingParent(parentReq.id).filter(r => isPendingRequestStatus(r.status));
+  if (linked.length) return linked;
+  let candidates = state.requests.filter(
+    r =>
+      r &&
+      r.id !== parentReq.id &&
+      !r.parentTeachingRequestId &&
+      isPendingRequestStatus(r.status) &&
+      r.fromDept === parentReq.fromDept &&
+      r.subjectId === parentReq.subjectId &&
+      (r.section || '') === (parentReq.section || '') &&
+      r.timeStart === parentReq.timeStart &&
+      r.timeEnd === parentReq.timeEnd &&
+      requestDaysSortedKey(r) === requestDaysSortedKey(parentReq) &&
+      String(r.reason || '').trim() === String(REQUEST_ROOM_REASON_CHOICES[0]).trim() &&
+      (r.professorId || null) === (parentReq.professorId || null) &&
+      String(r.professorOtherName || '') === String(parentReq.professorOtherName || ''),
+  );
+  if (candidates.length === 1) return candidates;
+
+  let termAy = normalizeAcademicYearInput(parentReq.schAy) || DEFAULT_ACADEMIC_YEAR;
+  let loose = state.requests.filter(
+    r2 =>
+      r2 &&
+      r2.id !== parentReq.id &&
+      isPendingRequestStatus(r2.status) &&
+      r2.fromDept === parentReq.fromDept &&
+      r2.toDept &&
+      r2.toDept !== parentReq.fromDept &&
+      r2.subjectId === parentReq.subjectId &&
+      (r2.section || '') === (parentReq.section || '') &&
+      (r2.schSem || '') === (parentReq.schSem || '') &&
+      (r2.schYear || '') === (parentReq.schYear || '') &&
+      (normalizeAcademicYearInput(r2.schAy) || DEFAULT_ACADEMIC_YEAR) === termAy &&
+      r2.timeStart === parentReq.timeStart &&
+      r2.timeEnd === parentReq.timeEnd &&
+      requestDaysSortedKey(r2) === requestDaysSortedKey(parentReq) &&
+      r2.roomId &&
+      r2.roomId !== REQUEST_ROOM_PENDING_ID,
+  );
+  if (!loose.length) return [];
+  let pid = String(parentReq.id);
+  let linkedLoose = loose.filter(x => x.parentTeachingRequestId != null && String(x.parentTeachingRequestId) === pid);
+  return linkedLoose.length ? linkedLoose : loose;
+}
+function firstPendingTeachingRoomFollowup(parentReq) {
+  let list = pendingTeachingRoomFollowupsForParent(parentReq);
+  if (!list.length) return null;
+  let pid = String(parentReq.id);
+  return list.find(x => x.parentTeachingRequestId != null && String(x.parentTeachingRequestId) === pid) || list[0];
+}
 function scheduleAcademicYearForFilter(s) {
   return normalizeAcademicYearInput(s.schAy) || DEFAULT_ACADEMIC_YEAR;
 }
@@ -4046,8 +4112,11 @@ function renderRequests() {
                         : '';
                       const noteText = (requestReasonCommentDisplayText(r) || requestReasonDisplayText(r) || '').trim();
                       const roomPending = requestHasPendingRoom(r);
+                      const roomFollowPending = hasPendingRoomRequestForTeachingParent(r.id);
                       const actionButtons = requesterBooking
-                        ? `<button type="button" class="btn btn-outline btn-sm" data-book-room-request="${escapeHtml(r.id)}">${icon('calendar', 14)} Book a room</button>`
+                        ? roomFollowPending
+                          ? `<span class="request-book-room-sent-pill" aria-disabled="true">${icon('calendar', 14)} Room request pending</span>`
+                          : `<button type="button" class="btn btn-outline btn-sm" data-book-room-request="${escapeHtml(r.id)}">${icon('calendar', 14)} Book a room</button>`
                         : `<button type="button" class="btn btn-green btn-sm" data-approve="${r.id}">${icon('check', 14)} Accept</button>
                       <button type="button" class="btn btn-danger btn-sm" data-decline="${escapeHtml(String(r.id))}">${icon('close', 14)} Decline</button>`;
                       return `
@@ -4098,30 +4167,51 @@ function renderRequests() {
                               const room = getRoom(r.roomId);
                               const to = getDept(r.toDept);
                               const sub = getSubject(r.subjectId);
-                              const isApprovedFamily = r.status === 'approved' || r.status === 'approved_teaching';
-                              const statusIcon = isApprovedFamily ? 'check' : (r.status === 'declined' ? 'close' : 'refresh');
-                              const statusIconColor = isApprovedFamily ? '#16A34A' : (r.status === 'declined' ? '#DC2626' : '#D97706');
-                              const statusIconBg = isApprovedFamily ? '#F0FDF4' : (r.status === 'declined' ? '#FEF2F2' : '#FFFBEB');
                               const teachingNeedsBookAfterApproval = isTeachingAssignmentRequest(r) && requestHasPendingRoom(r)
                                 && (r.status === 'approved' || r.status === 'approved_teaching');
                               const needsRoomBooking = r.status === 'approved_teaching' || teachingNeedsBookAfterApproval;
                               const roomPending = requestHasPendingRoom(r);
-                              const canBookRoom = needsRoomBooking && roomPending && !hasPendingRoomRequestForTeachingParent(r.id);
-                              const statusLabel = needsRoomBooking
-                                ? 'Approved — Book Room'
-                                : (r.status.charAt(0).toUpperCase() + r.status.slice(1));
-                              const badgeClass = needsRoomBooking ? 'pending' : (r.status === 'approved' ? 'approved' : r.status);
+                              const roomFollow = firstPendingTeachingRoomFollowup(r);
+                              const waitingRoomApproval = !!roomFollow && needsRoomBooking && roomPending;
+                              const roomFollowRec = roomFollow ? getRoom(roomFollow.roomId) : null;
+                              const deptForBadge = waitingRoomApproval ? roomFollow.toDept : r.toDept;
+                              const badgeDept = getDept(deptForBadge);
+                              const isApprovedFamily =
+                                (r.status === 'approved' || r.status === 'approved_teaching') && !waitingRoomApproval;
+                              const statusIcon = isApprovedFamily ? 'check' : (r.status === 'declined' ? 'close' : 'refresh');
+                              const statusIconColor = isApprovedFamily ? '#16A34A' : (r.status === 'declined' ? '#DC2626' : '#D97706');
+                              const statusIconBg = isApprovedFamily ? '#F0FDF4' : (r.status === 'declined' ? '#FEF2F2' : '#FFFBEB');
+                              const roomFollowPending = hasPendingRoomRequestForTeachingParent(r.id);
+                              /** Same row is listed under Incoming for “Book a room”; avoid a second clickable button here. */
+                              const bookRoomActionInIncoming = needsRequesterRoomBooking(r, u.dept);
+                              const canBookRoom =
+                                needsRoomBooking && roomPending && !roomFollowPending && !bookRoomActionInIncoming;
+                              const statusLabel = waitingRoomApproval
+                                ? `Pending — awaiting ${badgeDept?.code || 'department'} approval`
+                                : needsRoomBooking
+                                  ? 'Approved — Book Room'
+                                  : (r.status.charAt(0).toUpperCase() + r.status.slice(1));
+                              const badgeClass = waitingRoomApproval || needsRoomBooking ? 'pending' : (r.status === 'approved' ? 'approved' : r.status);
+                              const titleMain = waitingRoomApproval
+                                ? `${escapeHtml(roomFollowRec?.name || 'Room')} · awaiting approval`
+                                : (roomPending ? 'Room To Be Requested' : (room?.name || (needsRoomBooking ? 'Room To Be Requested' : 'Unknown Room')));
                               return `
                                 <div class="request-card request-card--outgoing">
                                   <div class="request-icon request-icon-${escapeHtml(r.status || 'pending')}" style="color:${statusIconColor};background:${statusIconBg};">${icon(statusIcon, 20)}</div>
                                   <div class="request-info">
-                                    <div class="request-title">${roomPending ? 'Room To Be Requested' : (room?.name || (needsRoomBooking ? 'Room To Be Requested' : 'Unknown Room'))} from <span class="badge-dept ${r.toDept}">${to?.code || '?'}</span></div>
+                                    <div class="request-title">${titleMain} from <span class="badge-dept ${deptForBadge}">${badgeDept?.code || '?'}</span></div>
                                     <div class="request-meta">${sub?.code || '?'} · ${r.section} · ${r.professorId ? escapeHtml(professorDisplayLineFromPick(r.professorId, r.professorOtherName)) + ' · ' : ''}${r.days.map(d => d.slice(0, 3)).join(', ')} ${fmt12(r.timeStart)}–${fmt12(r.timeEnd)}</div>
                                     <div style="margin-top: 6px;"><span class="badge-status ${badgeClass}">${statusLabel}</span></div>
                                     ${r.status === 'declined' && String(r.declineReason || '').trim()
                                       ? `<div class="incoming-request-reason request-decline-reason"><strong>Decline reason:</strong> ${escapeHtml(String(r.declineReason).trim())}</div>`
                                       : ''}
-                                    ${canBookRoom ? `<div style="margin-top:8px;"><button type="button" class="btn btn-outline btn-sm" data-book-room-request="${escapeHtml(r.id)}">Book a room</button></div>` : ''}
+                                    ${
+                                      canBookRoom
+                                        ? `<div style="margin-top:8px;"><button type="button" class="btn btn-outline btn-sm" data-book-room-request="${escapeHtml(r.id)}">Book a room</button></div>`
+                                        : needsRoomBooking && roomPending && roomFollowPending
+                                          ? `<div style="margin-top:8px;"><span class="request-book-room-sent-pill" aria-disabled="true">${icon('calendar', 14)} Room request pending</span></div>`
+                                          : ''
+                                    }
                                   </div>
                                 </div>
                               `;
@@ -5734,15 +5824,20 @@ function teachingAssignmentUsesDeferredRoomBooking(req) {
 
 function requestHasPendingRoom(req) {
   if (!req) return true;
-  if (req.status === 'approved_teaching' || req.status === 'pending_teaching_room') return true;
+  if (req.status === 'pending_teaching_room') return true;
+  if (req.status === 'approved_teaching') {
+    let ch = requestsLinkedToTeachingParent(req.id);
+    if (ch.some(x => String(x.status) === 'approved')) return false;
+    return true;
+  }
   if (isTeachingAssignmentRequest(req) && !req.parentTeachingRequestId) {
     if (!teachingAssignmentUsesDeferredRoomBooking(req)) {
       return false;
     }
     if (req.status === 'approved') {
-      let children = state.requests.filter(x => x.parentTeachingRequestId === req.id);
+      let children = requestsLinkedToTeachingParent(req.id);
       if (!children.length) return true;
-      return !children.some(x => x.status === 'approved');
+      return !children.some(x => String(x.status) === 'approved');
     }
     if (isPendingRequestStatus(req.status)) {
       return true;
@@ -5775,7 +5870,8 @@ function needsRequesterRoomBooking(req, userDept) {
 
 function hasPendingRoomRequestForTeachingParent(parentRequestId) {
   if (!parentRequestId) return false;
-  return state.requests.some(r => r.parentTeachingRequestId === parentRequestId && isPendingRequestStatus(r.status));
+  let p = getStateRequestById(parentRequestId);
+  return p ? pendingTeachingRoomFollowupsForParent(p).length > 0 : false;
 }
 
 function renderTeachingApprovalForm() {
@@ -6751,7 +6847,7 @@ function bindPage(){
       return;
     }
     if (mt === 'bookTeachingRoom') {
-      let base = state.requests.find(x => x.id === state.modal?.requestId);
+      let base = getStateRequestById(state.modal?.requestId);
       if (!base) {
         showFormValidationBanner('bookRoomAlert', 'Teaching approval request not found.');
         return;
@@ -6798,20 +6894,15 @@ function bindPage(){
         parentTeachingRequestId: base.id,
       };
       if (hasSupabaseClient()) {
-        insertRequestDb(req)
-          .then(({ error }) => {
-            if (error) {
-              showFormValidationBanner('bookRoomAlert', `Supabase error: ${error.message}`);
-              return;
-            }
-            state.requests.push(req);
-            state.modal = null;
-            showToast('Room request sent');
-            render();
-          })
-          .catch((err) => {
-            showFormValidationBanner('bookRoomAlert', `Supabase error: ${err?.message || 'Unable to save request.'}`);
-          });
+        const { error } = await insertRequestDb(req);
+        if (error) {
+          showFormValidationBanner('bookRoomAlert', `Supabase error: ${error.message}`);
+          return;
+        }
+        await syncRequestsFromSupabase();
+        state.modal = null;
+        showToast('Room request sent');
+        render();
         return;
       }
       state.requests.push(req);
@@ -7407,7 +7498,7 @@ function bindPage(){
     render();
   }));
   document.querySelectorAll('[data-approve]').forEach(el=>el.addEventListener('click', async ()=>{
-    let r=state.requests.find(x=>x.id===el.dataset.approve);
+    let r = getStateRequestById(el.dataset.approve);
     if (!r) return;
     if (isTeachingAssignmentRequest(r)) {
       state.modal = { type: 'approveTeachingAssignment', requestId: r.id };
@@ -7427,16 +7518,37 @@ function bindPage(){
     }
     r.status='approved';
     if (r.parentTeachingRequestId) {
-      let parentReq = state.requests.find(x => x.id === r.parentTeachingRequestId);
+      let parentReq = getStateRequestById(r.parentTeachingRequestId);
       if (parentReq) {
         parentReq.status = 'approved';
         parentReq.reason = requestReasonDisplayText(parentReq);
+        parentReq.reasonComment = requestReasonCommentDisplayText(parentReq);
       }
       if (hasSupabaseClient()) {
-        await window.cenSupabase
-          .from('requests')
-          .update({ status: 'approved', reason: requestReasonDisplayText(parentReq) })
-          .eq('id', r.parentTeachingRequestId);
+        if (parentReq) {
+          let parentReason = requestReasonDisplayText(parentReq);
+          let parentReasonComment = requestReasonCommentDisplayText(parentReq);
+          let patch = {
+            status: 'approved',
+            reason: parentReason,
+            reason_comment: parentReasonComment,
+          };
+          let { error: upErr } = await window.cenSupabase.from('requests').update(patch).eq('id', r.parentTeachingRequestId);
+          if (upErr && isSupabaseMissingColumnError(upErr, 'reason_comment')) {
+            delete patch.reason_comment;
+            upErr = (await window.cenSupabase.from('requests').update(patch).eq('id', r.parentTeachingRequestId)).error;
+          }
+          if (upErr) {
+            console.warn('Could not update parent teaching request after room approval:', upErr.message);
+          }
+        } else {
+          let { error: upErr } = await window.cenSupabase.from('requests').update({ status: 'approved' }).eq('id', r.parentTeachingRequestId);
+          if (upErr) {
+            console.warn('Could not update parent teaching request after room approval:', upErr.message);
+          }
+        }
+        await syncRequestsFromSupabase();
+        r = getStateRequestById(el.dataset.approve) || getStateRequestById(r.id) || r;
       }
     }
     let approvedAt = new Date().toISOString();
