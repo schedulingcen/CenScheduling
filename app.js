@@ -2873,7 +2873,8 @@ function pendingRequestsForUser() {
   let term = currentTermFilter();
   return state.requests.filter(r =>
     requestMatchesCurrentTerm(r, term) &&
-    (r.toDept === u.dept && isPendingRequestStatus(r.status) || needsRequesterRoomBooking(r, u.dept))
+    r.toDept === u.dept &&
+    isPendingRequestStatus(r.status),
   ).length;
 }
 
@@ -3211,7 +3212,8 @@ function renderDashboard() {
     ? 0
     : state.requests.filter(r =>
       requestMatchesCurrentTerm(r, term) &&
-      (isPendingRequestStatus(r.status) && r.toDept === u.dept || needsRequesterRoomBooking(r, u.dept))
+      isPendingRequestStatus(r.status) &&
+      r.toDept === u.dept,
     ).length;
   let statIc = 'stat-icon dashboard-stat-icon';
   let summaryDayList = dashboardSummaryDayOptionsForUser(u);
@@ -4294,9 +4296,11 @@ function renderRequests() {
   let outgoing = [];
 
   if (u.role === 'chairperson') {
-    pending = state.requests.filter(r =>
-      requestMatchesCurrentTerm(r, term) &&
-      (r.toDept === u.dept && isPendingRequestStatus(r.status) || needsRequesterRoomBooking(r, u.dept))
+    pending = state.requests.filter(
+      r =>
+        requestMatchesCurrentTerm(r, term) &&
+        r.toDept === u.dept &&
+        isPendingRequestStatus(r.status),
     );
     outgoing = state.requests.filter(r => r.fromDept === u.dept && requestMatchesCurrentTerm(r, term));
   }
@@ -4315,9 +4319,8 @@ function renderRequests() {
                 ? `<div class="requests-list-empty-state"><div class="requests-list-empty-icon">${icon('checkCircle', 40)}</div><p>No pending requests.</p></div>`
                 : pending
                     .map(r => {
-                      const requesterBooking = needsRequesterRoomBooking(r, u.dept);
                       const room = getRoom(r.roomId);
-                      const from = getDept(requesterBooking ? r.toDept : r.fromDept);
+                      const from = getDept(r.fromDept);
                       const sub = getSubject(r.subjectId);
                       const daysShort = Array.isArray(r.days) ? r.days.map(d => d.slice(0, 3)).join(', ') : '—';
                       const professorPart = r.professorId
@@ -4325,18 +4328,13 @@ function renderRequests() {
                         : '';
                       const noteText = (requestReasonCommentDisplayText(r) || requestReasonDisplayText(r) || '').trim();
                       const roomPending = requestHasPendingRoom(r);
-                      const roomFollowPending = hasPendingRoomRequestForTeachingParent(r.id);
-                      const actionButtons = requesterBooking
-                        ? roomFollowPending
-                          ? `<span class="request-book-room-sent-pill" aria-disabled="true">${icon('calendar', 14)} Room request pending</span>`
-                          : `<button type="button" class="btn btn-outline btn-sm" data-book-room-request="${escapeHtml(r.id)}">${icon('calendar', 14)} Book a room</button>`
-                        : `<button type="button" class="btn btn-green btn-sm" data-approve="${r.id}">${icon('check', 14)} Accept</button>
+                      const actionButtons = `<button type="button" class="btn btn-green btn-sm" data-approve="${r.id}">${icon('check', 14)} Accept</button>
                       <button type="button" class="btn btn-danger btn-sm" data-decline="${escapeHtml(String(r.id))}">${icon('close', 14)} Decline</button>`;
                       return `
                 <div class="request-card request-card--incoming">
                   <div class="request-icon request-icon-pending">${icon('refresh', 20)}</div>
                   <div class="request-info">
-                    <div class="request-title">${roomPending ? 'Room To Be Requested' : (room?.name || 'Unknown Room')} from <span class="badge-dept ${requesterBooking ? r.toDept : r.fromDept}">${from?.code || '?'}</span></div>
+                    <div class="request-title">${roomPending ? 'Room To Be Requested' : (room?.name || 'Unknown Room')} from <span class="badge-dept ${r.fromDept}">${from?.code || '?'}</span></div>
                     <div class="request-meta">${escapeHtml(sub?.code || '—')} · ${escapeHtml(r.section || '—')} · ${professorPart}${escapeHtml(daysShort)} ${fmt12(r.timeStart)}\u2013${fmt12(r.timeEnd)}</div>
                     ${noteText ? `<div class="incoming-request-reason">"${escapeHtml(noteText)}"</div>` : ''}
                     <div class="request-actions incoming-request-actions">
@@ -4404,10 +4402,7 @@ function renderRequests() {
                               const statusIconColor = isApprovedFamily ? '#16A34A' : (isDeclined ? '#DC2626' : '#D97706');
                               const statusIconBg = isApprovedFamily ? '#F0FDF4' : (isDeclined ? '#FEF2F2' : '#FFFBEB');
                               const roomFollowPending = hasPendingRoomRequestForTeachingParent(r.id);
-                              /** Same row is listed under Incoming for “Book a room”; avoid a second clickable button here. */
-                              const bookRoomActionInIncoming = needsRequesterRoomBooking(r, u.dept);
-                              const canBookRoom =
-                                needsRoomBooking && roomPending && !roomFollowPending && !bookRoomActionInIncoming;
+                              const canBookRoom = needsRoomBooking && roomPending && !roomFollowPending;
                               const statusLabel = waitingRoomApproval
                                 ? `Pending — awaiting ${badgeDept?.code || 'department'} approval`
                                 : needsRoomBooking
@@ -4433,7 +4428,7 @@ function renderRequests() {
                                     }
                                     ${
                                       canBookRoom
-                                        ? `<div style="margin-top:8px;"><button type="button" class="btn btn-outline btn-sm" data-book-room-request="${escapeHtml(r.id)}">Book a room</button></div>`
+                                        ? `<div style="margin-top:8px;"><button type="button" class="btn btn-outline btn-sm" data-book-room-request="${escapeHtml(r.id)}">${icon('calendar', 14)} Book a room</button></div>`
                                         : needsRoomBooking && roomPending && roomFollowPending
                                           ? `<div style="margin-top:8px;"><span class="request-book-room-sent-pill" aria-disabled="true">${icon('calendar', 14)} Room request pending</span></div>`
                                           : ''
@@ -6102,14 +6097,6 @@ function requestDeclineReasonDisplayText(req) {
     if (v != null && String(v).trim() !== '') return String(v).trim();
   }
   return '';
-}
-
-function needsRequesterRoomBooking(req, userDept) {
-  if (!req || !userDept) return false;
-  if (req.fromDept !== userDept || req.parentTeachingRequestId) return false;
-  if (!teachingAssignmentUsesDeferredRoomBooking(req)) return false;
-  let statusOk = req.status === 'approved' || req.status === 'approved_teaching';
-  return statusOk && requestHasPendingRoom(req) && !hasPendingRoomRequestForTeachingParent(req.id);
 }
 
 function hasPendingRoomRequestForTeachingParent(parentRequestId) {
