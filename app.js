@@ -252,17 +252,8 @@ function rememberCustomAcademicYear(ay) {
   if (!Array.isArray(state.termAcademicYearCustomOptions)) state.termAcademicYearCustomOptions = [];
   if (!state.termAcademicYearCustomOptions.includes(ay)) state.termAcademicYearCustomOptions.push(ay);
 }
-function renderTopbarCenter() {
-  if (state.page === 'curriculum') {
-    return `<div class="curriculum-topbar-left"><div class="page-title page-title-curriculum-left">${escapeHtml(curriculumTopbarDegreeTitle())}</div></div>`;
-  }
-  if (state.page === 'faculty') {
-    return `<div class="page-title">${escapeHtml(getPageTitle())}</div>`;
-  }
-  let termPages = ['schedule', 'curriculum', 'requests', 'dashboard'];
-  if (!termPages.includes(state.page)) {
-    return `<div class="page-title">${getPageTitle()}</div>`;
-  }
+/** Semester + academic year controls (Schedule/Requests top bar; Dashboard Schedule Summary). */
+function renderTopbarTermPickersMarkup() {
   let sem = state.termSemester || '1st Semester';
   let ay = normalizeAcademicYearInput(state.termAcademicYear) || DEFAULT_ACADEMIC_YEAR;
   let ayCustom = normalizeAcademicYearInput(state.termAcademicYearCustom || '');
@@ -285,12 +276,26 @@ function renderTopbarCenter() {
   let semOptions = TERM_HEADER_SEMS
     .map(s => `<option value="${escapeHtml(s)}" ${s === sem ? 'selected' : ''}>${escapeHtml(s)}</option>`)
     .join('');
-  let dashClass = state.page === 'dashboard' ? ' topbar-term-dashboard' : '';
-  let termBarTitle =
-    state.page === 'dashboard'
-      ? `${getPageTitle()} — ${termHeaderTitle(sem, ay)}`
-      : termHeaderTitle(sem, ay);
-  return `<div class="topbar-term-center${dashClass}"><div class="topbar-term-title">${escapeHtml(termBarTitle)}</div><div class="topbar-term-controls"><select class="filter-select topbar-term-select" id="topbarTermSemester" aria-label="Semester">${semOptions}</select>${ayControl}${ayPresetList}</div></div>`;
+  return `<select class="filter-select topbar-term-select" id="topbarTermSemester" aria-label="Semester">${semOptions}</select>${ayControl}${ayPresetList}`;
+}
+function renderTopbarCenter() {
+  if (state.page === 'curriculum') {
+    return `<div class="curriculum-topbar-left"><div class="page-title page-title-curriculum-left">${escapeHtml(curriculumTopbarDegreeTitle())}</div></div>`;
+  }
+  if (state.page === 'faculty') {
+    return `<div class="page-title">${escapeHtml(getPageTitle())}</div>`;
+  }
+  if (state.page === 'dashboard') {
+    return `<div class="page-title page-title-dashboard">${escapeHtml(getPageTitle())}</div>`;
+  }
+  let termPages = ['schedule', 'curriculum', 'requests'];
+  if (!termPages.includes(state.page)) {
+    return `<div class="page-title">${getPageTitle()}</div>`;
+  }
+  let sem = state.termSemester || '1st Semester';
+  let ay = normalizeAcademicYearInput(state.termAcademicYear) || DEFAULT_ACADEMIC_YEAR;
+  let termBarTitle = termHeaderTitle(sem, ay);
+  return `<div class="topbar-term-center"><div class="topbar-term-title">${escapeHtml(termBarTitle)}</div><div class="topbar-term-controls">${renderTopbarTermPickersMarkup()}</div></div>`;
 }
 
 /** Request a room modal: optional reason dropdown (stored on request as `reason`). */
@@ -509,7 +514,8 @@ function hydratePersistedData() {
  * the dashboard Schedule Summary showed no classes even though the DB had rows.
  */
 function mergePersistedTermPreferences() {
-  if (!state.loggedIn) return;
+  /** Same session as login (`cen_user`); avoid requiring `ensureAuth` to have run first (init calls this before first `render`). */
+  if (!sessionStorage.getItem('cen_user')) return;
   const raw = sessionStorage.getItem(CEN_STATE_KEY);
   if (!raw) return;
   try {
@@ -532,6 +538,9 @@ function mergePersistedTermPreferences() {
       DAYS_WITH_SATURDAY.includes(o.dashboardSummaryDay)
     ) {
       state.dashboardSummaryDay = o.dashboardSummaryDay;
+    }
+    if (Array.isArray(o.suppressedRoomIds) && o.suppressedRoomIds.length) {
+      state.suppressedRoomIds = [...new Set([...(state.suppressedRoomIds || []), ...o.suppressedRoomIds.filter(Boolean)])];
     }
   } catch (e) { /* ignore */ }
 }
@@ -1145,7 +1154,19 @@ async function syncCoreDataFromSupabase() {
     // Re-upsert bundled `ROOMS` rows missing from DB (rooms table incomplete vs. chair dropdown list in data.js).
     let dbRoomIds = new Set(state.rooms.map(r => r.id).filter(Boolean));
     let bundleRooms = typeof ROOMS !== 'undefined' && Array.isArray(ROOMS) ? ROOMS : [];
-    let roomsToRepair = bundleRooms.filter(br => br && br.id && !dbRoomIds.has(br.id));
+    let suppressedForRepair = new Set(Array.isArray(state.suppressedRoomIds) ? state.suppressedRoomIds : []);
+    try {
+      const persistRaw = sessionStorage.getItem(CEN_STATE_KEY);
+      if (persistRaw) {
+        const po = JSON.parse(persistRaw);
+        if (Array.isArray(po.suppressedRoomIds)) po.suppressedRoomIds.forEach(id => id && suppressedForRepair.add(id));
+      }
+    } catch (e) {
+      /* ignore */
+    }
+    let roomsToRepair = bundleRooms.filter(
+      br => br && br.id && !dbRoomIds.has(br.id) && !suppressedForRepair.has(br.id),
+    );
     if (roomsToRepair.length > 0) {
       const { error: roomRepairErr } = await window.cenSupabase
         .from('rooms')
@@ -2718,12 +2739,13 @@ function renderDashboard() {
     d => `<option value="${escapeHtml(d)}" ${summaryDay === d ? 'selected' : ''}>${escapeHtml(d)}</option>`,
   ).join('');
   let summaryGrid = renderDashboardRoomSummaryGrid(summaryScheds, summaryDay);
+  let dashboardTermPickers = `<div class="topbar-term-controls dashboard-summary-term-controls">${renderTopbarTermPickersMarkup()}</div>`;
   let summaryHint = '';
   let nAllSched = state.schedules.length;
   let nInTerm = summaryScheds.length;
   let nOnSelectedDay = summaryScheds.filter(s => Array.isArray(s.days) && s.days.includes(summaryDay)).length;
   if (nAllSched > 0 && nInTerm === 0) {
-    summaryHint = `<p class="form-hint dashboard-summary-hint" role="status">No classes match the current <strong>Semester</strong> and <strong>Academic Year</strong> in the top bar. Timetable data may use a different term — change those controls so they match the entries on the Schedule page.</p>`;
+    summaryHint = `<p class="form-hint dashboard-summary-hint" role="status">No classes match the current <strong>Semester</strong> and <strong>Academic Year</strong> in the Schedule Summary header. Timetable data may use a different term — change those controls so they match the entries on the Schedule page.</p>`;
   } else if (nInTerm > 0 && nOnSelectedDay === 0) {
     summaryHint = `<p class="form-hint dashboard-summary-hint" role="status">No classes on <strong>${escapeHtml(summaryDay)}</strong> for this term. Choose another day in the list above.</p>`;
   } else if (nAllSched === 0) {
@@ -2744,6 +2766,7 @@ function renderDashboard() {
     <div class="card dashboard-summary-card">
       <div class="card-header dashboard-summary-card-header">
         <div class="card-title card-title-with-icon">${icon('calendar', 18)} Schedule Summary</div>
+        ${dashboardTermPickers}
         <div class="dashboard-summary-header-right">
           <select class="filter-select dashboard-summary-day-select" id="dashboardSummaryDay" aria-label="Schedule summary day">${dayOpts}</select>
           <a href="${pageHref('schedule')}" class="btn btn-outline btn-sm dashboard-summary-view-all-btn">View All</a>
@@ -7365,10 +7388,9 @@ function bindPage(){
           window.alert(`Unable to delete room: ${error.message}`);
           return;
         }
-        state.suppressedRoomIds = (state.suppressedRoomIds || []).filter(x => x !== roomId);
-      } else {
-        if (!state.suppressedRoomIds.includes(roomId)) state.suppressedRoomIds.push(roomId);
       }
+      /** Hide row even when the room only existed in bundled `ROOMS` merge (not in `state.rooms`), and after DB delete so bundle merge cannot show it again this session. */
+      if (!state.suppressedRoomIds.includes(roomId)) state.suppressedRoomIds.push(roomId);
       state.rooms = state.rooms.filter(r => r.id !== roomId);
       showToast('Room deleted');
       render();

@@ -521,13 +521,23 @@ html[data-theme="dark"] .request-sheet-schedule th {
   overflow: visible;
 }
 .dashboard-summary-card-header {
-  flex-wrap: nowrap;
+  flex-wrap: wrap;
   gap: 12px;
   align-items: center;
+  justify-content: flex-start;
 }
 .dashboard-summary-card-header .card-title {
-  flex: 1;
+  flex: 0 1 auto;
   min-width: 0;
+}
+.dashboard-summary-term-controls {
+  display: inline-flex;
+  align-items: center;
+  gap: 8px;
+  flex-shrink: 0;
+}
+.dashboard-summary-term-controls .topbar-term-select {
+  min-width: 128px;
 }
 .dashboard-summary-header-right {
   display: inline-flex;
@@ -536,6 +546,7 @@ html[data-theme="dark"] .request-sheet-schedule th {
   gap: 10px;
   flex-wrap: nowrap;
   flex-shrink: 0;
+  margin-left: auto;
 }
 .dashboard-summary-day-select {
   width: auto;
@@ -559,8 +570,19 @@ html[data-theme="dark"] .request-sheet-schedule th {
   .dashboard-summary-card-header {
     flex-wrap: wrap;
   }
+  .dashboard-summary-term-controls {
+    width: 100%;
+    display: grid;
+    grid-template-columns: 1fr 1fr;
+  }
+  .dashboard-summary-term-controls .topbar-term-select,
+  .dashboard-summary-term-controls .topbar-term-select-editable {
+    width: 100%;
+    min-width: 0;
+  }
   .dashboard-summary-header-right {
     width: 100%;
+    margin-left: 0;
     justify-content: flex-start;
   }
 }
@@ -927,6 +949,17 @@ body { font-family: var(--font); background: var(--page-bg); color: var(--text-p
   display: flex; align-items: center; padding: 0 24px; gap: 16px; position: sticky; top: 0; z-index: 50;
 }
 .page-title { font-size: 18px; font-weight: 700; color: var(--text-primary); flex: 1; }
+.page-title-dashboard {
+  font-size: 22px;
+  font-weight: 800;
+  color: var(--sidebar-brand);
+  letter-spacing: 0.02em;
+  flex: 1;
+  text-align: left;
+}
+html[data-theme="dark"] .page-title-dashboard {
+  color: #f0a0a0;
+}
 .page-title-curriculum-left {
   text-align: left;
   justify-self: flex-start;
@@ -955,9 +988,6 @@ body { font-family: var(--font); background: var(--page-bg); color: var(--text-p
   justify-content: center;
   gap: 12px;
   min-width: 0;
-}
-.topbar-term-dashboard {
-  justify-content: center;
 }
 .topbar-term-title {
   font-size: 17px;
