@@ -10901,8 +10901,32 @@ function showFormValidationBanner(containerId, message) {
   box.innerHTML = `<div class="alert form-validation-alert" role="alert">${icon('alertTriangle', 18)}<span class="form-validation-alert-text">${escapeHtml(message)}</span></div>`;
 }
 
+function paintBootScreen() {
+  let app = document.getElementById('app');
+  if (!app) return;
+  let isDark = document.documentElement.dataset.theme === 'dark';
+  // Prevent plain white flash before CSS/render settles.
+  document.body.style.background = isDark ? '#0f1016' : '#f4f4f7';
+  document.body.style.color = isDark ? '#ececf4' : '#1a1a2e';
+  app.innerHTML = `
+    <div style="min-height:100vh;display:flex;align-items:center;justify-content:center;padding:24px;">
+      <div style="display:flex;align-items:center;gap:10px;font-family:var(--font, sans-serif);font-size:14px;color:${isDark ? '#ececf4' : '#1a1a2e'};">
+        <span style="width:14px;height:14px;border:2px solid ${isDark ? 'rgba(236,236,244,.35)' : 'rgba(26,26,46,.25)'};border-top-color:${isDark ? '#ececf4' : '#7f1919'};border-radius:50%;display:inline-block;animation:cenBootSpin .8s linear infinite;"></span>
+        <span>Loading CEN Timetable...</span>
+      </div>
+    </div>
+  `;
+  if (!document.getElementById('cen-boot-style')) {
+    let style = document.createElement('style');
+    style.id = 'cen-boot-style';
+    style.textContent = '@keyframes cenBootSpin{to{transform:rotate(360deg)}}';
+    document.head.appendChild(style);
+  }
+}
+
 // Init
 initAppTheme();
+paintBootScreen();
 state.page = resolveInitialPage();
 forceRootUrlInAddressBar();
 if (sessionStorage.getItem('cen_user') && hasSupabaseClient()) {
