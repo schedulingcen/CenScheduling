@@ -5489,7 +5489,11 @@ function renderRequests() {
                               const statusIconColor = isApprovedFamily ? '#16A34A' : (isDeclined ? '#DC2626' : '#D97706');
                               const statusIconBg = isApprovedFamily ? '#F0FDF4' : (isDeclined ? '#FEF2F2' : '#FFFBEB');
                               const roomFollowPending = hasPendingRoomRequestForTeachingParent(r.id);
-                              const canBookRoom = needsRoomBooking && roomPending && !roomFollowPending;
+                              const canBookRoom = needsRoomBooking
+                                && roomPending
+                                && !roomFollowPending
+                                && r.status !== 'approved'
+                                && r.status !== 'approved_teaching';
                               const statusLabel = waitingRoomApproval
                                 ? `Pending — awaiting ${badgeDept?.code || 'department'} approval`
                                 : needsRoomBooking
