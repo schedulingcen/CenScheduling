@@ -3987,6 +3987,285 @@ function downloadTextFile(filename, content, mimeType) {
   a.remove();
   setTimeout(() => URL.revokeObjectURL(a.href), 0);
 }
+
+function downloadBlobFile(filename, blob) {
+  let a = document.createElement('a');
+  a.href = URL.createObjectURL(blob);
+  a.download = filename;
+  document.body.appendChild(a);
+  a.click();
+  a.remove();
+  setTimeout(() => URL.revokeObjectURL(a.href), 0);
+}
+
+/** Directory URL for static assets (e.g. /CenScheduling/). */
+function cenStaticBaseUrl() {
+  if (typeof location === 'undefined' || !location.pathname) return '/';
+  let path = location.pathname;
+  let i = path.lastIndexOf('/');
+  return i >= 0 ? path.slice(0, i + 1) : '/';
+}
+
+function ensureJsZipLoaded() {
+  if (typeof JSZip !== 'undefined') return Promise.resolve();
+  return new Promise((resolve, reject) => {
+    let s = document.createElement('script');
+    s.src = 'https://cdn.jsdelivr.net/npm/jszip@3.10.1/dist/jszip.min.js';
+    s.async = true;
+    s.onload = () => resolve();
+    s.onerror = () => reject(new Error('Could not load JSZip'));
+    document.head.appendChild(s);
+  });
+}
+
+function escapeXmlText(s) {
+  return String(s ?? '')
+    .replace(/&/g, '&amp;')
+    .replace(/</g, '&lt;')
+    .replace(/>/g, '&gt;')
+    .replace(/"/g, '&quot;');
+}
+
+/**
+ * Byte offsets in `word/document.xml` of PRE-ENROLLMENT-template.docx (regenerate if template is replaced).
+ * A second embedded form in the template is stripped at export via `trimPreEnrollmentDocxDuplicateFormTail`.
+ */
+const PRE_ENROLL_DOCX_DOCXML_SLICES = { dataRowsStart: 56596, afterTotalRow: 99920 };
+
+function patchPreEnrollmentDocxPrefix(prefixXml, ctx) {
+  let sec = escapeXmlText(String(ctx.section || '').trim());
+  let ay = escapeXmlText(ctx.ay || '');
+  let sem = escapeXmlText(ctx.sem || '');
+  let p = prefixXml.replace(
+    /<w:t xml:space="preserve">BSEE IV-GI <\/w:t>/,
+    `<w:t xml:space="preserve">${sec} </w:t>`,
+  );
+  p = p.replace(
+    /<w:r w:rsidRPr="00C45665"><w:rPr><w:b\/><w:noProof\/><\/w:rPr><w:t xml:space="preserve">SCHOOL YEAR:  <\/w:t><\/w:r>/,
+    `<w:r w:rsidRPr="00C45665"><w:rPr><w:b/><w:noProof/><w:u w:val="single"/></w:rPr><w:t xml:space="preserve">SCHOOL YEAR:  ${ay}</w:t></w:r>`,
+  );
+  p = p.replace(
+    / SEMESTER:<\/w:t><\/w:r><w:r w:rsidRPr="00C45665"><w:rPr><w:b\/><w:noProof\/><\/w:rPr><w:tab\/><\/w:r><w:r w:rsidRPr="00C45665"><w:rPr><w:b\/><w:noProof\/><\/w:rPr><w:tab\/><\/w:r><\/w:p><w:p w14:paraId="6BBB7122"/,
+    ` SEMESTER:</w:t></w:r><w:r w:rsidRPr="00C45665"><w:rPr><w:b/><w:noProof/><w:u w:val="single"/></w:rPr><w:t xml:space="preserve"> ${sem}</w:t></w:r></w:p><w:p w14:paraId="6BBB7122"`,
+  );
+  return p;
+}
+
+function fillPreEnrollmentDocxDataRow(rowTemplate, code, name, units, room, day, time) {
+  let cells = [code, name, units, room, day, time].map(c => escapeXmlText(c));
+  let i = 0;
+  return rowTemplate.replace(/<w:t([^>]*)>([^<]*)<\/w:t>/g, (m, attrs, inner) => {
+    if (i >= cells.length) return m;
+    return `<w:t${attrs}>${cells[i++]}</w:t>`;
+  });
+}
+
+function fillPreEnrollmentDocxTotalRow(totalRowTemplate, totalStr) {
+  let t = escapeXmlText(String(totalStr));
+  return totalRowTemplate.replace(
+    '</w:rPr><w:t>2</w:t></w:r><w:r w:rsidR="001E684F"><w:rPr><w:bCs/><w:noProof/><w:sz w:val="24"/></w:rPr><w:t>1</w:t></w:r>',
+    `</w:rPr><w:t>${t}</w:t></w:r>`,
+  );
+}
+
+function excelDateSerialFromDate(d) {
+  if (!(d instanceof Date) || Number.isNaN(d.getTime())) return '';
+  return d.getTime() / 86400000 + 25569;
+}
+
+function replaceXlsxCellWithInlineString(sheetXml, cellRef, value) {
+  const re = new RegExp(`<c\\s+r="${cellRef}"[^>]*(?:\\/>|>[\\s\\S]*?<\\/c>)`);
+  return sheetXml.replace(re, m => {
+    const s = m.match(/\ss="([^"]+)"/);
+    const sAttr = s ? ` s="${s[1]}"` : '';
+    return `<c r="${cellRef}"${sAttr} t="inlineStr"><is><t>${escapeXmlText(value || '')}</t></is></c>`;
+  });
+}
+
+function replaceXlsxCellWithNumber(sheetXml, cellRef, value) {
+  const re = new RegExp(`<c\\s+r="${cellRef}"[^>]*(?:\\/>|>[\\s\\S]*?<\\/c>)`);
+  return sheetXml.replace(re, m => {
+    const s = m.match(/\ss="([^"]+)"/);
+    const sAttr = s ? ` s="${s[1]}"` : '';
+    if (value == null || value === '' || Number.isNaN(Number(value))) {
+      return `<c r="${cellRef}"${sAttr}/>`;
+    }
+    return `<c r="${cellRef}"${sAttr}><v>${Number(value)}</v></c>`;
+  });
+}
+
+function scheduleXlsxSectionRows(ctx, sectionKey) {
+  const rows = ctx.scheds
+    .filter(s => String(s.section || '').trim() === String(sectionKey || '').trim())
+    .sort((a, b) => (getSubject(a.subjectId)?.code || '').localeCompare(getSubject(b.subjectId)?.code || ''));
+  let totalUnits = 0;
+  const data = rows.map(s => {
+    const sub = getSubject(s.subjectId);
+    const units = sub && Number.isFinite(Number(sub.units)) ? Number(sub.units) : 0;
+    totalUnits += units;
+    return {
+      code: sub?.code || '',
+      name: sub?.name || '',
+      units,
+      day: scheduleDaysToAbbrev(s.days) || '',
+      time: s.timeStart && s.timeEnd ? `${fmt12(s.timeStart)}-${fmt12(s.timeEnd)}` : '',
+      room: roomDisplayLineFromPick(s.roomId, s.roomOtherName) || '',
+      faculty: professorDisplayLineFromPick(s.professorId, s.professorOtherName) || '',
+    };
+  });
+  return { data, totalUnits };
+}
+
+async function generateScheduleSubjectsXlsxBlob(ctx) {
+  await ensureJsZipLoaded();
+  const base = cenStaticBaseUrl() + 'templates/';
+  const zipRes = await fetch(base + 'schedule-of-subjects-template.xlsx');
+  if (!zipRes.ok) throw new Error('missing schedule xlsx template');
+  const zipBuf = await zipRes.arrayBuffer();
+  const zip = await JSZip.loadAsync(zipBuf);
+  let sheetXml = await zip.file('xl/worksheets/sheet1.xml').async('string');
+  const sections = [...new Set(ctx.scheds.map(s => String(s.section || '').trim()).filter(Boolean))].sort((a, b) =>
+    a.localeCompare(b),
+  );
+  const scopedSections =
+    ctx.section && ctx.section !== 'all'
+      ? [String(ctx.section).trim()]
+      : sections;
+  const firstSection = scopedSections[0] || '';
+  const secondSection = scopedSections[1] || '';
+  const first = scheduleXlsxSectionRows(ctx, firstSection);
+  const second = scheduleXlsxSectionRows(ctx, secondSection);
+  const semAy = scheduleOfSubjectsSemAyUpperPlain(ctx);
+  const dateStr = new Date().toLocaleDateString('en-PH', { year: 'numeric', month: 'long', day: 'numeric' });
+  const dateSerial = excelDateSerialFromDate(new Date());
+
+  // Remove template logo/drawing so export only shows generated data.
+  sheetXml = sheetXml.replace(/<drawing\b[^>]*\/>/g, '');
+
+  sheetXml = replaceXlsxCellWithInlineString(sheetXml, 'B5', `${ctx.deptCode} Department`);
+  sheetXml = replaceXlsxCellWithInlineString(sheetXml, 'E5', `Schedule from Sem/AY : ${semAy}`);
+  sheetXml = replaceXlsxCellWithNumber(sheetXml, 'F4', dateSerial);
+  sheetXml = replaceXlsxCellWithInlineString(sheetXml, 'A7', `Course/Yr/Section : ${firstSection || '—'}`);
+  sheetXml = replaceXlsxCellWithInlineString(
+    sheetXml,
+    'A19',
+    secondSection ? `Course/Yr/Section : ${secondSection}` : '',
+  );
+  sheetXml = replaceXlsxCellWithInlineString(sheetXml, 'D4', 'Date :');
+  sheetXml = replaceXlsxCellWithInlineString(sheetXml, 'G40', 'Page 1 of 1');
+  sheetXml = replaceXlsxCellWithInlineString(sheetXml, 'B40', `Generated ${dateStr}`);
+
+  const writeBlock = (startRow, rows, totalRow, totalUnits, hideTotal = false) => {
+    for (let i = 0; i < 7; i++) {
+      const r = startRow + i;
+      const row = rows[i] || null;
+      sheetXml = replaceXlsxCellWithInlineString(sheetXml, `A${r}`, row?.code || '');
+      sheetXml = replaceXlsxCellWithInlineString(sheetXml, `B${r}`, row?.name || '');
+      sheetXml = row ? replaceXlsxCellWithNumber(sheetXml, `C${r}`, row.units) : replaceXlsxCellWithInlineString(sheetXml, `C${r}`, '');
+      sheetXml = replaceXlsxCellWithInlineString(sheetXml, `D${r}`, row?.day || '');
+      sheetXml = replaceXlsxCellWithInlineString(sheetXml, `E${r}`, row?.time || '');
+      sheetXml = replaceXlsxCellWithInlineString(sheetXml, `F${r}`, row?.room || '');
+      sheetXml = replaceXlsxCellWithInlineString(sheetXml, `G${r}`, row?.faculty || '');
+    }
+    sheetXml = replaceXlsxCellWithInlineString(sheetXml, `A${totalRow}`, hideTotal ? '' : 'TOTAL');
+    sheetXml = hideTotal
+      ? replaceXlsxCellWithInlineString(sheetXml, `C${totalRow}`, '')
+      : replaceXlsxCellWithNumber(sheetXml, `C${totalRow}`, totalUnits || 0);
+  };
+  writeBlock(11, first.data, 18, first.totalUnits);
+  writeBlock(24, second.data, 31, second.totalUnits, !secondSection);
+
+  zip.file('xl/worksheets/sheet1.xml', sheetXml);
+  return zip.generateAsync({
+    type: 'blob',
+    mimeType: 'application/vnd.openxmlformats-officedocument.spreadsheetml.sheet',
+  });
+}
+
+/** Remove duplicate centered SLSU / Lucban block after (DEAN/ADVISER) from template tail. */
+function stripPreEnrollmentDocxTrailingUniversityFooter(suffixXml) {
+  const re =
+    /<w:p\b[^>]*>[\s\S]*?<w:t(?:\s[^>]*)?>[^<]*Southern Luzon State University[^<]*<\/w:t>[\s\S]*?<\/w:p>\s*<w:p\b[^>]*>[\s\S]*?<w:t(?:\s[^>]*)?>[^<]*Lucban, Quezon[^<]*<\/w:t>[\s\S]*?<\/w:p>/;
+  return suffixXml.replace(re, '');
+}
+
+/**
+ * Official template may contain a second full pre-enrolment form after the first (duplicate header + table).
+ * Keep only the first form's trailing paragraphs (signature, etc.) and final sectPr.
+ */
+function trimPreEnrollmentDocxDuplicateFormTail(origXml, afterTotalRow) {
+  const titleNeedle = '<w:t>PRE-ENROLMENT FORM</w:t>';
+  let firstTitle = origXml.indexOf(titleNeedle);
+  if (firstTitle >= 0) {
+    let secondTitle = origXml.indexOf(titleNeedle, firstTitle + titleNeedle.length);
+    if (secondTitle >= 0) {
+      // Start cutting at the paragraph that owns the second PRE-ENROLMENT heading.
+      let cutAt = origXml.lastIndexOf('<w:p ', secondTitle);
+      if (cutAt < 0) cutAt = secondTitle;
+      let sectPrFromBody = origXml.indexOf('<w:sectPr', cutAt);
+      if (sectPrFromBody > cutAt) return origXml.slice(afterTotalRow, cutAt) + origXml.slice(sectPrFromBody);
+      return origXml.slice(afterTotalRow, cutAt);
+    }
+  }
+  const tblNeedle = '<w:tbl>';
+  let firstTbl = origXml.indexOf(tblNeedle);
+  if (firstTbl < 0) return origXml.slice(afterTotalRow);
+  let secondTbl = origXml.indexOf(tblNeedle, firstTbl + tblNeedle.length);
+  if (secondTbl < 0) return origXml.slice(afterTotalRow);
+  let sectPr = origXml.indexOf('<w:sectPr');
+  if (sectPr < 0 || sectPr <= secondTbl) return origXml.slice(afterTotalRow);
+  return origXml.slice(afterTotalRow, secondTbl) + origXml.slice(sectPr);
+}
+
+/**
+ * Build a .docx from `templates/pre-enrollment/PRE-ENROLLMENT-template.docx` with timetable data (same layout as the official file).
+ */
+async function generatePreEnrollmentDocxBlob(ctx) {
+  await ensureJsZipLoaded();
+  let base = cenStaticBaseUrl() + 'templates/pre-enrollment/';
+  let zipRes = await fetch(base + 'PRE-ENROLLMENT-template.docx');
+  if (!zipRes.ok) throw new Error('missing template docx');
+  let rowRes = await fetch(base + 'docx-data-row.xml');
+  let totalRes = await fetch(base + 'docx-total-row.xml');
+  if (!rowRes.ok || !totalRes.ok) throw new Error('missing row fragments');
+  let [zipBuf, rowTpl, totalTpl] = await Promise.all([zipRes.arrayBuffer(), rowRes.text(), totalRes.text()]);
+  let zip = await JSZip.loadAsync(zipBuf);
+  let origXml = await zip.file('word/document.xml').async('string');
+  let SL = PRE_ENROLL_DOCX_DOCXML_SLICES;
+  let prefix = patchPreEnrollmentDocxPrefix(origXml.slice(0, SL.dataRowsStart), ctx);
+  let sec = ctx.section;
+  let rows = ctx.scheds
+    .filter(s => String(s.section || '').trim() === String(sec || '').trim())
+    .sort((a, b) => (getSubject(a.subjectId)?.code || '').localeCompare(getSubject(b.subjectId)?.code || ''));
+  let dataRows = '';
+  let totalU = 0;
+  for (let s of rows) {
+    let sub = getSubject(s.subjectId);
+    let u = sub && Number.isFinite(Number(sub.units)) ? Number(sub.units) : 0;
+    totalU += u;
+    let timeStr =
+      s.timeStart && s.timeEnd ? `${fmt12(s.timeStart)}-${fmt12(s.timeEnd)}` : '—';
+    dataRows += fillPreEnrollmentDocxDataRow(
+      rowTpl,
+      sub?.code || '—',
+      sub?.name || '—',
+      String(u),
+      roomDisplayLineFromPick(s.roomId, s.roomOtherName),
+      scheduleDaysToAbbrev(s.days),
+      timeStr,
+    );
+  }
+  let totalRow = fillPreEnrollmentDocxTotalRow(totalTpl, String(totalU));
+  let suffix = stripPreEnrollmentDocxTrailingUniversityFooter(
+    trimPreEnrollmentDocxDuplicateFormTail(origXml, SL.afterTotalRow),
+  );
+  let newXml = prefix + dataRows + totalRow + suffix;
+  zip.file('word/document.xml', newXml);
+  return zip.generateAsync({
+    type: 'blob',
+    mimeType: 'application/vnd.openxmlformats-officedocument.wordprocessingml.document',
+  });
+}
 function tableToGridMatrix(tableEl, lineSep = ' | ') {
   let matrix = [];
   let rows = [...tableEl.querySelectorAll('tr')];
@@ -4015,6 +4294,10 @@ function tableToGridMatrix(tableEl, lineSep = ' | ') {
 }
 function exportVisibleTimetable(format) {
   // Export exactly what is currently shown by active filters.
+  if (format === 'pdf' && state.filterMode === 'faculty') {
+    if (!printFacultyScheduleTabForm()) return;
+    return;
+  }
   let table = document.querySelector('#printArea .timetable-schedule');
   if (!table) { showToast('No timetable to export.'); return; }
   if (format === 'pdf') { window.print(); return; }
@@ -4086,6 +4369,134 @@ function exportVisibleTimetable(format) {
     downloadTextFile(`${stem}.xls`, html, 'application/vnd.ms-excel;charset=utf-8;');
     showToast('Excel exported.');
   }
+}
+
+function facultyScheduleTabRowsForPrint() {
+  const sem = state.termSemester || '1st Semester';
+  const ay = normalizeAcademicYearInput(state.termAcademicYear) || DEFAULT_ACADEMIC_YEAR;
+  const profId = state.filterFaculty || '';
+  if (!profId || profId === 'all') return { prof: null, rows: [], sem, ay };
+  const prof = getProfessor(profId);
+  const rows = state.schedules
+    .filter(
+      s =>
+        s.professorId === profId &&
+        String(s.schSem || '').trim() === sem &&
+        (normalizeAcademicYearInput(s.schAy) || DEFAULT_ACADEMIC_YEAR) === ay,
+    )
+    .slice();
+  rows.sort((a, b) => {
+    let ta = parseTimeToMinutes(a.timeStart);
+    let tb = parseTimeToMinutes(b.timeStart);
+    if (ta !== tb) return ta - tb;
+    return (getSubject(a.subjectId)?.code || '').localeCompare(getSubject(b.subjectId)?.code || '');
+  });
+  return { prof, rows, sem, ay };
+}
+
+function buildFacultyScheduleTabFormHtml() {
+  const { prof, rows, sem, ay } = facultyScheduleTabRowsForPrint();
+  if (!prof) return '';
+  const days = ['Monday', 'Tuesday', 'Wednesday', 'Thursday', 'Friday'];
+  const slots = timeSlots.filter(t => t < TIMETABLE_DAY_CLOSE);
+  const grid = Array(slots.length).fill(null).map(() => Array(days.length).fill(null));
+  rows.forEach(s => {
+    const sub = getSubject(s.subjectId);
+    const start = timeToRow(s.timeStart);
+    if (start < 0) return;
+    s.days.forEach(d => {
+      const col = days.indexOf(d);
+      if (col < 0) return;
+      const dur = timeDurationForTimetableGridDisplay(s, d, rows);
+      grid[start][col] = { s, sub, dur };
+    });
+  });
+  let contactHours = 0;
+  rows.forEach(s => {
+    let st = parseTimeToMinutes(s.timeStart);
+    let en = parseTimeToMinutes(s.timeEnd);
+    if (!Number.isFinite(st) || !Number.isFinite(en) || en <= st) return;
+    contactHours += ((en - st) / 60) * (Array.isArray(s.days) ? s.days.length : 1);
+  });
+  let bodyRows = [];
+  for (let r = 0; r < slots.length; r++) {
+    let t = slots[r];
+    let t2 = slotEndFromRow(r);
+    let tr = `<tr><td class="time">${escapeHtml(fmt12(t))}-${escapeHtml(fmt12(t2))}</td>`;
+    for (let c = 0; c < days.length; c++) {
+      let cell = grid[r][c];
+      if (cell && r === timeToRow(cell.s.timeStart)) {
+        let chrome = timetableSlotChrome(cell.s, {}, new Set());
+        let code = cell.sub?.code || '—';
+        let sec = cell.s.section || '—';
+        let room = roomDisplayLineFromPick(cell.s.roomId, cell.s.roomOtherName) || '—';
+        tr += `<td rowspan="${cell.dur}" class="busy" style="background:${escapeHtml(chrome.bg)};border-left:3px solid ${escapeHtml(
+          chrome.border,
+        )}"><div class="code">${escapeHtml(code)}</div><div>${escapeHtml(sec)}</div><div>${escapeHtml(room)}</div></td>`;
+      } else {
+        let covered = false;
+        for (let rr = r - 1; rr >= 0 && !covered; rr--) {
+          let prev = grid[rr][c];
+          if (prev && rr + prev.dur > r) covered = true;
+        }
+        if (!covered) tr += '<td></td>';
+      }
+    }
+    tr += '</tr>';
+    bodyRows.push(tr);
+  }
+  const semShort = sem === '1st Semester' ? '1st' : sem === '2nd Semester' ? '2nd' : sem;
+  return `<style>
+.fsf{font-family:Arial,sans-serif;color:#111;font-size:10pt}
+.fsf h2{margin:0 0 6px;text-align:center;font-size:12pt;letter-spacing:.02em}
+.fsf .meta{display:flex;justify-content:space-between;margin:0 0 6px;font-size:9pt}
+.fsf .meta b{font-weight:700}
+.fsf table{width:100%;border-collapse:collapse;table-layout:fixed}
+.fsf th,.fsf td{border:1px solid #000;padding:2px 3px;vertical-align:middle;font-size:8.5pt}
+.fsf th{background:#f2f2f2;text-align:center}
+.fsf td.time{width:14%;text-align:center;white-space:nowrap;font-size:8pt}
+.fsf td.busy{text-align:center}
+.fsf td.busy .code{font-weight:700}
+.fsf .sum{margin-top:6px;font-size:9pt}
+.fsf .sum-row{display:flex;gap:10px;max-width:280px}
+.fsf .sum-row span:last-child{border-bottom:1px solid #000;min-width:70px;text-align:center}
+</style>
+<div class="fsf">
+  <h2>INDIVIDUAL SCHEDULE OF FACULTY</h2>
+  <div class="meta"><div><b>COLLEGE:</b> CEN<br><b>LOCATION:</b> MHDP</div><div style="text-align:right"><b>SCHOOL YEAR:</b> ${escapeHtml(
+    ay,
+  )}<br><b>SEMESTER:</b> ${escapeHtml(semShort)}<br><b>FACULTY:</b> ${escapeHtml(prof.name || '')}</div></div>
+  <table>
+    <thead><tr><th>TIME/ DAY</th>${days.map(d => `<th>${d.toUpperCase()}</th>`).join('')}</tr></thead>
+    <tbody>${bodyRows.join('')}</tbody>
+  </table>
+  <div class="sum">
+    <div class="sum-row"><span><b>Teaching</b></span><span>${escapeHtml(formatHoursValue(contactHours))}</span></div>
+    <div class="sum-row"><span><b>Lesson Preparation</b></span><span>&nbsp;</span></div>
+    <div class="sum-row"><span><b>Consultation</b></span><span>&nbsp;</span></div>
+    <div class="sum-row"><span><b>Research</b></span><span>&nbsp;</span></div>
+    <div class="sum-row"><span><b>Extension</b></span><span>&nbsp;</span></div>
+    <div class="sum-row"><span><b>Meeting</b></span><span>&nbsp;</span></div>
+    <div class="sum-row"><span><b>Others</b></span><span>&nbsp;</span></div>
+    <div class="sum-row"><span><b>Total</b></span><span>${escapeHtml(formatHoursValue(contactHours))}</span></div>
+  </div>
+</div>`;
+}
+
+function printFacultyScheduleTabForm() {
+  const { prof } = facultyScheduleTabRowsForPrint();
+  if (!prof) {
+    showToast('Select one faculty first to print this format.');
+    return false;
+  }
+  let inner = buildFacultyScheduleTabFormHtml();
+  if (!inner) {
+    showToast('No faculty schedule found for the selected term.');
+    return false;
+  }
+  printHtmlDocumentInHiddenIframe(formsPrintShellDocument('', inner));
+  showToast('Printing faculty schedule form…');
+  return true;
 }
 /** Excel export for the curriculum tables currently shown (semester, year level, academic year filters). */
 function exportCurriculumTableCsv() {
@@ -5366,6 +5777,54 @@ function formsSemesterSpelled(sem) {
   return (sem || '').toLowerCase();
 }
 
+/** Uppercase semester + AY line for Schedule of Subjects (matches official spreadsheet, e.g. 1ST SEMESTER 2025-2026). */
+function scheduleOfSubjectsSemAyUpperPlain(ctx) {
+  const sem = ctx.sem || '';
+  let mid = '';
+  if (sem === '1st Semester') mid = '1ST SEMESTER';
+  else if (sem === '2nd Semester') mid = '2ND SEMESTER';
+  else if (sem === 'Midyear') mid = 'MIDYEAR';
+  else mid = String(sem).toUpperCase().replace(/\s+/g, ' ').trim();
+  return `${mid} ${ctx.ay || ''}`.trim();
+}
+
+/**
+ * Schedule of Subjects header: left column To / From / Course·Yr·Section; right column Date / Schedule from Sem/AY.
+ * Values are bold + underlined (spreadsheet style). `esc` is escapeHtml or Excel esc().
+ */
+function buildScheduleOfSubjectsExportMetaBlock(sectionKey, ctx, dateStr, esc, useInlineStyles) {
+  const semAy = esc(scheduleOfSubjectsSemAyUpperPlain(ctx));
+  const sec = esc(sectionKey != null && String(sectionKey).trim() !== '' ? String(sectionKey).trim() : '—');
+  const dept = esc(ctx.deptName);
+  const dateE = esc(dateStr);
+  if (useInlineStyles) {
+    const row = (lbl, valInner) =>
+      `<div style="margin:0 0 5px;line-height:1.45">${lbl} <b><u>${valInner}</u></b></div>`;
+    return `<table style="width:100%;border-collapse:collapse;margin:0 0 12px;font-size:10.5pt;font-family:Arial,sans-serif"><tr>
+<td style="width:50%;vertical-align:top;padding:0 14px 0 0;line-height:1.45">
+${row('<b style="white-space:pre">To            :</b>', 'VP-ACAD')}
+${row('<b style="white-space:pre">From        :</b>', dept)}
+${row('<b>Course/Yr/Section    :</b>', sec)}
+</td>
+<td style="width:50%;vertical-align:top;line-height:1.45">
+${row('<b>Date :</b>', dateE)}
+${row('<b>Schedule from Sem/AY      :</b>', semAy)}
+</td>
+</tr></table>`;
+  }
+  return `<table class="sos-meta-2col"><tr>
+<td class="sos-meta-left">
+  <div class="sos-meta-row"><span class="sos-meta-lbl">To            :</span> <span class="sos-val-u">VP-ACAD</span></div>
+  <div class="sos-meta-row"><span class="sos-meta-lbl">From        :</span> <span class="sos-val-u">${dept}</span></div>
+  <div class="sos-meta-row"><span class="sos-meta-lbl">Course/Yr/Section    :</span> <span class="sos-val-u">${sec}</span></div>
+</td>
+<td class="sos-meta-right">
+  <div class="sos-meta-row"><span class="sos-meta-lbl">Date :</span> <span class="sos-val-u">${dateE}</span></div>
+  <div class="sos-meta-row"><span class="sos-meta-lbl">Schedule from Sem/AY      :</span> <span class="sos-val-u">${semAy}</span></div>
+</td>
+</tr></table>`;
+}
+
 function formsPrintShellDocument(title, innerBody) {
   return `<!DOCTYPE html><html lang="en"><head><meta charset="utf-8"><meta name="viewport" content="width=device-width, initial-scale=1"><title>${escapeHtml(
     title,
@@ -5623,16 +6082,72 @@ ${rows.join('\n')}
 }
 
 function buildPreEnrollmentFormHtml(ctx) {
-  let sec = ctx.section;
+  const sec = ctx.section;
+  const peStyle = `<style>
+.pe-doc { font-family: Arial, 'Helvetica Neue', Helvetica, sans-serif; font-size: 10.5pt; color: #111; line-height: 1.25; }
+.pe-slu1 { text-align: center; font-size: 11pt; font-weight: 700; margin: 0; letter-spacing: 0.02em; }
+.pe-slu2 { text-align: center; font-size: 10.5pt; margin: 2px 0 8px; }
+.pe-title { text-align: center; font-size: 13pt; font-weight: 700; margin: 0 0 12px; letter-spacing: 0.06em; }
+.pe-meta { width: 100%; border-collapse: collapse; margin: 0 0 10px; font-size: 10.5pt; }
+.pe-meta td { vertical-align: bottom; padding: 4px 8px 6px 0; }
+.pe-meta .pe-lbl { font-weight: 700; white-space: nowrap; }
+.pe-meta .pe-blank { border-bottom: 1px solid #000; min-width: 180px; display: inline-block; }
+.pe-pay { font-weight: 700; }
+.pe-val { font-weight: 700; text-decoration: underline; }
+.pe-sec-row { display: flex; justify-content: space-between; align-items: baseline; margin: 10px 0 6px; font-size: 10.5pt; font-weight: 700; }
+.pe-sec-code { text-transform: none; }
+.pe-subj-h { letter-spacing: 0.02em; }
+.pe-grid { width: 100%; border-collapse: collapse; table-layout: fixed; margin: 0 0 14px; font-size: 9.5pt; }
+.pe-grid th, .pe-grid td { border: 1px solid #000; padding: 3px 4px; vertical-align: middle; word-wrap: break-word; }
+.pe-grid thead th { background: #fff; font-weight: 700; text-align: center; }
+.pe-grid tbody td:nth-child(1),
+.pe-grid tbody td:nth-child(3),
+.pe-grid tbody td:nth-child(4),
+.pe-grid tbody td:nth-child(5),
+.pe-grid tbody td:nth-child(6) { text-align: center; }
+.pe-grid tbody td:nth-child(2) { text-align: left; }
+.pe-total td { font-weight: 700; }
+.pe-total .pe-total-lbl { text-align: right; }
+.pe-total .pe-total-u { text-align: center; }
+.pe-sig { margin-top: 22px; text-align: center; font-size: 10.5pt; }
+.pe-sig-line { border-bottom: 1px solid #000; width: 220px; margin: 0 auto 4px; min-height: 18px; }
+.pe-sig-cap { margin: 0; font-weight: 700; }
+@media print {
+  .pe-doc { -webkit-print-color-adjust: exact; print-color-adjust: exact; }
+}
+</style>`;
+  const peHead = `${peStyle}<div class="pe-doc">
+<p class="pe-slu1">SOUTHERN LUZON STATE UNIVERSITY</p>
+<p class="pe-slu2">Lucban, Quezon</p>
+<p class="pe-title">PRE-ENROLMENT FORM</p>`;
+  const peStudentBlock = `<table class="pe-meta">
+<tr>
+  <td colspan="2"><span class="pe-lbl">STUDENT NUMBER:</span> <span class="pe-blank">&nbsp;</span></td>
+  <td colspan="2"><span class="pe-pay">PAYMENT:</span> &nbsp; ☐ FULL &nbsp; &nbsp; ☐ PARTIAL</td>
+</tr>
+<tr>
+  <td colspan="2"><span class="pe-lbl">STUDENT NAME:</span> <span class="pe-blank">&nbsp;</span></td>
+  <td colspan="2"><span class="pe-lbl">SCHOOL YEAR:</span> <span class="pe-val">${escapeHtml(ctx.ay)}</span></td>
+</tr>
+<tr>
+  <td colspan="2"><span class="pe-lbl">COURSE/YEAR:</span> <span class="pe-blank">&nbsp;</span></td>
+  <td colspan="2"><span class="pe-lbl">SEMESTER:</span> <span class="pe-val">${escapeHtml(ctx.sem)}</span></td>
+</tr>
+</table>`;
+
   if (!sec || sec === 'all') {
-    return `<h1 class="doc-title">Pre-Enrolment Form</h1>
-<p>Choose a <strong>section</strong> in the filter bar (not &ldquo;All sections&rdquo;) so the subject list matches one class block, then export again.</p>`;
+    return `${peHead}
+${peStudentBlock}
+<p style="margin:12px 0">Choose a <strong>section</strong> in the export dialog (not &ldquo;All&rdquo;) so the subject list matches one class block, then export again.</p>
+</div>`;
   }
   let rows0 = ctx.scheds.filter(s => String(s.section || '').trim() === sec);
   if (rows0.length === 0) {
-    return `<h1 class="doc-title">Pre-Enrolment Form</h1>
-<p class="slu-line">SOUTHERN LUZON STATE UNIVERSITY &mdash; Lucban, Quezon</p>
-<p style="margin-top:12px">No classes scheduled for <strong>${escapeHtml(sec)}</strong> under the current Academic Year, Semester, and year-level filters. Enter timetabled classes first.</p>`;
+    return `${peHead}
+${peStudentBlock}
+<div class="pe-sec-row"><span class="pe-sec-code">${escapeHtml(sec)}</span><span class="pe-subj-h">SUBJECTS TO BE TAKEN:</span></div>
+<p style="margin:10px 0">No classes scheduled for <strong>${escapeHtml(sec)}</strong> under the current Academic Year, Semester, and year-level filters. Enter timetabled classes first.</p>
+</div>`;
   }
   let totalU = 0;
   let bodyRows = rows0.map(s => {
@@ -5642,102 +6157,158 @@ function buildPreEnrollmentFormHtml(ctx) {
     return `<tr>
   <td>${escapeHtml(sub?.code || '—')}</td>
   <td>${escapeHtml(sub?.name || '—')}</td>
-  <td class="t-center">${escapeHtml(String(u))}</td>
-  <td class="t-center">${escapeHtml(roomDisplayLineFromPick(s.roomId, s.roomOtherName))}</td>
-  <td class="t-center">${escapeHtml(scheduleDaysToAbbrev(s.days))}</td>
-  <td class="t-center">${escapeHtml(fmt12(s.timeStart) + '–' + fmt12(s.timeEnd))}</td>
+  <td>${escapeHtml(String(u))}</td>
+  <td>${escapeHtml(roomDisplayLineFromPick(s.roomId, s.roomOtherName))}</td>
+  <td>${escapeHtml(scheduleDaysToAbbrev(s.days))}</td>
+  <td>${escapeHtml(fmt12(s.timeStart) + '-' + fmt12(s.timeEnd))}</td>
 </tr>`;
   });
-  return `<h1 class="doc-title">Pre-Enrolment Form</h1>
-<p class="slu-line">SOUTHERN LUZON STATE UNIVERSITY</p>
-<p class="slu-line small">Lucban, Quezon</p>
-<div class="meta-block" style="display:grid; grid-template-columns:1fr 1fr; gap:6px; max-width:100%;">
-  <div>STUDENT NUMBER: ___________________________</div>
-  <div>STUDENT NAME: ___________________________</div>
-  <div>COURSE/YEAR: ___________________________</div>
-  <div>PAYMENT: ☐ FULL &nbsp; ☐ PARTIAL</div>
-  <div>SCHOOL YEAR: <strong>${escapeHtml(ctx.ay)}</strong></div>
-  <div>SEMESTER: <strong>${escapeHtml(ctx.sem)}</strong></div>
-</div>
-<p style="text-align:left; margin:8px 0 4px"><strong>${escapeHtml(sec)}</strong> &nbsp; &nbsp; <span style="text-align:center; display:inline-block; width:60%">SUBJECTS TO BE TAKEN:</span></p>
-<table class="form-grid">
-<thead><tr>
-  <th>Subject code</th><th>Subject description</th><th>Units</th><th>Room</th><th>Day</th><th>Time</th>
-</tr></thead>
+  return `${peHead}
+${peStudentBlock}
+<div class="pe-sec-row"><span class="pe-sec-code">${escapeHtml(sec)}</span><span class="pe-subj-h">SUBJECTS TO BE TAKEN:</span></div>
+<table class="pe-grid">
+<thead>
+<tr>
+  <th rowspan="2">SUBJECT<br/>CODE</th>
+  <th rowspan="2">SUBJECT DESCRIPTION</th>
+  <th rowspan="2">UNITS</th>
+  <th rowspan="2">ROOM</th>
+  <th colspan="2">SCHEDULE</th>
+</tr>
+<tr>
+  <th>DAY</th>
+  <th>TIME</th>
+</tr>
+</thead>
 <tbody>
 ${bodyRows.join('')}
-<tr><td colspan="2" class="t-right">TOTAL</td><td class="t-center"><strong>${escapeHtml(String(totalU))}</strong></td><td colspan="3"></td></tr>
+<tr class="pe-total">
+  <td colspan="2" class="pe-total-lbl">TOTAL</td>
+  <td class="pe-total-u">${escapeHtml(String(totalU))}</td>
+  <td colspan="3"></td>
+</tr>
 </tbody>
 </table>
 <div class="footer-ref">OP-MIS-1.06F1, REV.0 &mdash; AY ${escapeHtml(ctx.ay)} ${escapeHtml(ctx.sem)}. Data from timetable.</div>
-<div class="sig" style="justify-content:flex-end">
-  <div class="sig-block">_________________________<br/>(Dean/Adviser)</div>
+<div class="pe-sig">
+  <div class="pe-sig-line"></div>
+  <p class="pe-sig-cap">(DEAN/ADVISER)</p>
+</div>
 </div>`;
 }
 
 function buildScheduleOfSubjectsHtml(ctx) {
-  if (!ctx.scheds.length) {
-    return `<h1 class="doc-title">Schedule of Subject</h1>
-<p class="slu-line">SOUTHERN LUZON STATE UNIVERSITY</p>
-<p style="margin-top:12px">No schedule rows match the current filters. Adjust <strong>Academic Year</strong>, <strong>Semester</strong>, <strong>Year level</strong>, or <strong>Section</strong>, or add classes in the timetable.</p>`;
-  }
-  let bySection = {};
-  for (let s of ctx.scheds) {
-    let k = String(s.section || '—').trim() || '—';
-    if (!bySection[k]) bySection[k] = [];
-    bySection[k].push(s);
-  }
-  let keys = Object.keys(bySection).sort((a, b) => a.localeCompare(b));
-  let parts = keys.map(k => {
-    let list = bySection[k];
-    let totalU = 0;
-    let inner = list
-      .map(s => {
-        let sub = getSubject(s.subjectId);
-        let u = sub && Number.isFinite(Number(sub.units)) ? Number(sub.units) : 0;
-        totalU += u;
-        return `<tr>
-  <td>${escapeHtml(sub?.code || '—')}</td>
-  <td>${escapeHtml(sub?.name || '—')}</td>
-  <td class="t-center">${escapeHtml(String(u))}</td>
-  <td class="t-center">${escapeHtml(scheduleDaysToAbbrev(s.days))}</td>
-  <td class="t-center">${escapeHtml(fmt12(s.timeStart) + '–' + fmt12(s.timeEnd))}</td>
-  <td>${escapeHtml(roomDisplayLineFromPick(s.roomId, s.roomOtherName))}</td>
-  <td>${escapeHtml(professorDisplayLineFromPick(s.professorId, s.professorOtherName))}</td>
+  const SOS_DEAN = 'DR. MARIA CORAZON B. ABEJO';
+  const dateStr = new Date().toLocaleDateString('en-PH', { year: 'numeric', month: 'long', day: 'numeric' });
+  const semAy = scheduleOfSubjectsSemAyUpperPlain(ctx);
+  const sectionKeys = (() => {
+    if (ctx.section && ctx.section !== 'all') return [String(ctx.section).trim()];
+    return [...new Set(ctx.scheds.map(s => String(s.section || '').trim()).filter(Boolean))].sort((a, b) => a.localeCompare(b));
+  })();
+  const sec1 = sectionKeys[0] || '—';
+  const sec2 = sectionKeys[1] || '';
+  const block1 = scheduleXlsxSectionRows(ctx, sec1);
+  const block2 = sec2 ? scheduleXlsxSectionRows(ctx, sec2) : { data: [], totalUnits: 0 };
+  const renderRows = rows => {
+    const maxRows = 7;
+    let out = '';
+    for (let i = 0; i < maxRows; i++) {
+      const r = rows[i];
+      out += `<tr>
+  <td>${escapeHtml(r?.code || '')}</td>
+  <td>${escapeHtml(r?.name || '')}</td>
+  <td class="c">${escapeHtml(r ? String(r.units) : '')}</td>
+  <td class="c">${escapeHtml(r?.day || '')}</td>
+  <td class="c">${escapeHtml(r?.time || '')}</td>
+  <td class="c">${escapeHtml(r?.room || '')}</td>
+  <td>${escapeHtml(r?.faculty || '')}</td>
 </tr>`;
-      })
-      .join('');
-    return `<h2 style="font-size:11pt; margin:14px 0 6px">${escapeHtml(k)}</h2>
-<table class="form-grid">
-<thead><tr>
-  <th>Code</th><th>Subject/Description</th><th>Units</th><th>Day</th><th>Time</th><th>Room</th><th>Faculty</th>
-</tr></thead>
-<tbody>
-${inner}
-<tr><td colspan="2" class="t-right">TOTAL</td><td class="t-center"><strong>${escapeHtml(
-      String(totalU),
-    )}</strong></td><td colspan="4"></td></tr>
-</tbody>
-</table>`;
-  });
-  let today = new Date();
-  let dateStr = today.toLocaleDateString('en-PH', { year: 'numeric', month: 'long', day: 'numeric' });
-  return `<h1 class="doc-title">Schedule of Subject</h1>
-<p class="slu-line">SOUTHERN LUZON STATE UNIVERSITY</p>
-<div class="meta-block">
-  <div class="meta-row"><span><strong>To:</strong> VP-ACAD</span><span><strong>From:</strong> ${escapeHtml(
-    ctx.deptName,
-  )} (${escapeHtml(ctx.deptCode)})</span></div>
-  <div class="meta-row"><span><strong>Date:</strong> ${escapeHtml(dateStr)}</span><span><strong>Schedule from Sem/AY:</strong> ${escapeHtml(
-    ctx.sem,
-  )} ${escapeHtml(ctx.ay)}</span></div>
-</div>
-${parts.join('')}
-<div class="sig" style="margin-top:20px">
-  <div class="sig-block">Prepared by:<br/><br/><strong>${escapeHtml(ctx.chairName)}</strong><br/>Dept Prog Chair</div>
-  <div class="sig-block">Noted by:<br/><br/><strong>DR. MARIA CORAZON B. ABEJO</strong><br/>Dean, College of Engineering</div>
-</div>
-<div class="footer-ref">AA-INS-1.03F4.Rev.0 &mdash; ${escapeHtml(ctx.deptName)}. Generated from timetabled data.</div>`;
+    }
+    return out;
+  };
+  const styleBlock = `<style>
+.sos-doc { font-family: Arial, 'Helvetica Neue', Helvetica, sans-serif; font-size: 10pt; color: #111; line-height: 1.2; }
+.sos-title { text-align: center; font-size: 13pt; font-weight: 700; margin: 0 0 8px; letter-spacing: .02em; }
+.sos-meta { width: 100%; border-collapse: collapse; margin: 0 0 8px; }
+.sos-meta td { vertical-align: top; padding: 1px 0; }
+.sos-meta .l { width: 54%; }
+.sos-meta .r { width: 46%; text-align: left; }
+.sos-line { margin: 0 0 2px; }
+.sos-sec { margin: 8px 0 2px; font-size: 10pt; }
+.sos-grid { width: 100%; border-collapse: collapse; table-layout: fixed; margin: 0 0 8px; font-size: 9pt; }
+.sos-grid th, .sos-grid td { border: 1px solid #000; padding: 2px 4px; vertical-align: middle; }
+.sos-grid th { font-weight: 700; text-align: center; background: #fff; }
+.sos-grid td.c { text-align: center; }
+.sos-total td { font-weight: 700; }
+.sos-sign { width: 100%; border-collapse: collapse; margin-top: 10px; font-size: 10pt; }
+.sos-sign td { width: 50%; vertical-align: top; }
+.sos-sign p { margin: 0 0 2px; }
+@media print {
+  .sos-doc { -webkit-print-color-adjust: exact; print-color-adjust: exact; }
+}
+</style>`;
+  return `${styleBlock}
+<div class="sos-doc">
+  <h1 class="sos-title">SCHEDULE OF SUBJECT</h1>
+  <table class="sos-meta">
+    <tr>
+      <td class="l">
+        <div class="sos-line"><b>To&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;:</b> <b><u>VP-ACAD</u></b></div>
+        <div class="sos-line"><b>From&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;:</b> <b><u>${escapeHtml(ctx.deptCode)} Department</u></b></div>
+      </td>
+      <td class="r">
+        <div class="sos-line"><b>Date&nbsp;&nbsp;:</b> <b><u>${escapeHtml(dateStr)}</u></b></div>
+        <div class="sos-line"><b>Schedule from Sem/AY&nbsp;&nbsp;:</b> <b><u>${escapeHtml(semAy)}</u></b></div>
+      </td>
+    </tr>
+  </table>
+
+  <div class="sos-sec"><b>Course/Yr/Section : ${escapeHtml(sec1)}</b></div>
+  <table class="sos-grid">
+    <thead>
+      <tr>
+        <th rowspan="2">Code</th><th rowspan="2">Subject/Description</th><th rowspan="2">Units</th>
+        <th colspan="2">Schedule</th><th rowspan="2">Room</th><th rowspan="2">Faculty</th>
+      </tr>
+      <tr><th>Day</th><th>Time</th></tr>
+    </thead>
+    <tbody>
+      ${renderRows(block1.data)}
+      <tr class="sos-total"><td colspan="2" style="text-align:right">TOTAL</td><td class="c">${escapeHtml(String(block1.totalUnits || 0))}</td><td colspan="4"></td></tr>
+    </tbody>
+  </table>
+
+  ${sec2 ? `<div class="sos-sec"><b>Course/Yr/Section : ${escapeHtml(sec2)}</b></div>` : ''}
+  ${sec2 ? `<table class="sos-grid">
+    <thead>
+      <tr>
+        <th rowspan="2">Code</th><th rowspan="2">Subject/Description</th><th rowspan="2">Units</th>
+        <th colspan="2">Schedule</th><th rowspan="2">Room</th><th rowspan="2">Faculty</th>
+      </tr>
+      <tr><th>Day</th><th>Time</th></tr>
+    </thead>
+    <tbody>
+      ${renderRows(block2.data)}
+      <tr class="sos-total"><td colspan="2" style="text-align:right">TOTAL</td><td class="c">${escapeHtml(String(block2.totalUnits || 0))}</td><td colspan="4"></td></tr>
+    </tbody>
+  </table>` : ''}
+
+<table class="sos-sign">
+  <tr>
+    <td>
+      <p>Prepared by:</p>
+      <p><b>${escapeHtml(ctx.chairName || 'PROGRAM CHAIR NAME')}</b></p>
+      <p>Dept Prog Chair</p>
+    </td>
+    <td>
+      <p>Approved by:</p>
+      <p><b>${escapeHtml(SOS_DEAN)}</b></p>
+      <p>Dean College of Engineering</p>
+    </td>
+  </tr>
+</table>
+<div class="footer-ref">AA-INS-1.03F4.Rev.0</div>
+</div>`;
 }
 
 /** Spreadsheet download (opens in Excel) — same data as PDF exports. */
@@ -5847,14 +6418,19 @@ function formsExportAsExcel(ctx, type) {
       showToast('Choose a specific section in the export form before using Excel.');
       return;
     }
+    const sec = ctx.section;
+    const theadPe =
+      '<thead><tr><th rowspan="2">SUBJECT CODE</th><th rowspan="2">SUBJECT DESCRIPTION</th><th rowspan="2">UNITS</th><th rowspan="2">ROOM</th><th colspan="2">SCHEDULE</th></tr><tr><th>DAY</th><th>TIME</th></tr></thead>';
+    const tdC = ' style="text-align:center"';
+    const tdL = ' style="text-align:left"';
     const body = ctx.scheds
       .map(s => {
         const sub = getSubject(s.subjectId);
         const u = sub && Number.isFinite(Number(sub.units)) ? Number(sub.units) : '';
-        return `<tr><td>${esc(sub?.code)}</td><td>${esc(sub?.name)}</td><td>${esc(u)}</td><td>${esc(
+        return `<tr><td${tdC}>${esc(sub?.code)}</td><td${tdL}>${esc(sub?.name)}</td><td${tdC}>${esc(u)}</td><td${tdC}>${esc(
           roomDisplayLineFromPick(s.roomId, s.roomOtherName),
-        )}</td><td>${esc(scheduleDaysToAbbrev(s.days))}</td><td>${esc(fmt12(s.timeStart) + '–' + fmt12(s.timeEnd))}</td><td>${esc(
-          professorDisplayLine(s),
+        )}</td><td${tdC}>${esc(scheduleDaysToAbbrev(s.days))}</td><td${tdC}>${esc(
+          fmt12(s.timeStart) + '-' + fmt12(s.timeEnd),
         )}</td></tr>`;
       })
       .join('');
@@ -5862,26 +6438,91 @@ function formsExportAsExcel(ctx, type) {
       const sub = getSubject(s.subjectId);
       return sum + (sub && Number.isFinite(Number(sub.units)) ? Number(sub.units) : 0);
     }, 0);
-    tableHtml = `<h2>${esc(ctx.section)} &mdash; AY ${esc(ctx.ay)} ${esc(ctx.sem)}</h2>
-<table border="1"><thead><tr><th>Code</th><th>Description</th><th>Units</th><th>Room</th><th>Day</th><th>Time</th><th>Faculty</th></tr></thead><tbody>
-${body}<tr><td></td><td><b>TOTAL</b></td><td><b>${esc(totalU)}</b></td><td colspan="4"></td></tr></tbody></table>`;
+    const blank = '<span style="border-bottom:1px solid #000;display:inline-block;min-width:160px">&nbsp;</span>';
+    tableHtml = `<div style="font-family:Arial,sans-serif;font-size:10.5pt;line-height:1.25;color:#111">
+<p style="text-align:center;font-weight:700;font-size:11pt;margin:0">SOUTHERN LUZON STATE UNIVERSITY</p>
+<p style="text-align:center;margin:2px 0 8px">Lucban, Quezon</p>
+<p style="text-align:center;font-weight:700;font-size:13pt;margin:0 0 12px;letter-spacing:0.06em">PRE-ENROLMENT FORM</p>
+<table style="width:100%;border-collapse:collapse;margin:0 0 10px;font-size:10.5pt"><tr>
+<td colspan="2" style="padding:4px 8px 6px 0;vertical-align:bottom"><b>STUDENT NUMBER:</b> ${blank}</td>
+<td colspan="2" style="padding:4px 8px 6px 0;vertical-align:bottom"><b>PAYMENT:</b> &nbsp; ☐ FULL &nbsp; ☐ PARTIAL</td></tr>
+<tr>
+<td colspan="2" style="padding:4px 8px 6px 0;vertical-align:bottom"><b>STUDENT NAME:</b> ${blank}</td>
+<td colspan="2" style="padding:4px 8px 6px 0;vertical-align:bottom"><b>SCHOOL YEAR:</b> <b><u>${esc(ctx.ay)}</u></b></td></tr>
+<tr>
+<td colspan="2" style="padding:4px 8px 6px 0;vertical-align:bottom"><b>COURSE/YEAR:</b> ${blank}</td>
+<td colspan="2" style="padding:4px 8px 6px 0;vertical-align:bottom"><b>SEMESTER:</b> <b><u>${esc(ctx.sem)}</u></b></td></tr>
+</table>
+<table style="width:100%;margin:10px 0 6px;font-size:10.5pt;border-collapse:collapse"><tr>
+<td style="font-weight:700">${esc(sec)}</td>
+<td style="font-weight:700;text-align:right">SUBJECTS TO BE TAKEN:</td>
+</tr></table>
+<table border="1" cellspacing="0" cellpadding="3" style="border-collapse:collapse;width:100%;font-size:9.5pt">${theadPe}<tbody>${body}<tr><td colspan="2" align="right"><b>TOTAL</b></td><td align="center"><b>${esc(
+      String(totalU),
+    )}</b></td><td colspan="3"></td></tr></tbody></table>
+<p style="font-size:8pt;color:#444;margin-top:10px">OP-MIS-1.06F1, REV.0 &mdash; AY ${esc(ctx.ay)} ${esc(ctx.sem)}</p>
+<div style="margin-top:22px;text-align:center;font-size:10.5pt"><div style="border-bottom:1px solid #000;width:220px;margin:0 auto 4px;min-height:16px">&nbsp;</div><p style="margin:0;font-weight:700">(DEAN/ADVISER)</p></div>
+</div>`;
   } else {
     title = 'Schedule of Subjects';
-    const body = ctx.scheds
-      .map(s => {
-        const sub = getSubject(s.subjectId);
-        const u = sub && Number.isFinite(Number(sub.units)) ? Number(sub.units) : '';
-        return `<tr><td>${esc(s.section)}</td><td>${esc(sub?.code)}</td><td>${esc(sub?.name)}</td><td>${esc(u)}</td><td>${esc(
-          scheduleDaysToAbbrev(s.days),
-        )}</td><td>${esc(fmt12(s.timeStart) + '–' + fmt12(s.timeEnd))}</td><td>${esc(
-          roomDisplayLineFromPick(s.roomId, s.roomOtherName),
-        )}</td><td>${esc(professorDisplayLine(s))}</td></tr>`;
-      })
-      .join('');
-    tableHtml = `<h2>AY ${esc(ctx.ay)} &mdash; ${esc(ctx.sem)} &mdash; ${esc(ctx.deptName)}</h2>
-<table border="1"><thead><tr><th>Section</th><th>Code</th><th>Subject</th><th>Units</th><th>Day</th><th>Time</th><th>Room</th><th>Faculty</th></tr></thead><tbody>${
-      body || '<tr><td colspan="8">No rows</td></tr>'
-    }</tbody></table>`;
+    const dateStr = new Date().toLocaleDateString('en-PH', { year: 'numeric', month: 'long', day: 'numeric' });
+    const thead2 =
+      '<thead><tr><th rowspan="2">Code</th><th rowspan="2">Subject/Description</th><th rowspan="2">Units</th><th colspan="2">Schedule</th><th rowspan="2">Room</th><th rowspan="2">Faculty</th></tr><tr><th>Day</th><th>Time</th></tr></thead>';
+    const tdC = ' style="text-align:center"';
+    const tdL = ' style="text-align:left"';
+    if (!ctx.scheds.length) {
+      tableHtml = `<div style="font-family:Arial,sans-serif;font-size:11pt;">
+<h1 style="text-align:center;font-size:14pt;margin:0 0 8px;font-weight:700">SCHEDULE OF SUBJECT</h1>
+<div style="height:10px;line-height:0;font-size:0">&nbsp;</div>
+${buildScheduleOfSubjectsExportMetaBlock('—', ctx, dateStr, esc, true)}
+<p>No rows match the current filters.</p></div>`;
+    } else {
+      const bySection = {};
+      for (const s of ctx.scheds) {
+        const k = String(s.section || '—').trim() || '—';
+        if (!bySection[k]) bySection[k] = [];
+        bySection[k].push(s);
+      }
+      const keys = Object.keys(bySection).sort((a, b) => a.localeCompare(b));
+      const blocks = keys
+        .map(k => {
+          const list = bySection[k];
+          let totalU = 0;
+          const rows = list
+            .map(s => {
+              const sub = getSubject(s.subjectId);
+              const u = sub && Number.isFinite(Number(sub.units)) ? Number(sub.units) : 0;
+              totalU += u;
+              return `<tr><td${tdC}>${esc(sub?.code)}</td><td${tdL}>${esc(sub?.name)}</td><td${tdC}>${esc(
+                u,
+              )}</td><td${tdC}>${esc(scheduleDaysToAbbrev(s.days))}</td><td${tdC}>${esc(
+                fmt12(s.timeStart) + '-' + fmt12(s.timeEnd),
+              )}</td><td${tdC}>${esc(roomDisplayLineFromPick(s.roomId, s.roomOtherName))}</td><td${tdL}>${esc(
+                professorDisplayLineFromPick(s.professorId, s.professorOtherName),
+              )}</td></tr>`;
+            })
+            .join('');
+          return `<div style="margin:0 0 18px;font-family:Arial,sans-serif">
+${buildScheduleOfSubjectsExportMetaBlock(k, ctx, dateStr, esc, true)}
+<table border="1" cellspacing="0" cellpadding="3" style="border-collapse:collapse;width:100%;font-size:10pt">${thead2}<tbody>${rows}<tr><td colspan="2" align="right"><b>TOTAL</b></td><td align="center"><b>${esc(
+            String(totalU),
+          )}</b></td><td colspan="4"></td></tr></tbody></table></div>`;
+        })
+        .join('');
+      const chair = esc(ctx.chairName || 'PROGRAM CHAIR NAME');
+      const dean = esc('DR. MARIA CORAZON B. ABEJO');
+      tableHtml = `<div style="font-family:Arial,sans-serif;font-size:11pt;line-height:1.25">
+<h1 style="text-align:center;font-size:14pt;margin:0 0 8px;font-weight:700;letter-spacing:0.04em">SCHEDULE OF SUBJECT</h1>
+<div style="height:10px;line-height:0;font-size:0">&nbsp;</div>
+${blocks}
+<table style="width:100%;margin-top:20px;font-size:10.5pt;border-collapse:collapse"><tr>
+<td style="width:33%;vertical-align:top"><div style="margin-bottom:8px">Prepared by:</div><b>${chair}</b><br/>Dept Prog Chair</td>
+<td style="width:34%"></td>
+<td style="width:33%;vertical-align:top"><div style="margin-bottom:8px">Approved by:</div><b>${dean}</b><br/>Dean College of Engineering</td>
+</tr></table>
+<p style="font-size:8pt;color:#444;margin-top:12px">AA-INS-1.03F4.Rev.0 &mdash; ${esc(ctx.deptName)}</p>
+</div>`;
+    }
   }
   const html = `<!DOCTYPE html><html><head><meta charset="utf-8"></head><body>${tableHtml}</body></html>`;
   const stem = `${title.replace(/\s+/g, '-')}-${String(ctx.ay).replace(/[^0-9-]+/g, '')}-${(ctx.section && ctx.section !== 'all' ? String(ctx.section) : 'all')
@@ -5980,6 +6621,22 @@ function openFormsOutput(kind, type, options) {
         try { providedWindow.close(); } catch (e) { /* ignore */ }
       }
       try {
+        if (type === 'schedule') {
+          generateScheduleSubjectsXlsxBlob(ctx)
+            .then(blob => {
+              const sectionSlug = (ctx.section && ctx.section !== 'all' ? String(ctx.section) : 'all')
+                .replace(/\s+/g, '-')
+                .slice(0, 40);
+              const stem = `Schedule-of-Subjects-${String(ctx.ay).replace(/[^0-9-]+/g, '')}-${sectionSlug}`;
+              downloadBlobFile(`${stem}.xlsx`, blob);
+              showToast('Excel file downloaded.');
+            })
+            .catch(() => {
+              formsExportAsExcel(ctx, type);
+              showToast('Excel-compatible file downloaded.');
+            });
+          return;
+        }
         formsExportAsExcel(ctx, type);
         showToast('Excel-compatible file downloaded.');
       } catch (e) {
@@ -5988,27 +6645,31 @@ function openFormsOutput(kind, type, options) {
       return;
     }
     if (format === 'word' && type === 'preenroll') {
-      let title = 'Pre-Enrolment Form';
       let inner = buildPreEnrollmentFormHtml(ctx);
-      let full = formsPrintShellDocument(title, inner);
-      let fname = `Pre-Enrolment-${(ctx.section || 'section').replace(/\s+/g, '-')}-${ctx.ay}.doc`;
-      try {
-        downloadTextFile(fname, full.replace('<!DOCTYPE html>', '\uFEFF<!DOCTYPE html>'), 'application/msword;charset=utf-8');
-        showToast('Word-compatible .doc downloaded.');
-      } catch (e) { /* ignore */ }
-      if (kind === 'print') {
-        printHtmlDocumentInHiddenIframe(formsPrintShellDocument('', inner));
-        if (providedWindow && !providedWindow.closed) {
-          try {
-            providedWindow.close();
-          } catch (e) {
-            /* ignore */
+      void (async () => {
+        try {
+          let blob = await generatePreEnrollmentDocxBlob(ctx);
+          let fname = `Pre-Enrolment-${(ctx.section || 'section').replace(/\s+/g, '-')}-${ctx.ay}.docx`;
+          downloadBlobFile(fname, blob);
+          if (kind === 'print') {
+            printHtmlDocumentInHiddenIframe(formsPrintShellDocument('', inner));
+            if (providedWindow && !providedWindow.closed) {
+              try {
+                providedWindow.close();
+              } catch (e) {
+                /* ignore */
+              }
+            }
+            showToast(
+              'Pre-Enrolment .docx downloaded. Printing… Turn off Headers and footers (More settings) for a clean PDF.',
+            );
+          } else {
+            showToast('Official Pre-Enrolment template (.docx) downloaded.');
           }
+        } catch (e) {
+          showToast('Could not build .docx. Ensure templates/pre-enrollment files exist and try again.');
         }
-        showToast(
-          'Printing… In the print dialog, turn off Headers and footers (More settings) to remove date, URL, and page numbers.',
-        );
-      }
+      })();
       return;
     }
     let inner = '';
@@ -6136,6 +6797,7 @@ function renderFormsExportModalBody() {
   const ay = normalizeAcademicYearInput(state.formsAcademicYear) || DEFAULT_ACADEMIC_YEAR;
   const sem = state.formsSemester || '1st Semester';
   const yl = state.formsYearLevel || 'all';
+  const effectiveYear = formType === 'preenroll' && yl === 'all' ? '4th Year' : yl;
   const sec = state.formsSection != null ? state.formsSection : 'all';
   const ayList = mergeAcademicYearOptions(termAcademicYearOptions(), state.termAcademicYearCustomOptions || []);
   if (!ayList.includes(ay)) ayList.push(ay);
@@ -6146,18 +6808,19 @@ function renderFormsExportModalBody() {
   const semOpts = FORMS_SEMESTER_OPTIONS.map(
     s => `<option value="${escapeHtml(s)}" ${s === sem ? 'selected' : ''}>${escapeHtml(s)}</option>`,
   ).join('');
-  const sections = mergeSectionOptions([dept], { programMatchDept: dept });
+  const yearScoped = effectiveYear !== 'all' ? effectiveYear : '';
+  const sections = sectionOptionsForDeptYear([dept], yearScoped);
   const yearOpts =
     formType === 'preenroll'
       ? SCHEDULE_FORM_YEARS.map(
           y =>
             `<option value="${escapeHtml(y)}" ${
-              (yl !== 'all' && yl === y) || (yl === 'all' && y === '4th Year') ? 'selected' : ''
+              effectiveYear === y ? 'selected' : ''
             }>${escapeHtml(y)}</option>`,
         ).join('')
-      : `<option value="all" ${yl === 'all' ? 'selected' : ''}>All year levels</option>` +
+      : `<option value="all" ${effectiveYear === 'all' ? 'selected' : ''}>All year levels</option>` +
         SCHEDULE_FORM_YEARS.map(
-          y => `<option value="${escapeHtml(y)}" ${yl === y ? 'selected' : ''}>${escapeHtml(y)}</option>`,
+          y => `<option value="${escapeHtml(y)}" ${effectiveYear === y ? 'selected' : ''}>${escapeHtml(y)}</option>`,
         ).join('');
   const secOpts =
     formType === 'preenroll'
@@ -6170,7 +6833,7 @@ function renderFormsExportModalBody() {
                 }>${escapeHtml(s)}</option>`,
             )
             .join('')
-        : '<option value="">(No sections — add in Section)</option>'
+        : '<option value="">(No sections for selected year level)</option>'
       : `<option value="all" ${sec === 'all' || sec === '' ? 'selected' : ''}>All sections</option>` +
         sections.map(
           s => `<option value="${escapeHtml(s)}" ${String(sec) === s ? 'selected' : ''}>${escapeHtml(s)}</option>`,
@@ -6186,11 +6849,9 @@ function renderFormsExportModalBody() {
   };
   const T = titles[formType] || titles.schedule;
   const formatOpts = (() => {
-    let o = [
-      ['pdf', 'PDF (print or save as PDF)'],
-      ['excel', 'Excel (.xls spreadsheet)'],
-    ];
-    if (formType === 'preenroll') o.push(['word', 'Word (.doc)']);
+    const o = [['pdf', 'Save as PDF']];
+    if (formType !== 'preenroll') o.push(['excel', 'Excel (.xls spreadsheet)']);
+    if (formType === 'preenroll') o.push(['word', 'Word (.docx — official template)']);
     return o.map(([v, lab]) => `<option value="${escapeHtml(v)}">${escapeHtml(lab)}</option>`).join('');
   })();
   let facultyFieldHtml = '';
@@ -6242,6 +6903,34 @@ function renderFormsExportModalBody() {
   <p class="form-hint" style="margin-top:8px">For <strong>Pre-Enrollment</strong>, pick a <strong>year level</strong> and <strong>section</strong> (not &ldquo;All&rdquo;). For <strong>Faculty load</strong>, select the faculty member. Other forms can use &ldquo;All&rdquo; where shown.</p>
   <input type="hidden" id="fe_formType" value="${escapeHtml(formType)}" />
 </div>`;
+}
+
+function refreshFormsExportSectionOptions() {
+  if (state.modal?.type !== 'formsExport') return;
+  const yearEl = document.getElementById('fe_year');
+  const sectionEl = document.getElementById('fe_section');
+  if (!yearEl || !sectionEl) return;
+  const formType = state.modal?.formType || 'schedule';
+  const dept = state.currentUser?.dept;
+  if (!dept) return;
+  const yearValue = yearEl.value || 'all';
+  const sections = sectionOptionsForDeptYear([dept], yearValue !== 'all' ? yearValue : '');
+  const current = sectionEl.value || 'all';
+  if (formType === 'preenroll') {
+    if (!sections.length) {
+      sectionEl.innerHTML = '<option value="">(No sections for selected year level)</option>';
+      sectionEl.value = '';
+      return;
+    }
+    sectionEl.innerHTML = sections.map(s => `<option value="${escapeHtml(s)}">${escapeHtml(s)}</option>`).join('');
+    sectionEl.value = sections.includes(current) ? current : sections[0];
+    return;
+  }
+  const opts = [`<option value="all">All sections</option>`]
+    .concat(sections.map(s => `<option value="${escapeHtml(s)}">${escapeHtml(s)}</option>`))
+    .join('');
+  sectionEl.innerHTML = opts;
+  sectionEl.value = current === 'all' || sections.includes(current) ? current : 'all';
 }
 
 function renderFaculty() {
@@ -7719,7 +8408,12 @@ function bindPage(){
       if (btn) btn.setAttribute('aria-expanded', 'false');
     });
   }
-  document.getElementById('printBtn')?.addEventListener('click',()=>window.print());
+  document.getElementById('printBtn')?.addEventListener('click', () => {
+    if (state.filterMode === 'faculty') {
+      if (printFacultyScheduleTabForm()) return;
+    }
+    window.print();
+  });
   document.getElementById('f_schedule_dept')?.addEventListener('change', e => {
     if (!state.modal || state.modal.type !== 'addSchedule' || state.currentUser.role !== 'admin') return;
     let { defaultSection, defaultProfessorId, defaultRoomId, ...rest } = state.modal;
@@ -8809,8 +9503,8 @@ function bindPage(){
         showToast('Select a year level for the Pre-Enrollment form.');
         return;
       }
-      /* PDF print uses a hidden iframe (no about:blank tab). Word Pre-Enrolment still opens a tab for the optional print path after download. */
-      const needsPopup = feFormat === 'word' && formType === 'preenroll';
+      /* Pre-Enrolment .docx is generated in-page; no blank tab needed. */
+      const needsPopup = false;
       if (needsPopup) {
         popupWindow = window.open('', '_blank');
         if (!popupWindow) {
@@ -8845,6 +9539,15 @@ function bindPage(){
       writeExportPopupFallback(popupWindow, 'Export failed', String(err?.message || err || 'Unexpected error'));
       showToast('Export failed before file generation.');
     }
+  });
+  document.getElementById('fe_year')?.addEventListener('change', e => {
+    state.formsYearLevel = e.target.value || 'all';
+    refreshFormsExportSectionOptions();
+    let secEl = document.getElementById('fe_section');
+    if (secEl) state.formsSection = secEl.value || (state.modal?.formType === 'preenroll' ? '' : 'all');
+  });
+  document.getElementById('fe_section')?.addEventListener('change', e => {
+    state.formsSection = e.target.value || (state.modal?.formType === 'preenroll' ? '' : 'all');
   });
   document.getElementById('addSectionBtn')?.addEventListener('click', () => {
     let u = state.currentUser;
