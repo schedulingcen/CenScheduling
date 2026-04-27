@@ -4124,7 +4124,7 @@ function scheduleGridCellLayout() {
   return 'section';
 }
 
-function buildScheduleCellInnerHtml(s, sub, cellLayout, innerStyleOverride) {
+function buildScheduleCellInnerHtml(s, sub, cellLayout, innerStyleOverride, verticalAlignClass = '') {
   let roomLine = escapeHtml(roomDisplayLineFromPick(s.roomId, s.roomOtherName));
   let subLine = escapeHtml(sub?.code || '—');
   let profLine = escapeHtml(professorDisplayLine(s));
@@ -4150,7 +4150,8 @@ function buildScheduleCellInnerHtml(s, sub, cellLayout, innerStyleOverride) {
     parts.push(`<div style="${lineStyle}">${roomLine}</div>`);
     parts.push(`<div style="${lineStyle}">${profLine}</div>`);
   }
-  return `<div class="tt-cell-lines">${parts.join('')}</div>`;
+  const extraClass = verticalAlignClass ? ` ${verticalAlignClass}` : '';
+  return `<div class="tt-cell-lines${extraClass}">${parts.join('')}</div>`;
 }
 
 function renderTimetableGrid(scheds, gridOpts) {
@@ -4159,7 +4160,9 @@ function renderTimetableGrid(scheds, gridOpts) {
   let requestView = !!gridOpts.requestView;
   let requestCellClick = requestView && gridOpts.requestCellClick !== false;
   let requestBusyClickable = requestView && gridOpts.requestBusyClickable === true;
-  let dayCols = gridOpts.timetableDays || DAYS_WITH_SATURDAY;
+  // Hard-limit timetable to exactly Monday-Saturday to prevent stray extra columns.
+  const FIXED_TIMETABLE_DAYS = ['Monday', 'Tuesday', 'Wednesday', 'Thursday', 'Friday', 'Saturday'];
+  let dayCols = FIXED_TIMETABLE_DAYS;
   let { conflictSinceById, conflictIds } = syncConflictHighlightsAndIds();
   let emptyTitle = requestView
     ? (requestCellClick
@@ -4178,7 +4181,8 @@ function renderTimetableGrid(scheds, gridOpts) {
     const startRow = timeToRow(s.timeStart);
     const sub = getSubject(s.subjectId);
 
-    s.days.forEach(day => {
+    (Array.isArray(s.days) ? s.days : []).forEach(rawDay => {
+      const day = String(rawDay || '').trim();
       const col = dayCols.indexOf(day);
       if (col >= 0 && startRow >= 0) {
         const duration = timeDurationForTimetableGridDisplay(s, day, scheds);
@@ -4188,7 +4192,11 @@ function renderTimetableGrid(scheds, gridOpts) {
   });
   
   // Build HTML table (more reliable than CSS Grid for timetable)
-  let html = '<table class="timetable-table timetable-schedule" style="min-width:100%;width:max-content;border-collapse:collapse;">';
+  // Use separate borders so row boundaries do not render through rowspan cells
+  // when back-to-back classes share the same boundary time (e.g. 2:30 end/start).
+  // Keep the schedule table at its real column width (Time + Monday-Saturday only)
+  // so no stretched blank area appears like an extra column.
+  let html = '<table class="timetable-table timetable-schedule" style="width:max-content;border-collapse:separate;border-spacing:0;">';
   
   // Header row
   html += '<thead><tr>';
@@ -4228,20 +4236,16 @@ function renderTimetableGrid(scheds, gridOpts) {
         const bl = chrome.borderLeftWidth || 3;
         const hasPrevAdjacent = hasScheduleEndingAtOnDay(scheds, dayCols[col], s.timeStart, s.id);
         const hasNextAdjacent = hasScheduleStartingAtOnDay(scheds, dayCols[col], s.timeEnd, s.id);
-        // Keep one clear boundary line at exact back-to-back time (e.g. 2:30).
-        const joinBorderStyle = `${hasNextAdjacent ? 'border-bottom:0;' : ''}`;
-        // Draw exact midpoint divider for back-to-back blocks without relying on row-height guesses.
-        const splitLineStyle = hasPrevAdjacent
-          ? 'border-top:0; position:relative;'
-          : '';
-        const splitTopPercent = 50 / Math.max(1, rowspan);
-        const splitLineOverlay = hasPrevAdjacent
-          ? `<div aria-hidden="true" style="position:absolute;left:0;right:0;top:${splitTopPercent}%;height:2px;transform:translateY(-1px);background:rgba(53,66,56,.55);pointer-events:none;"></div>`
-          : '';
-        const joined = hasPrevAdjacent || hasNextAdjacent;
-        const radiusStyle = joined
-          ? 'border-top-left-radius:0;border-top-right-radius:0;border-bottom-left-radius:0;border-bottom-right-radius:0;'
-          : 'border-top-left-radius:6px;border-top-right-radius:6px;border-bottom-left-radius:6px;border-bottom-right-radius:6px;';
+        // When classes are back-to-back on the same day, visually stitch blocks so they
+        // look like one continuous lane (no overlap seam at the shared boundary time).
+        const joinBorderStyle = `${hasPrevAdjacent ? 'border-top-color:transparent;' : ''}${hasNextAdjacent ? 'border-bottom-color:transparent;' : ''}`;
+        const splitLineStyle = '';
+        const splitLineOverlay = '';
+        const radiusStyle = `border-top-left-radius:${hasPrevAdjacent ? 0 : 6}px;border-top-right-radius:${hasPrevAdjacent ? 0 : 6}px;border-bottom-left-radius:${hasNextAdjacent ? 0 : 6}px;border-bottom-right-radius:${hasNextAdjacent ? 0 : 6}px;`;
+        const seamBridgeParts = [];
+        if (hasNextAdjacent) seamBridgeParts.push(`0 30px 0 0 ${bg}`);
+        const seamBridgeStyle = seamBridgeParts.length ? `box-shadow:${seamBridgeParts.join(',')};` : '';
+        const textAlignClass = hasPrevAdjacent ? 'tt-cell-lines--top' : (hasNextAdjacent ? 'tt-cell-lines--bottom' : '');
         const timeRangeLabel = `${fmt12(s.timeStart || '')}–${fmt12(s.timeEnd || '')}`;
         let busyTitle = `Click for details (${timeRangeLabel})`;
         if (chrome.slotKind === 'conflict') busyTitle = 'Conflict — click for details';
@@ -4249,11 +4253,11 @@ function renderTimetableGrid(scheds, gridOpts) {
         let useClickableBusyCell = !requestView || requestBusyClickable;
         const dataPal = ` data-tt-fill="${escapeHtml(chrome.bg)}" data-tt-border="${escapeHtml(chrome.border)}"`;
         let tdOpen = useClickableBusyCell
-          ? `<td rowspan="${rowspan}" data-schedid="${escapeHtml(s.id)}"${dataPal} title="${escapeHtml(busyTitle)}" style="cursor:pointer; padding: 6px; border: 1px solid var(--border-ui); background: ${bg}; border-left: ${bl}px solid ${border};${joinBorderStyle}${splitLineStyle}${radiusStyle}">`
-          : `<td rowspan="${rowspan}" class="timetable-slot-busy"${dataPal} title="" style="cursor:default; padding: 6px; border: 1px solid var(--border-ui); background: ${bg}; border-left: ${bl}px solid ${border};${joinBorderStyle}${splitLineStyle}${radiusStyle}">`;
+          ? `<td rowspan="${rowspan}" data-schedid="${escapeHtml(s.id)}"${dataPal} title="${escapeHtml(busyTitle)}" style="cursor:pointer; padding:${hasPrevAdjacent ? '2px 6px 6px 6px' : (hasNextAdjacent ? '6px 6px 2px 6px' : '6px')}; border: 1px solid var(--border-ui); background: ${bg}; border-left: ${bl}px solid ${border};${joinBorderStyle}${splitLineStyle}${radiusStyle}${seamBridgeStyle}">`
+          : `<td rowspan="${rowspan}" class="timetable-slot-busy"${dataPal} title="" style="cursor:default; padding:${hasPrevAdjacent ? '2px 6px 6px 6px' : (hasNextAdjacent ? '6px 6px 2px 6px' : '6px')}; border: 1px solid var(--border-ui); background: ${bg}; border-left: ${bl}px solid ${border};${joinBorderStyle}${splitLineStyle}${radiusStyle}${seamBridgeStyle}">`;
         html += tdOpen;
         html += splitLineOverlay;
-        html += buildScheduleCellInnerHtml(s, sub, cellLayout, chrome.innerStyles);
+        html += buildScheduleCellInnerHtml(s, sub, cellLayout, chrome.innerStyles, textAlignClass);
         html += `</td>`;
       } else if (!cell || row !== timeToRow(cell.schedule.timeStart)) {
         // Skip cells that are part of a rowspan
@@ -4322,6 +4326,12 @@ function renderTimetableGrid(scheds, gridOpts) {
         flex-direction: column;
         justify-content: center;
         gap: 2px;
+      }
+      .timetable-table .tt-cell-lines.tt-cell-lines--top {
+        justify-content: flex-start;
+      }
+      .timetable-table .tt-cell-lines.tt-cell-lines--bottom {
+        justify-content: flex-end;
       }
       .timetable-table .tt-cell-lines > div { line-height: 1.2; }
       .timetable-table td.timetable-slot-empty:hover {

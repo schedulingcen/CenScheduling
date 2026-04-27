@@ -1450,7 +1450,7 @@ html[data-theme="dark"] .btn-schedule-clear-all:hover {
   font-weight: 800;
 }
 #printArea[data-print-title]::before { display: none; content: ''; }
-.timetable-grid { display: grid; grid-template-columns: 70px repeat(5, 1fr); min-width: 700px; border-top: 1px solid var(--border-ui); }
+.timetable-grid { display: grid; grid-template-columns: 70px repeat(6, 1fr); min-width: 820px; border-top: 1px solid var(--border-ui); }
 .timetable-header { background: var(--table-header-bg); padding: 10px 6px; text-align: center; font-size: 12px; font-weight: 700; border-bottom: 2px solid var(--border-ui); position: sticky; top: 0; }
 .time-label { font-size: 11px; color: var(--gray-400); font-family: var(--mono); padding: 4px 6px; text-align: right; border-right: 1px solid var(--border-ui); border-bottom: 1px solid var(--border-ui); }
 .time-label.hour { color: var(--text-muted); font-weight: 600; }
