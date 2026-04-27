@@ -5591,9 +5591,16 @@ function renderRequests() {
         </div>
         <div class="card-body requests-queue-card-body">
           ${(() => {
-            // Once approved, it should no longer stay in Pending.
-            const pendingOut = outgoing.filter(r => isPendingRequestStatus(r.status));
-            const approvedOut = outgoing.filter(r => r.status === 'approved' || r.status === 'approved_teaching');
+            // Pending column should only show requests still waiting on department action.
+            const isPendingOutgoingBucket = r => {
+              if (isPendingRequestStatus(r.status)) return true;
+              const roomFollowPending = hasPendingRoomRequestForTeachingParent(r.id);
+              return roomFollowPending;
+            };
+            const pendingOut = outgoing.filter(isPendingOutgoingBucket);
+            const approvedOut = outgoing.filter(r =>
+              (r.status === 'approved' || r.status === 'approved_teaching') && !isPendingOutgoingBucket(r),
+            );
             const declinedOut = outgoing.filter(r => isRequestStatusDeclined(r.status));
             const renderOutgoingStatusColumn = (title, list, bucket) => `
               <div class="outgoing-status-col">
@@ -5617,12 +5624,13 @@ function renderRequests() {
                               const room = getRoom(r.roomId);
                               const to = getDept(r.toDept);
                               const sub = getSubject(r.subjectId);
-                              const teachingNeedsBookAfterApproval = isTeachingAssignmentRequest(r) && requestHasPendingRoom(r)
-                                && (r.status === 'approved' || r.status === 'approved_teaching');
-                              const needsRoomBooking = r.status === 'approved_teaching' || teachingNeedsBookAfterApproval;
                               const roomPending = requestHasPendingRoom(r);
                               const roomFollow = firstPendingTeachingRoomFollowup(r);
-                              const waitingRoomApproval = !!roomFollow && needsRoomBooking && roomPending;
+                              const roomFollowPending = hasPendingRoomRequestForTeachingParent(r.id);
+                              const teachingNeedsBookAfterApproval = isTeachingAssignmentRequest(r) && roomPending
+                                && (r.status === 'approved' || r.status === 'approved_teaching');
+                              const needsRoomBooking = !!teachingNeedsBookAfterApproval && !roomFollowPending;
+                              const waitingRoomApproval = !!roomFollow && roomFollowPending && roomPending;
                               const roomFollowRec = roomFollow ? getRoom(roomFollow.roomId) : null;
                               const deptForBadge = waitingRoomApproval ? roomFollow.toDept : r.toDept;
                               const badgeDept = getDept(deptForBadge);
@@ -5633,16 +5641,11 @@ function renderRequests() {
                               const statusIcon = isApprovedFamily ? 'check' : (isDeclined ? 'close' : 'refresh');
                               const statusIconColor = isApprovedFamily ? '#16A34A' : (isDeclined ? '#DC2626' : '#D97706');
                               const statusIconBg = isApprovedFamily ? '#F0FDF4' : (isDeclined ? '#FEF2F2' : '#FFFBEB');
-                              const roomFollowPending = hasPendingRoomRequestForTeachingParent(r.id);
-                              const canBookRoom = needsRoomBooking
-                                && roomPending
-                                && !roomFollowPending
-                                && r.status !== 'approved'
-                                && r.status !== 'approved_teaching';
+                              const canBookRoom = needsRoomBooking && roomPending && !roomFollowPending;
                               const statusLabel = waitingRoomApproval
                                 ? `Pending — awaiting ${badgeDept?.code || 'department'} approval`
                                 : needsRoomBooking
-                                  ? 'Approved — Book Room'
+                                  ? 'Approved'
                                   : (r.status.charAt(0).toUpperCase() + r.status.slice(1));
                               const badgeClass = waitingRoomApproval || needsRoomBooking ? 'pending' : (r.status === 'approved' ? 'approved' : r.status);
                               const titleMain = waitingRoomApproval
@@ -5665,7 +5668,7 @@ function renderRequests() {
                                     ${
                                       canBookRoom
                                         ? `<div style="margin-top:8px;"><button type="button" class="btn btn-outline btn-sm" data-book-room-request="${escapeHtml(r.id)}">${icon('calendar', 14)} Book a room</button></div>`
-                                        : needsRoomBooking && roomPending && roomFollowPending
+                                        : roomPending && roomFollowPending
                                           ? `<div style="margin-top:8px;"><span class="request-book-room-sent-pill" aria-disabled="true">${icon('calendar', 14)} Room request pending</span></div>`
                                           : ''
                                     }
