@@ -53,7 +53,8 @@ const CEN_STATE_KEY = 'cen_app_state';
 const CEN_CURRICULUM_TOMBSTONES_KEY = 'cen_curriculum_deleted_slots_v1';
 const CEN_FACULTY_META_OVERRIDES_KEY = 'cen_faculty_meta_overrides_v1';
 const CURRICULUM_HOURS_OVERRIDES_KEY = 'cen_curriculum_required_hours_overrides_v1';
-/** Lec unit = 1 contact hour/week; each lab unit counts this many contact hours/week in curriculum totals. */
+/** Contact-hour conversion used by curriculum Hours/Remaining Hours columns. */
+const CURRICULUM_LEC_HOURS_PER_UNIT = 3;
 const CURRICULUM_LAB_HOURS_PER_UNIT = 6;
 const ACCOUNT_ROLE_OVERRIDES_KEY = 'cen_account_role_overrides_v1';
 const PENDING_ACCOUNTS_KEY = 'cen_pending_accounts_v1';
@@ -225,9 +226,30 @@ function termHeaderTitle(sem, ay) {
 }
 function termAcademicYearOptions() {
   let m = String(DEFAULT_ACADEMIC_YEAR).match(/^(\d{4})-(\d{4})$/);
-  let start = m ? Number(m[1]) : new Date().getFullYear();
+  let baseStart = m ? Number(m[1]) : new Date().getFullYear();
+  let selectedAy = normalizeAcademicYearInput(DEFAULT_ACADEMIC_YEAR);
+  // Avoid touching lexical `state` here because this function is called during
+  // early startup (before `let state = {...}` is initialized).
+  try {
+    let raw = sessionStorage.getItem(CEN_STATE_KEY);
+    if (raw) {
+      let parsed = JSON.parse(raw);
+      let persistedAy = normalizeAcademicYearInput(parsed?.termAcademicYear);
+      if (persistedAy) selectedAy = persistedAy;
+    }
+  } catch (e) {
+    /* ignore */
+  }
+  let sm = String(selectedAy || '').match(/^(\d{4})-(\d{4})$/);
+  let selectedStart = sm ? Number(sm[1]) : baseStart;
+  let start = baseStart;
+  // Keep exactly 5 options; when selected AY reaches the last 2 slots,
+  // slide the window forward so there is always a "next" year available.
+  if (Number.isFinite(selectedStart) && selectedStart >= baseStart + 3) {
+    start = selectedStart - 2;
+  }
   let years = [];
-  for (let y = start; y <= start + 8; y++) years.push(`${y}-${y + 1}`);
+  for (let y = start; y < start + 5; y++) years.push(`${y}-${y + 1}`);
   years.sort((a, b) => String(a).localeCompare(String(b)));
   return years;
 }
@@ -1120,7 +1142,11 @@ function isRetiredCpeDrawingRoom(r) {
 function normalizeCurriculumFromDb(row) {
   if (!row) return null;
   let localHours = loadCurriculumHoursOverrides()[row.id];
-  let dbHours = Number(row.required_hours);
+  let dbHoursRaw = row.required_hours;
+  let dbHours =
+    dbHoursRaw === null || dbHoursRaw === undefined || dbHoursRaw === ''
+      ? null
+      : Number(dbHoursRaw);
   let localHoursNum = Number(localHours);
   let ayFromDb = normalizeAcademicYearInput(row.academic_year || row.academicYear);
   let ayFromId = curriculumAcademicYearFromIdFallback(row.id);
@@ -1134,9 +1160,9 @@ function normalizeCurriculumFromDb(row) {
     lecUnits: Number.isFinite(Number(row.lec_units)) ? Number(row.lec_units) : 0,
     labUnits: Number.isFinite(Number(row.lab_units)) ? Number(row.lab_units) : 0,
     units: Number.isFinite(Number(row.units)) ? Number(row.units) : 0,
-    requiredHours: Number.isFinite(dbHours)
+    requiredHours: dbHours !== null && Number.isFinite(dbHours) && dbHours > 0
       ? dbHours
-      : (Number.isFinite(localHoursNum) ? localHoursNum : null),
+      : (Number.isFinite(localHoursNum) && localHoursNum > 0 ? localHoursNum : null),
     courseName: row.course_name || row.courseName || row.subject_name || row.subjectName || '',
     subjectCode: row.subject_code || row.subjectCode || '',
     section: row.section || '',
@@ -1863,7 +1889,8 @@ function curriculumColTotal(c) {
   return '—';
 }
 /**
- * Weekly hours for a curriculum row: explicit `requiredHours` / `required_hours` when set, else Lec + Lab×{@link CURRICULUM_LAB_HOURS_PER_UNIT}, else total units.
+ * Weekly hours for a curriculum row: explicit `requiredHours` / `required_hours` when set, else
+ * Lec×{@link CURRICULUM_LEC_HOURS_PER_UNIT} + Lab×{@link CURRICULUM_LAB_HOURS_PER_UNIT}, else total units.
  * (Inline edits store `requiredHours`; it must win over the formula when both exist.)
  */
 function curriculumRequiredHoursEffectiveNumber(c) {
@@ -1872,11 +1899,11 @@ function curriculumRequiredHoursEffectiveNumber(c) {
   if (raw === null || raw === undefined || raw === '') raw = c.required_hours;
   if (raw !== null && raw !== undefined && raw !== '') {
     let rh = Number(raw);
-    if (Number.isFinite(rh) && rh >= 0) return rh;
+    if (Number.isFinite(rh) && rh > 0) return rh;
   }
   let lec = Number(c.lecUnits != null ? c.lecUnits : c.lec_units);
   let lab = Number(c.labUnits != null ? c.labUnits : c.lab_units);
-  let lecH = Number.isFinite(lec) ? lec : 0;
+  let lecH = Number.isFinite(lec) ? lec * CURRICULUM_LEC_HOURS_PER_UNIT : 0;
   let labH = Number.isFinite(lab) ? lab * CURRICULUM_LAB_HOURS_PER_UNIT : 0;
   if (Number.isFinite(lec) || Number.isFinite(lab)) return lecH + labH;
   let total = Number(c.units);
@@ -1953,7 +1980,7 @@ function curriculumScheduledHoursCellHtml(c, ayFilter) {
 function computedCurriculumHoursFromUnits(lecUnits, labUnits) {
   let lec = Number(lecUnits);
   let lab = Number(labUnits);
-  let lecH = Number.isFinite(lec) ? lec : 0;
+  let lecH = Number.isFinite(lec) ? lec * CURRICULUM_LEC_HOURS_PER_UNIT : 0;
   let labH = Number.isFinite(lab) ? lab * CURRICULUM_LAB_HOURS_PER_UNIT : 0;
   return lecH + labH;
 }
@@ -5704,9 +5731,54 @@ function renderCurriculum() {
       </div>
     </div>
   </div>`;
+  function curriculumRenderRowKey(c) {
+    if (!c) return '';
+    if (c.id != null && c.id !== '') return String(c.id);
+    return curriculumAySlotKey(c, curriculumAyFilter) || '';
+  }
+  const rowSubjectIdsByKey = new Map();
+  for (let c of rows) {
+    let rk = curriculumRenderRowKey(c);
+    if (!rk) continue;
+    rowSubjectIdsByKey.set(rk, subjectIdsForCurriculumRow(c));
+  }
+  const scopedScheduleHoursByKey = new Map();
+  const sectionScope = state.curriculumSectionFilter === 'all' ? '' : String(state.curriculumSectionFilter || '').trim();
+  for (let s of state.schedules) {
+    if (!s || !s.subjectId) continue;
+    if (scheduleAcademicYearForFilter(s) !== curriculumAyFilter) continue;
+    if (sectionScope && String(s.section || '').trim() !== sectionScope) continue;
+    let key = [
+      String(s.dept || ''),
+      String(s.schYear || '').trim(),
+      String(s.schSem || '').trim(),
+      String(s.subjectId),
+    ].join('|');
+    scopedScheduleHoursByKey.set(key, (scopedScheduleHoursByKey.get(key) || 0) + scheduleWeeklyHoursFromEntry(s));
+  }
+  function curriculumScheduledHoursCellFromIndex(c) {
+    let rk = curriculumRenderRowKey(c);
+    let subjectIds = rk ? rowSubjectIdsByKey.get(rk) : null;
+    if (!subjectIds || !subjectIds.size) return '<span class="curriculum-sched-empty">—</span>';
+    let required = curriculumRowRequiredHoursNumber(c);
+    if (required == null || !Number.isFinite(required) || required <= 0) return '<span class="curriculum-sched-empty">—</span>';
+    let dept = curriculumFilterDept(c);
+    let year = curriculumFilterYear(c);
+    let sem = curriculumFilterSemester(c);
+    let scheduled = 0;
+    for (let sid of subjectIds) {
+      let key = [dept, year, sem, String(sid)].join('|');
+      scheduled += Number(scopedScheduleHoursByKey.get(key) || 0);
+    }
+    let remaining = Math.max(0, required - scheduled);
+    if (remaining < 0.01) {
+      return '<span class="curriculum-sched-badge curriculum-sched-badge--scheduled">Scheduled</span>';
+    }
+    return `<span class="curriculum-sched-badge curriculum-sched-badge--remaining">${escapeHtml(formatHoursValue(remaining))} hrs</span>`;
+  }
   let schedCol = '<col class="curriculum-col-sched" />';
   let schedTh = '<th scope="col" class="curriculum-th-sched">Remaining hours</th>';
-  let rowSched = c => `<td class="curriculum-td-sched">${curriculumScheduledHoursCellHtml(c, curriculumAyFilter)}</td>`;
+  let rowSched = c => `<td class="curriculum-td-sched">${curriculumScheduledHoursCellFromIndex(c)}</td>`;
   function sortCurriculumRowsForTable(list) {
     return list.slice().sort((a, b) => String(a.courseCode || '').localeCompare(String(b.courseCode || ''), undefined, { sensitivity: 'base' }));
   }
@@ -5761,7 +5833,7 @@ function renderCurriculum() {
         <td class="curriculum-td-num"><input type="number" min="0" max="12" step="1" class="form-input curriculum-inline-input curriculum-inline-input--num" data-cd-id="${escapeHtml(c.id)}" data-cd-field="labUnits" value="${escapeHtml(labN)}" /></td>
         <td class="curriculum-td-num"><input type="number" min="0" max="24" step="1" class="form-input curriculum-inline-input curriculum-inline-input--num" data-cd-id="${escapeHtml(c.id)}" data-cd-field="units" value="${escapeHtml(unitN)}" /></td>
         <td class="curriculum-td-hours"><input type="number" min="0" max="60" step="0.5" class="form-input curriculum-inline-input curriculum-inline-input--num" data-cd-id="${escapeHtml(c.id)}" data-cd-field="requiredHours" value="${escapeHtml(hrs)}" /></td>
-        <td class="curriculum-td-sched">${curriculumScheduledHoursCellHtml(c, curriculumAyFilter)}</td>
+        <td class="curriculum-td-sched">${curriculumScheduledHoursCellFromIndex(c)}</td>
         <td class="curriculum-td-inline-actions"><div class="curriculum-inline-action-buttons"><button type="button" class="curriculum-inline-btn curriculum-inline-btn--delete" data-delcrow="${escapeHtml(c.id)}">Delete</button><button type="button" class="curriculum-inline-btn curriculum-inline-btn--save" data-curriculum-row-save="${escapeHtml(id)}" data-cd-id="${escapeHtml(c.id)}">Save</button></div></td>
       </tr>`;
     }
