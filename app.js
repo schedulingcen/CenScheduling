@@ -2004,20 +2004,40 @@ function subjectIdsForCurriculumRow(c) {
 /** Total weekly hours already on the timetable for this catalog row (all sections), same scope as subject code matching. */
 function curriculumScheduledWeeklyHoursTotalForRow(c, ayFilter) {
   let dept = curriculumFilterDept(c);
-  let year = curriculumFilterYear(c);
-  let sem = curriculumFilterSemester(c);
+  let year = normalizeCurriculumYearLabel(curriculumFilterYear(c));
+  let sem = normalizeCurriculumSemesterLabel(curriculumFilterSemester(c));
   let ay = normalizeAcademicYearInput(ayFilter) || DEFAULT_ACADEMIC_YEAR;
   let sectionFilter = state.curriculumSectionFilter || 'all';
   let subjectIds = subjectIdsForCurriculumRow(c);
-  if (!subjectIds.size) return null;
+  let rowCode = normalizeSubjectCode(curriculumCodeFromRow(c));
+  let rowCodesExpanded = expandNormalizedCodesForDept(dept, rowCode);
+  if (!subjectIds.size && !rowCodesExpanded.size) return null;
   let total = 0;
   for (let s of state.schedules) {
-    if (!s || (s.dept || '') !== dept) continue;
-    if ((s.schYear || '').trim() !== year) continue;
-    if ((s.schSem || '').trim() !== sem) continue;
+    if (!s) continue;
+    let schedSection = String(s.section || '').trim();
+    let deptMatches = (s.dept || '') === dept;
+    let legacySectionScopedDeptMatch =
+      sectionFilter !== 'all' &&
+      schedSection &&
+      schedSection === String(sectionFilter).trim() &&
+      sectionLabelMatchesDeptProgram(schedSection, dept);
+    if (!deptMatches && !legacySectionScopedDeptMatch) continue;
+    let schedYear = normalizeCurriculumYearLabel((s.schYear || '').trim());
+    let schedYearFromSection = normalizeCurriculumYearLabel(sectionYearFromLabel(s.section));
+    let yearMatches =
+      schedYear === year ||
+      (!schedYear && schedYearFromSection === year) ||
+      // Legacy rows may miss year; when a specific section is selected, treat as the row year.
+      (!schedYear && !schedYearFromSection && sectionFilter !== 'all');
+    if (!yearMatches) continue;
+    if (normalizeCurriculumSemesterLabel((s.schSem || '').trim()) !== sem) continue;
     if (scheduleAcademicYearForFilter(s) !== ay) continue;
     if (sectionFilter !== 'all' && String(s.section || '').trim() !== sectionFilter) continue;
-    if (!s.subjectId || !subjectIds.has(s.subjectId)) continue;
+    let matchedById = !!(s.subjectId && subjectIds.has(s.subjectId));
+    let schedCode = normalizeSubjectCode(getSubject(s.subjectId)?.code || '');
+    let matchedByCode = !!(schedCode && rowCodesExpanded.has(schedCode));
+    if (!matchedById && !matchedByCode) continue;
     total += scheduleWeeklyHoursFromEntry(s);
   }
   return total;
@@ -2831,12 +2851,25 @@ function subjectCodeEquivalenceSetsForDept(dept) {
   if (extra) for (let g of extra) sets.push([...g]);
   return sets;
 }
+function subjectCodeOZeroVariants(normCode) {
+  let base = normalizeSubjectCode(normCode);
+  let out = new Set([base]);
+  if (!base) return out;
+  // Handle common data-entry drift in course codes (letter O vs zero).
+  if (base.includes('0')) out.add(base.replace(/0/g, 'O'));
+  if (base.includes('O')) out.add(base.replace(/O/g, '0'));
+  return out;
+}
 /** All normalized codes that should match a curriculum or subject code within `dept`. */
 function expandNormalizedCodesForDept(dept, normCode) {
-  let expanded = new Set([normCode]);
+  let expanded = subjectCodeOZeroVariants(normCode);
   for (let g of subjectCodeEquivalenceSetsForDept(dept)) {
     let gn = g.map(normalizeSubjectCode);
-    if (gn.some(x => x === normCode)) for (let x of gn) expanded.add(x);
+    if (gn.some(x => expanded.has(x))) {
+      for (let x of gn) {
+        for (let v of subjectCodeOZeroVariants(x)) expanded.add(v);
+      }
+    }
   }
   return expanded;
 }
@@ -4185,7 +4218,9 @@ function renderTimetableGrid(scheds, gridOpts) {
       const day = String(rawDay || '').trim();
       const col = dayCols.indexOf(day);
       if (col >= 0 && startRow >= 0) {
-        const duration = timeDurationForTimetableGridDisplay(s, day, scheds);
+        const rawDuration = timeDurationForTimetableGridDisplay(s, day, scheds);
+        // Keep rowspan inside table bounds so malformed/legacy times cannot create phantom columns.
+        const duration = Math.max(1, Math.min(rawDuration, rows - startRow));
         grid[startRow][col] = { schedule: s, sub, duration };
       }
     });
@@ -4207,6 +4242,8 @@ function renderTimetableGrid(scheds, gridOpts) {
   html += '</tr></thead><tbody>';
   
   // Time rows: 7:30 AM … 9:00 PM (last row marks day close; bookable slots end at 8:30 start / 9:00 end)
+  // Track active rowspans per column to keep every row perfectly aligned.
+  let activeRowspans = Array(cols).fill(0);
   for (let row = 0; row < rows; row++) {
     const time = timeSlots[row];
     const isDayCloseRow = time === TIMETABLE_DAY_CLOSE;
@@ -4214,15 +4251,12 @@ function renderTimetableGrid(scheds, gridOpts) {
     html += `<td class="timetable-time-col">${fmt12(time)}</td>`;
     
     for (let col = 0; col < cols; col++) {
+      if (activeRowspans[col] > 0) {
+        activeRowspans[col] -= 1;
+        continue;
+      }
       if (isDayCloseRow) {
-        let isPartOfRowspan = false;
-        for (let r = row - 1; r >= 0 && !isPartOfRowspan; r--) {
-          const prevCell = grid[r][col];
-          if (prevCell && r + prevCell.duration > row) isPartOfRowspan = true;
-        }
-        if (!isPartOfRowspan) {
-          html += '<td class="timetable-slot-day-close" style="padding: 4px; border: 1px solid var(--border-ui); background: var(--table-header-bg); opacity: 0.55;" title=""></td>';
-        }
+        html += '<td class="timetable-slot-day-close" style="padding: 4px; border: 1px solid var(--border-ui); background: var(--table-header-bg); opacity: 0.55;" title=""></td>';
         continue;
       }
       const cell = grid[row][col];
@@ -4230,6 +4264,7 @@ function renderTimetableGrid(scheds, gridOpts) {
         const s = cell.schedule;
         const sub = cell.sub;
         const rowspan = cell.duration;
+        if (rowspan > 1) activeRowspans[col] = rowspan - 1;
         const chrome = timetableSlotChrome(s, conflictSinceById, conflictIds);
         const bg = chrome.bg;
         const border = chrome.border;
@@ -4259,23 +4294,13 @@ function renderTimetableGrid(scheds, gridOpts) {
         html += splitLineOverlay;
         html += buildScheduleCellInnerHtml(s, sub, cellLayout, chrome.innerStyles, textAlignClass);
         html += `</td>`;
-      } else if (!cell || row !== timeToRow(cell.schedule.timeStart)) {
-        // Skip cells that are part of a rowspan
-        let isPartOfRowspan = false;
-        for (let r = row - 1; r >= 0 && !isPartOfRowspan; r--) {
-          const prevCell = grid[r][col];
-          if (prevCell && r + prevCell.duration > row) {
-            isPartOfRowspan = true;
-          }
-        }
-        if (!isPartOfRowspan) {
-          const dayName = dayCols[col];
-          const tStart = timeSlots[row];
-          const tEnd = slotEndFromRow(row);
-          let emptyExtraClass = requestView && !requestCellClick ? ' timetable-slot-readonly' : '';
-          let emptyCursor = requestView && !requestCellClick ? 'default' : 'pointer';
-          html += `<td class="timetable-slot-empty${emptyExtraClass}" data-slot-day="${dayName}" data-slot-start="${tStart}" data-slot-end="${tEnd}" title="${escapeHtml(emptyTitle(fmt12(tStart), fmt12(tEnd)))}" style="cursor:${emptyCursor}; padding: 8px; border: 1px solid var(--border-ui); background: var(--surface); min-height: 28px;"></td>`;
-        }
+      } else {
+        const dayName = dayCols[col];
+        const tStart = timeSlots[row];
+        const tEnd = slotEndFromRow(row);
+        let emptyExtraClass = requestView && !requestCellClick ? ' timetable-slot-readonly' : '';
+        let emptyCursor = requestView && !requestCellClick ? 'default' : 'pointer';
+        html += `<td class="timetable-slot-empty${emptyExtraClass}" data-slot-day="${dayName}" data-slot-start="${tStart}" data-slot-end="${tEnd}" title="${escapeHtml(emptyTitle(fmt12(tStart), fmt12(tEnd)))}" style="cursor:${emptyCursor}; padding: 8px; border: 1px solid var(--border-ui); background: var(--surface); min-height: 28px;"></td>`;
       }
     }
     html += '</tr>';
@@ -5830,39 +5855,104 @@ function renderCurriculum() {
     return curriculumAySlotKey(c, curriculumAyFilter) || '';
   }
   const rowSubjectIdsByKey = new Map();
+  const visibleCurriculumDepts = new Set();
   for (let c of rows) {
     let rk = curriculumRenderRowKey(c);
     if (!rk) continue;
     rowSubjectIdsByKey.set(rk, subjectIdsForCurriculumRow(c));
+    let d = curriculumFilterDept(c);
+    if (d) visibleCurriculumDepts.add(String(d));
   }
   const scopedScheduleHoursByKey = new Map();
+  const scopedScheduleHoursByCodeKey = new Map();
   const sectionScope = state.curriculumSectionFilter === 'all' ? '' : String(state.curriculumSectionFilter || '').trim();
   for (let s of state.schedules) {
-    if (!s || !s.subjectId) continue;
+    if (!s) continue;
+    let schedSection = String(s.section || '').trim();
+    let rawSchedDept = String(s.dept || '');
+    let sectionDept = deptFromSectionLabel(schedSection);
+    // Section label is the source of truth when legacy rows have mismatched dept tags.
+    let effectiveDept = sectionDept || rawSchedDept || '';
+    let deptMatches = visibleCurriculumDepts.has(effectiveDept);
+    let legacySectionScopedDeptMatch =
+      sectionScope &&
+      schedSection &&
+      schedSection === sectionScope &&
+      [...visibleCurriculumDepts].some(d => sectionLabelMatchesDeptProgram(schedSection, d));
+    if (!deptMatches && !legacySectionScopedDeptMatch) continue;
     if (scheduleAcademicYearForFilter(s) !== curriculumAyFilter) continue;
     if (sectionScope && String(s.section || '').trim() !== sectionScope) continue;
-    let key = [
-      String(s.dept || ''),
-      String(s.schYear || '').trim(),
-      String(s.schSem || '').trim(),
-      String(s.subjectId),
-    ].join('|');
-    scopedScheduleHoursByKey.set(key, (scopedScheduleHoursByKey.get(key) || 0) + scheduleWeeklyHoursFromEntry(s));
+    let schedHours = scheduleWeeklyHoursFromEntry(s);
+    let schedYear = normalizeCurriculumYearLabel(String(s.schYear || '').trim());
+    let schedYearFromSection = normalizeCurriculumYearLabel(sectionYearFromLabel(s.section));
+    let keyYear = schedYear || schedYearFromSection || '';
+    let keyBase = [
+      effectiveDept,
+      keyYear,
+      normalizeCurriculumSemesterLabel(String(s.schSem || '').trim()),
+    ];
+    if (s.subjectId) {
+      let key = [...keyBase, String(s.subjectId)].join('|');
+      scopedScheduleHoursByKey.set(key, (scopedScheduleHoursByKey.get(key) || 0) + schedHours);
+    }
+    let schedCode = normalizeSubjectCode(getSubject(s.subjectId)?.code || '');
+    if (schedCode) {
+      for (let codeVariant of expandNormalizedCodesForDept(effectiveDept, schedCode)) {
+        let cKey = [...keyBase, codeVariant].join('|');
+        scopedScheduleHoursByCodeKey.set(cKey, (scopedScheduleHoursByCodeKey.get(cKey) || 0) + schedHours);
+      }
+    }
+    // Legacy fallback: when filtering by a specific section, also index rows with unknown year
+    // under a wildcard key so they can still be counted in curriculum remaining-hours.
+    if (sectionScope && !keyYear) {
+      let wildcardBase = [
+        effectiveDept,
+        '__ANY_YEAR__',
+        normalizeCurriculumSemesterLabel(String(s.schSem || '').trim()),
+      ];
+      if (s.subjectId) {
+        let wKey = [...wildcardBase, String(s.subjectId)].join('|');
+        scopedScheduleHoursByKey.set(wKey, (scopedScheduleHoursByKey.get(wKey) || 0) + schedHours);
+      }
+      if (schedCode) {
+        for (let codeVariant of expandNormalizedCodesForDept(effectiveDept, schedCode)) {
+          let wcKey = [...wildcardBase, codeVariant].join('|');
+          scopedScheduleHoursByCodeKey.set(wcKey, (scopedScheduleHoursByCodeKey.get(wcKey) || 0) + schedHours);
+        }
+      }
+    }
   }
   function curriculumScheduledHoursCellFromIndex(c) {
     let rk = curriculumRenderRowKey(c);
     let subjectIds = rk ? rowSubjectIdsByKey.get(rk) : null;
-    if (!subjectIds || !subjectIds.size) return '<span class="curriculum-sched-empty">—</span>';
+    let rowCode = normalizeSubjectCode(curriculumCodeFromRow(c));
+    let expandedCodes = expandNormalizedCodesForDept(curriculumFilterDept(c), rowCode);
+    if ((!subjectIds || !subjectIds.size) && !expandedCodes.size) return '<span class="curriculum-sched-empty">—</span>';
     let required = curriculumRowRequiredHoursNumber(c);
     if (required == null || !Number.isFinite(required) || required <= 0) return '<span class="curriculum-sched-empty">—</span>';
     let dept = curriculumFilterDept(c);
-    let year = curriculumFilterYear(c);
-    let sem = curriculumFilterSemester(c);
-    let scheduled = 0;
-    for (let sid of subjectIds) {
+    let year = normalizeCurriculumYearLabel(curriculumFilterYear(c));
+    let sem = normalizeCurriculumSemesterLabel(curriculumFilterSemester(c));
+    let scheduledById = 0;
+    for (let sid of (subjectIds || [])) {
       let key = [dept, year, sem, String(sid)].join('|');
-      scheduled += Number(scopedScheduleHoursByKey.get(key) || 0);
+      scheduledById += Number(scopedScheduleHoursByKey.get(key) || 0);
+      if (sectionScope) {
+        let wildcardKey = [dept, '__ANY_YEAR__', sem, String(sid)].join('|');
+        scheduledById += Number(scopedScheduleHoursByKey.get(wildcardKey) || 0);
+      }
     }
+    let scheduledByCode = 0;
+    for (let code of expandedCodes) {
+      let key = [dept, year, sem, String(code)].join('|');
+      scheduledByCode += Number(scopedScheduleHoursByCodeKey.get(key) || 0);
+      if (sectionScope) {
+        let wildcardKey = [dept, '__ANY_YEAR__', sem, String(code)].join('|');
+        scheduledByCode += Number(scopedScheduleHoursByCodeKey.get(wildcardKey) || 0);
+      }
+    }
+    // Prefer ID-accurate totals, but fall back to code totals for legacy/stale subject IDs.
+    let scheduled = Math.max(scheduledById, scheduledByCode);
     let remaining = Math.max(0, required - scheduled);
     if (remaining < 0.01) {
       return '<span class="curriculum-sched-badge curriculum-sched-badge--scheduled">Scheduled</span>';
