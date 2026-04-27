@@ -51,10 +51,13 @@ function toggleAppTheme() {
 const CEN_STATE_KEY = 'cen_app_state';
 /** Survives browser restart (unlike sessionStorage) so curriculum deletions stay suppressed after sync. */
 const CEN_CURRICULUM_TOMBSTONES_KEY = 'cen_curriculum_deleted_slots_v1';
+/** Local curriculum drafts kept when cloud save fails/unavailable; merged after every sync. */
+const CEN_CURRICULUM_LOCAL_UPSERTS_KEY = 'cen_curriculum_local_upserts_v1';
+const CEN_CURRICULUM_LOCAL_DELETES_KEY = 'cen_curriculum_local_deletes_v1';
 const CEN_FACULTY_META_OVERRIDES_KEY = 'cen_faculty_meta_overrides_v1';
 const CURRICULUM_HOURS_OVERRIDES_KEY = 'cen_curriculum_required_hours_overrides_v1';
 /** Contact-hour conversion used by curriculum Hours/Remaining Hours columns. */
-const CURRICULUM_LEC_HOURS_PER_UNIT = 3;
+const CURRICULUM_LEC_HOURS_PER_UNIT = 1;
 const CURRICULUM_LAB_HOURS_PER_UNIT = 6;
 const ACCOUNT_ROLE_OVERRIDES_KEY = 'cen_account_role_overrides_v1';
 const PENDING_ACCOUNTS_KEY = 'cen_pending_accounts_v1';
@@ -71,6 +74,61 @@ function loadStoredArray(key) {
 }
 function saveStoredArray(key, arr) {
   try { localStorage.setItem(key, JSON.stringify(Array.isArray(arr) ? arr : [])); } catch (_) {}
+}
+function loadLocalCurriculumUpserts() {
+  return loadStoredArray(CEN_CURRICULUM_LOCAL_UPSERTS_KEY).filter(r => r && r.id);
+}
+function saveLocalCurriculumUpserts(rows) {
+  saveStoredArray(CEN_CURRICULUM_LOCAL_UPSERTS_KEY, rows);
+}
+function loadLocalCurriculumDeletes() {
+  return new Set(loadStoredArray(CEN_CURRICULUM_LOCAL_DELETES_KEY).map(curriculumRowIdKey).filter(Boolean));
+}
+function saveLocalCurriculumDeletes(idsSet) {
+  saveStoredArray(CEN_CURRICULUM_LOCAL_DELETES_KEY, [...idsSet]);
+}
+function rememberLocalCurriculumUpserts(rows) {
+  if (!Array.isArray(rows) || !rows.length) return;
+  let map = new Map();
+  for (let r of loadLocalCurriculumUpserts()) map.set(curriculumRowIdKey(r.id), r);
+  for (let r of rows) {
+    let k = curriculumRowIdKey(r?.id);
+    if (!k) continue;
+    map.set(k, { ...r, id: k });
+  }
+  saveLocalCurriculumUpserts([...map.values()]);
+  let del = loadLocalCurriculumDeletes();
+  for (let r of rows) {
+    let k = curriculumRowIdKey(r?.id);
+    if (k) del.delete(k);
+  }
+  saveLocalCurriculumDeletes(del);
+}
+function rememberLocalCurriculumDelete(rowId) {
+  let key = curriculumRowIdKey(rowId);
+  if (!key) return;
+  let del = loadLocalCurriculumDeletes();
+  del.add(key);
+  saveLocalCurriculumDeletes(del);
+  let keep = loadLocalCurriculumUpserts().filter(r => curriculumRowIdKey(r?.id) !== key);
+  saveLocalCurriculumUpserts(keep);
+}
+/** Merge local curriculum drafts/deletes so user edits persist across refresh even before cloud sync succeeds. */
+function applyLocalCurriculumDraftsToState() {
+  if (!Array.isArray(state.curriculum)) state.curriculum = [];
+  let del = loadLocalCurriculumDeletes();
+  let byId = new Map();
+  for (let r of state.curriculum) {
+    let k = curriculumRowIdKey(r?.id);
+    if (!k || del.has(k)) continue;
+    byId.set(k, { ...r, id: k });
+  }
+  for (let r of loadLocalCurriculumUpserts()) {
+    let k = curriculumRowIdKey(r?.id);
+    if (!k || del.has(k)) continue;
+    byId.set(k, { ...r, id: k });
+  }
+  state.curriculum = [...byId.values()];
 }
 function loadAccountRoleOverrides() {
   return loadStoredArray(ACCOUNT_ROLE_OVERRIDES_KEY).filter(x => x && x.email);
@@ -1541,6 +1599,7 @@ async function syncCoreDataFromSupabase() {
       return true;
     });
     mergeMissingCurriculumRowsInto(state.curriculum);
+    applyLocalCurriculumDraftsToState();
     let bundleBackedIds = new Set();
     let bundled = getBundledCurriculumData();
     if (bundled.length) {
@@ -2738,6 +2797,25 @@ function scheduleSemSelectHtml(id, selected, extraAttrs = '') {
 function normalizeSubjectCode(s) {
   return (s || '').toString().replace(/\s+/g, '').toUpperCase();
 }
+function normalizeCurriculumYearLabel(v) {
+  let raw = String(v || '').trim();
+  if (!raw) return '';
+  let k = raw.toLowerCase().replace(/[\s_-]+/g, '');
+  if (k === '1styear' || k === 'firstyear' || k === 'year1' || k === '1year') return '1st Year';
+  if (k === '2ndyear' || k === 'secondyear' || k === 'year2' || k === '2year') return '2nd Year';
+  if (k === '3rdyear' || k === 'thirdyear' || k === 'year3' || k === '3year') return '3rd Year';
+  if (k === '4thyear' || k === 'fourthyear' || k === 'year4' || k === '4year') return '4th Year';
+  return raw;
+}
+function normalizeCurriculumSemesterLabel(v) {
+  let raw = String(v || '').trim();
+  if (!raw) return '';
+  let k = raw.toLowerCase().replace(/[\s_-]+/g, '');
+  if (k === '1stsemester' || k === 'firstsemester' || k === 'sem1') return '1st Semester';
+  if (k === '2ndsemester' || k === 'secondsemester' || k === 'sem2') return '2nd Semester';
+  if (k === 'midyear' || k === 'summer' || k === 'midyr') return 'Midyear';
+  return raw;
+}
 
 /** Same course, different naming between curriculum sheet and `subjects` table (common for CPE orientation, NST, PE). */
 const SUBJECT_CODE_EQUIV_COMMON = [
@@ -2774,7 +2852,7 @@ function curriculumRowsForDept(dept) {
 function distinctYearsFromCurriculumRows(rows) {
   let set = new Set();
   for (let r of rows) {
-    let y = (r.year || '').trim();
+    let y = normalizeCurriculumYearLabel(r.year);
     if (y) set.add(y);
   }
   return [...set].sort((a, b) => {
@@ -2793,7 +2871,7 @@ function yearsOptionsForDept(deptKey) {
 function distinctSemsFromRows(rowList) {
   let set = new Set();
   for (let r of rowList) {
-    let s = (r.semester || '').trim();
+    let s = normalizeCurriculumSemesterLabel(r.semester);
     if (s) set.add(s);
   }
   let ordered = CURRICULUM_FORM_SEMS.filter(s => set.has(s));
@@ -2804,7 +2882,8 @@ function distinctSemsFromRows(rowList) {
 }
 function semsForDeptYear(deptKey, year) {
   let rows = curriculumRowsForDept(deptKey);
-  let forYear = rows.filter(r => (r.year || '').trim() === year);
+  let wantYear = normalizeCurriculumYearLabel(year);
+  let forYear = rows.filter(r => normalizeCurriculumYearLabel(r.year) === wantYear);
   if (forYear.length) return distinctSemsFromRows(forYear);
   return [...CURRICULUM_FORM_SEMS];
 }
@@ -2894,9 +2973,11 @@ async function ensureSubjectsExistForCurriculumRows(rows) {
 function subjectsForCreateScheduleSlot(dept, year, sem, ay) {
   let rows = curriculumRowsForDept(dept);
   let ayNorm = normalizeAcademicYearInput(ay) || DEFAULT_ACADEMIC_YEAR;
+  let wantYear = normalizeCurriculumYearLabel(year);
+  let wantSem = normalizeCurriculumSemesterLabel(sem);
   let forSlot = rows.filter(r =>
-    (r.year || '').trim() === year &&
-    (r.semester || '').trim() === sem &&
+    normalizeCurriculumYearLabel(r.year) === wantYear &&
+    normalizeCurriculumSemesterLabel(r.semester) === wantSem &&
     curriculumAcademicYearForFilter(r) === ayNorm,
   );
   if (!forSlot.length) return [];
@@ -2955,9 +3036,11 @@ function curriculumRowForScheduleSubject(dept, year, sem, subjectId, ay) {
   if (!dept || !year || !sem || !subjectId) return null;
   let rows = curriculumRowsForDept(dept);
   let ayNorm = normalizeAcademicYearInput(ay) || DEFAULT_ACADEMIC_YEAR;
+  let wantYear = normalizeCurriculumYearLabel(year);
+  let wantSem = normalizeCurriculumSemesterLabel(sem);
   let forSlot = rows.filter(r =>
-    (r.year || '').trim() === year &&
-    (r.semester || '').trim() === sem &&
+    normalizeCurriculumYearLabel(r.year) === wantYear &&
+    normalizeCurriculumSemesterLabel(r.semester) === wantSem &&
     curriculumAcademicYearForFilter(r) === ayNorm,
   );
   let sub = getSubject(subjectId);
@@ -8668,6 +8751,24 @@ async function commitCurriculumRowDelete(rawIdFromDom) {
     }
   }
   state.curriculum = state.curriculum.filter(c => curriculumRowIdKey(c.id) !== delKey);
+  rememberLocalCurriculumDelete(delKey);
+  if (rowSnapshot) {
+    let dept = curriculumFilterDept(rowSnapshot);
+    let code = curriculumCodeFromRow(rowSnapshot);
+    let stillExists = state.curriculum.some(c => {
+      if (curriculumFilterDept(c) !== dept) return false;
+      return normalizeSubjectCode(curriculumCodeFromRow(c)) === normalizeSubjectCode(code);
+    });
+    if (!stillExists) {
+      let sub = findSubjectByDeptAndCurriculumCode(dept, code);
+      if (sub?.id) {
+        state.subjects = state.subjects.filter(s => s.id !== sub.id);
+        if (hasSupabaseClient()) {
+          window.cenSupabase.from('subjects').delete().eq('id', sub.id).then(() => {}).catch(() => {});
+        }
+      }
+    }
+  }
   showToast('Row removed');
   render();
 }
@@ -9613,9 +9714,19 @@ function bindPage(){
         const { error } = await upsertCurriculumDb(savedRows);
         if (error) {
           window.alert(`Unable to save curriculum in Supabase: ${error.message}`);
+          // Keep this edit locally so refresh still shows it while offline / blocked by policy.
+          rememberLocalCurriculumUpserts(savedRows);
+          let subjSyncLocal = await ensureSubjectsExistForCurriculumRows(savedRows);
+          if (!subjSyncLocal.ok) {
+            window.alert(`Curriculum saved locally, but subject sync failed: ${subjSyncLocal.error?.message || 'unknown error'}`);
+          }
+          state.modal = null;
+          showToast('Curriculum saved locally');
+          render();
           return;
         }
       }
+      rememberLocalCurriculumUpserts(savedRows);
       let subjSync = await ensureSubjectsExistForCurriculumRows(savedRows);
       if (!subjSync.ok) {
         window.alert(`Curriculum saved, but subject sync failed: ${subjSync.error?.message || 'unknown error'}`);
