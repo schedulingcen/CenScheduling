@@ -436,6 +436,10 @@ const REQUEST_ROOM_PENDING_ID = '__room_pending__';
 const REQUEST_ROOM_PENDING_MARKER = '__PENDING_ROOM_BOOKING__';
 /** Synthetic schedule id prefix: pending outgoing room requests shown gray on timetables until approved. */
 const PENDING_REQ_SCHEDULE_PREFIX = '__pending_req__';
+/** Shared/common rooms that must remain selectable even if DB room rows are incomplete. */
+const COMMON_ROOM_FALLBACKS = [
+  { id: 'ee_mdhp304', name: 'MDHP 304', type: 'classroom', dept: 'ee' },
+];
 
 /** Stable string key for curriculum row ids (HTML data-* is always string; DB may return number). */
 function curriculumRowIdKey(id) {
@@ -2342,7 +2346,7 @@ function scheduleRoomOccupancyKey(s) {
   return t ? `other:${t}` : '';
 }
 function roomsBookSameSpace(a, b) {
-  const SHARED_ROOM_NAMES = new Set(['GYM']);
+  const SHARED_ROOM_NAMES = new Set(['GYM', 'MDHP 304']);
   const roomNameUpper = s => {
     if (!s) return '';
     if (s.roomId === ROOM_OTHER_ID) return String(s.roomOtherName || '').trim().toUpperCase();
@@ -2362,8 +2366,9 @@ function roomsBookSameSpace(a, b) {
 function isSharedRoomName(name) {
   let n = String(name || '').trim().toUpperCase();
   if (!n) return false;
-  // Accept common variants (GYM, GYMNASIUM, MAIN GYM, etc.)
-  return n === 'GYM' || n.includes('GYM');
+  // Accept common variants (GYM, GYMNASIUM, MAIN GYM, MDHP 304, etc.)
+  let compact = n.replace(/\s+/g, '');
+  return n === 'GYM' || n.includes('GYM') || compact === 'MDHP304';
 }
 /** Timetable "By Room": include rows for this room id or any catalog room with the same name (shared physical space across programs). */
 function scheduleMatchesRoomFilter(s, filterRoomId) {
@@ -5441,10 +5446,9 @@ function renderRequests() {
         </div>
         <div class="card-body requests-queue-card-body">
           ${(() => {
-            const pendingOut = outgoing.filter(r =>
-              isPendingRequestStatus(r.status) || r.status === 'approved_teaching' || requestHasPendingRoom(r)
-            );
-            const approvedOut = outgoing.filter(r => r.status === 'approved' && !requestHasPendingRoom(r));
+            // Once approved, it should no longer stay in Pending.
+            const pendingOut = outgoing.filter(r => isPendingRequestStatus(r.status));
+            const approvedOut = outgoing.filter(r => r.status === 'approved' || r.status === 'approved_teaching');
             const declinedOut = outgoing.filter(r => isRequestStatusDeclined(r.status));
             const renderOutgoingStatusColumn = (title, list, bucket) => `
               <div class="outgoing-status-col">
@@ -8118,9 +8122,20 @@ function renderScheduleForm() {
   } else {
     let d = formDept;
     profList = [...state.professors.filter(p => p.dept === d)].sort((a, b) => a.name.localeCompare(b.name));
-    roomList = [...roomsSourceForApp().filter(r => r.dept === d)].sort((a, b) => a.name.localeCompare(b.name));
+    let ownRooms = roomsSourceForApp().filter(r => r.dept === d);
+    let commonRooms = roomsSourceForApp().filter(r => isSharedRoomName(r.name));
+    let mergedRooms = new Map();
+    for (let r of [...ownRooms, ...commonRooms]) {
+      if (r?.id) mergedRooms.set(r.id, r);
+    }
+    roomList = [...mergedRooms.values()].sort((a, b) => a.name.localeCompare(b.name));
     secDeptIds = [d];
   }
+  // Hard fallback: keep known shared rooms available in Create Schedule even before/without room-table repair sync.
+  for (let fr of COMMON_ROOM_FALLBACKS) {
+    if (!roomList.some(r => r && r.id === fr.id)) roomList.push({ ...fr });
+  }
+  roomList = roomList.slice().sort((a, b) => a.name.localeCompare(b.name));
 
   let slotDaysInit = slot?.day ? [slot.day] : [];
   let slotTsInit = slot?.timeStart || '';

@@ -27,6 +27,7 @@ const ROOMS = [
   { id:'ee_mdhp209', name:'MDHP 209', type:'classroom', dept:'ee' },
   { id:'ee_mdhp211', name:'MDHP 211', type:'classroom', dept:'ee' },
   { id:'ee_mdhp301', name:'MDHP 301', type:'classroom', dept:'ee' },
+  { id:'ee_mdhp304', name:'MDHP 304', type:'classroom', dept:'ee' },
   { id:'ee_mdhp306', name:'MDHP 306', type:'classroom', dept:'ee' },
   { id:'lab_ee_a', name:'EE LAB A', type:'laboratory', dept:'ee' },
   { id:'ee_lab_b', name:'EE LAB B', type:'laboratory', dept:'ee' },
