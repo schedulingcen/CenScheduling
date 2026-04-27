@@ -231,6 +231,50 @@ function termAcademicYearOptions() {
   years.sort((a, b) => String(a).localeCompare(String(b)));
   return years;
 }
+function curriculumBundleAcademicYears() {
+  return termAcademicYearOptions();
+}
+function curriculumBundleAcademicYearSuffix(ay) {
+  return String(ay || '').replace(/[^0-9]/g, '');
+}
+function curriculumBundleIdForAcademicYear(baseId, ay) {
+  let normalizedAy = normalizeAcademicYearInput(ay) || DEFAULT_ACADEMIC_YEAR;
+  if (normalizedAy === DEFAULT_ACADEMIC_YEAR) return String(baseId || '');
+  return `${String(baseId || '')}__ay${curriculumBundleAcademicYearSuffix(normalizedAy)}`;
+}
+function curriculumAcademicYearFromIdFallback(rowId) {
+  let m = String(rowId || '').match(/__ay(\d{4})(\d{4})$/);
+  if (!m) return '';
+  return normalizeAcademicYearInput(`${m[1]}-${m[2]}`) || '';
+}
+function getBundledCurriculumData() {
+  if (typeof CURRICULUM_DATA === 'undefined' || !Array.isArray(CURRICULUM_DATA)) return [];
+  let years = curriculumBundleAcademicYears();
+  let out = [];
+  for (let row of CURRICULUM_DATA) {
+    if (!row || !row.id) continue;
+    let baseAy = normalizeAcademicYearInput(row.academicYear) || DEFAULT_ACADEMIC_YEAR;
+    for (let ay of years) {
+      out.push({
+        ...row,
+        id: curriculumBundleIdForAcademicYear(row.id, ay),
+        academicYear: ay,
+        bundleBaseId: row.id,
+        bundleBaseAcademicYear: baseAy,
+      });
+    }
+  }
+  return out;
+}
+function bundledCurriculumRowById(id) {
+  if (id == null || id === '') return null;
+  let key = curriculumRowIdKey(id);
+  let rows = getBundledCurriculumData();
+  for (let r of rows) {
+    if (curriculumRowIdKey(r?.id) === key) return r;
+  }
+  return null;
+}
 function currentTermFilter() {
   return {
     sem: state.termSemester || '1st Semester',
@@ -415,13 +459,14 @@ function curriculumRowSuppressionKey(c) {
 
 /** Append catalog rows from data.js that are not yet in arr (by id). */
 function mergeMissingCurriculumRowsInto(arr) {
-  if (typeof CURRICULUM_DATA === 'undefined' || !Array.isArray(CURRICULUM_DATA)) return;
+  let bundled = getBundledCurriculumData();
+  if (!bundled.length) return;
   let suppressed = new Set(
     (Array.isArray(state.suppressedCurriculumIds) ? state.suppressedCurriculumIds : []).map(curriculumRowIdKey).filter(Boolean),
   );
   let suppressedSlots = new Set((Array.isArray(state.suppressedCurriculumKeys) ? state.suppressedCurriculumKeys : []).filter(Boolean));
   let seen = new Set(arr.map(c => curriculumRowIdKey(c && c.id)).filter(Boolean));
-  for (let b of CURRICULUM_DATA) {
+  for (let b of bundled) {
     let bid = curriculumRowIdKey(b && b.id);
     if (!bid || suppressed.has(bid) || seen.has(bid)) continue;
     let slot = curriculumRowSuppressionKey(b);
@@ -439,17 +484,17 @@ function canUserMutateCurriculum(u) {
 function curriculumFilterDept(c) {
   let d = c.dept;
   if (d) return d;
-  return CURRICULUM_DATA?.find(b => b.id === c.id)?.dept;
+  return bundledCurriculumRowById(c.id)?.dept;
 }
 function curriculumFilterYear(c) {
   let y = (c.year || '').trim();
   if (y) return y;
-  return (CURRICULUM_DATA?.find(b => b.id === c.id)?.year || '').trim();
+  return (bundledCurriculumRowById(c.id)?.year || '').trim();
 }
 function curriculumFilterSemester(c) {
   let s = (c.semester || '').trim();
   if (s) return s;
-  return (CURRICULUM_DATA?.find(b => b.id === c.id)?.semester || '').trim();
+  return (bundledCurriculumRowById(c.id)?.semester || '').trim();
 }
 /** Curriculum toolbar value: two main semesters only (excludes Midyear in the data filter). */
 const CURRICULUM_SEM_FILTER_FIRST_AND_SECOND = 'First and Second Semester';
@@ -575,8 +620,9 @@ function hydratePersistedData() {
     }
     if (Array.isArray(o.curriculum)) {
       let bundleById = {};
-      if (typeof CURRICULUM_DATA !== 'undefined' && Array.isArray(CURRICULUM_DATA)) {
-        for (let b of CURRICULUM_DATA) {
+      let bundled = getBundledCurriculumData();
+      if (bundled.length) {
+        for (let b of bundled) {
           if (b && b.id) bundleById[b.id] = b;
         }
       }
@@ -856,7 +902,7 @@ let state = {
   rooms: [...ROOMS],
   schedules: [...SCHEDULES],
   requests: [...REQUESTS],
-  curriculum: [...CURRICULUM_DATA],
+  curriculum: getBundledCurriculumData(),
   curriculumDeptFilter: 'all',
   curriculumYearFilter: 'all',
   curriculumSectionFilter: 'all',
@@ -874,6 +920,8 @@ let state = {
   requestTimetableRoom: '',
   requestTimetableProfessor: 'all',
   dashboardSummaryDay: 'Monday',
+  dashboardSummaryLastSyncKey: '',
+  dashboardSummarySyncInFlight: false,
   sectionYearFilter: 'all',
   sectionDeptFilter: 'all',
   sectionAcademicYearFilter: DEFAULT_ACADEMIC_YEAR,
@@ -966,6 +1014,19 @@ function normalizeSubjectToDb(sub) {
     active: sub.active !== false,
   };
 }
+
+async function upsertSubjectsDb(subjectRows) {
+  const rows = Array.isArray(subjectRows) ? subjectRows : [];
+  if (!rows.length) return { error: null };
+  let payload = rows.map(normalizeSubjectToDb);
+  let res = await window.cenSupabase.from('subjects').upsert(payload, { onConflict: 'id' });
+  if (!res.error) return res;
+  const msg = String(res.error?.message || '').toLowerCase();
+  const missingActive = msg.includes('active') && msg.includes('column');
+  if (!missingActive) return res;
+  const fallback = payload.map(({ active, ...rest }) => rest);
+  return window.cenSupabase.from('subjects').upsert(fallback, { onConflict: 'id' });
+}
 function normalizeProfessorTitle(name) {
   let raw = String(name || '').trim();
   if (!raw) return raw;
@@ -1055,6 +1116,10 @@ function isRetiredCpeDrawingRoom(r) {
 function normalizeCurriculumFromDb(row) {
   if (!row) return null;
   let localHours = loadCurriculumHoursOverrides()[row.id];
+  let dbHours = Number(row.required_hours);
+  let localHoursNum = Number(localHours);
+  let ayFromDb = normalizeAcademicYearInput(row.academic_year || row.academicYear);
+  let ayFromId = curriculumAcademicYearFromIdFallback(row.id);
   return {
     id: row.id,
     dept: row.dept_id || row.dept,
@@ -1065,15 +1130,13 @@ function normalizeCurriculumFromDb(row) {
     lecUnits: Number.isFinite(Number(row.lec_units)) ? Number(row.lec_units) : 0,
     labUnits: Number.isFinite(Number(row.lab_units)) ? Number(row.lab_units) : 0,
     units: Number.isFinite(Number(row.units)) ? Number(row.units) : 0,
-    requiredHours: Number.isFinite(Number(row.required_hours))
-      ? Number(row.required_hours)
-      : (Number.isFinite(Number(row.requiredHours))
-        ? Number(row.requiredHours)
-        : (Number.isFinite(Number(localHours)) ? Number(localHours) : null)),
+    requiredHours: Number.isFinite(dbHours)
+      ? dbHours
+      : (Number.isFinite(localHoursNum) ? localHoursNum : null),
     courseName: row.course_name || row.courseName || row.subject_name || row.subjectName || '',
     subjectCode: row.subject_code || row.subjectCode || '',
     section: row.section || '',
-    academicYear: normalizeAcademicYearInput(row.academic_year || row.academicYear) || DEFAULT_ACADEMIC_YEAR,
+    academicYear: ayFromDb || ayFromId || DEFAULT_ACADEMIC_YEAR,
   };
 }
 function normalizeCurriculumToDb(row) {
@@ -1111,6 +1174,15 @@ function parseScheduleDays(raw) {
   } else if (typeof raw === 'string') {
     let t = raw.trim();
     if (!t) return [];
+    // Postgres array-literal fallback (e.g. "{Monday,Wednesday}" or "{\"Saturday\"}").
+    if (/^\{.*\}$/.test(t)) {
+      let inner = t.slice(1, -1).trim();
+      if (!inner) return [];
+      arr = inner
+        .split(',')
+        .map(s => String(s || '').trim().replace(/^"+|"+$/g, '').replace(/\\"/g, '"'))
+        .filter(Boolean);
+    } else {
     try {
       let j = JSON.parse(t);
       if (Array.isArray(j)) {
@@ -1120,6 +1192,7 @@ function parseScheduleDays(raw) {
       }
     } catch (e) {
       arr = t.split(/[\s,;]+/).map(s => s.trim()).filter(Boolean);
+    }
     }
   } else {
     return [];
@@ -1272,11 +1345,12 @@ function normalizeRequestFromDb(row) {
     section: row.section,
     professorId: appProfId,
     professorOtherName: appProfId === PROFESSOR_OTHER_ID ? (other || null) : null,
-    days: Array.isArray(row.days) ? row.days : [],
+    days: parseScheduleDays(row.days),
     timeStart: row.time_start,
     timeEnd: row.time_end,
     schYear: row.sch_year || '',
     schSem: row.sch_sem || '',
+    schAy: normalizeAcademicYearInput(row.sch_ay || row.schAy) || DEFAULT_ACADEMIC_YEAR,
     setLabel: row.set_label || null,
     labLabel: row.lab_label || null,
     reason: row.reason || '',
@@ -1309,6 +1383,7 @@ function normalizeRequestToDb(req) {
     time_end: req.timeEnd,
     sch_year: req.schYear || null,
     sch_sem: req.schSem || null,
+    sch_ay: normalizeAcademicYearInput(req.schAy) || DEFAULT_ACADEMIC_YEAR,
     set_label: req.setLabel || null,
     lab_label: req.labLabel || null,
     reason: req.reason || '',
@@ -1342,6 +1417,11 @@ async function insertRequestDb(req) {
     if (isSupabaseMissingColumnError(res.error, 'decline_reason') && !dropped.has('decline_reason')) {
       delete working[0].decline_reason;
       dropped.add('decline_reason');
+      droppedAny = true;
+    }
+    if (isSupabaseMissingColumnError(res.error, 'sch_ay') && !dropped.has('sch_ay')) {
+      delete working[0].sch_ay;
+      dropped.add('sch_ay');
       droppedAny = true;
     }
     if (!droppedAny) return res;
@@ -1432,8 +1512,9 @@ async function syncCoreDataFromSupabase() {
     });
     mergeMissingCurriculumRowsInto(state.curriculum);
     let bundleBackedIds = new Set();
-    if (typeof CURRICULUM_DATA !== 'undefined' && Array.isArray(CURRICULUM_DATA)) {
-      for (let b of CURRICULUM_DATA) {
+    let bundled = getBundledCurriculumData();
+    if (bundled.length) {
+      for (let b of bundled) {
         if (b && b.id) bundleBackedIds.add(curriculumRowIdKey(b.id));
       }
     }
@@ -1586,14 +1667,8 @@ function resolveScheduleRoomFromForm(roomSel, roomOtherText, candidateRooms) {
   if (roomSel !== ROOM_OTHER_ID) {
     return { roomId: roomSel || '', roomOtherName: null };
   }
-  if (!otherTxt || !Array.isArray(candidateRooms) || candidateRooms.length === 0) {
-    return { roomId: ROOM_OTHER_ID, roomOtherName: otherTxt || null };
-  }
-  let norm = otherTxt.toLowerCase();
-  let matches = candidateRooms.filter(r => (r.name || '').trim().toLowerCase() === norm);
-  if (matches.length === 1) {
-    return { roomId: matches[0].id, roomOtherName: null };
-  }
+  // Strict behavior: when user picks "Others", always keep it as Others.
+  // Do not auto-map typed names (e.g. "GYM") to catalog rooms, so room conflict checks are skipped.
   return { roomId: ROOM_OTHER_ID, roomOtherName: otherTxt };
 }
 
@@ -1905,6 +1980,162 @@ function curriculumRowPayloadForSave(baseRow, patch) {
     DEFAULT_ACADEMIC_YEAR;
   return { ...baseRow, ...patch, academicYear: ay };
 }
+function nextAcademicYearValue(ay) {
+  let norm = normalizeAcademicYearInput(ay);
+  let m = String(norm || '').match(/^(\d{4})-(\d{4})$/);
+  if (!m) return '';
+  let nextStart = Number(m[2]);
+  if (!Number.isFinite(nextStart)) return '';
+  return `${nextStart}-${nextStart + 1}`;
+}
+function previousAcademicYearValue(ay) {
+  let norm = normalizeAcademicYearInput(ay);
+  let m = String(norm || '').match(/^(\d{4})-(\d{4})$/);
+  if (!m) return '';
+  let prevStart = Number(m[1]) - 1;
+  if (!Number.isFinite(prevStart)) return '';
+  return `${prevStart}-${prevStart + 1}`;
+}
+function curriculumCopySlotKey(row) {
+  let dept = curriculumFilterDept(row) || '';
+  let year = curriculumFilterYear(row) || '';
+  let sem = curriculumFilterSemester(row) || '';
+  let code = normalizeSubjectCode(curriculumCodeFromRow(row));
+  return `${dept}|${year}|${sem}|${code}`;
+}
+function allCurriculumAcademicYears(seedAy) {
+  let termAy = normalizeAcademicYearInput(state.termAcademicYear) || DEFAULT_ACADEMIC_YEAR;
+  let presets = typeof termAcademicYearOptions === 'function' ? termAcademicYearOptions() : [];
+  let custom = Array.isArray(state.termAcademicYearCustomOptions) ? state.termAcademicYearCustomOptions : [];
+  let set = new Set([termAy, normalizeAcademicYearInput(seedAy) || '', ...presets, ...custom].map(normalizeAcademicYearInput).filter(Boolean));
+  for (let c of state.curriculum) set.add(curriculumAcademicYearForFilter(c));
+  return [...set].filter(Boolean).sort((a, b) => String(a).localeCompare(String(b)));
+}
+function curriculumAySlotKey(row, ay) {
+  let base = curriculumCopySlotKey(row);
+  return `${base}|${normalizeAcademicYearInput(ay) || ''}`;
+}
+async function seedCurriculumForAcademicYearIfMissing(targetAy, deptId) {
+  let dstAy = normalizeAcademicYearInput(targetAy);
+  if (!dstAy || !deptId) return 0;
+  let existingDst = state.curriculum.filter(
+    c => curriculumFilterDept(c) === deptId && curriculumAcademicYearForFilter(c) === dstAy,
+  );
+  if (existingDst.length) return 0;
+  let sourceAy = previousAcademicYearValue(dstAy);
+  let sourceRows = [];
+  while (sourceAy) {
+    sourceRows = state.curriculum.filter(
+      c => curriculumFilterDept(c) === deptId && curriculumAcademicYearForFilter(c) === sourceAy,
+    );
+    if (sourceRows.length) break;
+    sourceAy = previousAcademicYearValue(sourceAy);
+  }
+  if (!sourceRows.length) return 0;
+  let existingKeys = new Set(
+    state.curriculum
+      .filter(c => curriculumFilterDept(c) === deptId)
+      .map(c => curriculumAySlotKey(c, c.academicYear)),
+  );
+  let toInsert = [];
+  for (let row of sourceRows) {
+    let key = curriculumAySlotKey(row, dstAy);
+    if (existingKeys.has(key)) continue;
+    existingKeys.add(key);
+    toInsert.push(
+      curriculumRowPayloadForSave(row, {
+        id: genId(),
+        academicYear: dstAy,
+      }),
+    );
+  }
+  if (!toInsert.length) return 0;
+  state.curriculum.push(...toInsert);
+  if (hasSupabaseClient()) {
+    let { error } = await upsertCurriculumDb(toInsert);
+    if (error) {
+      console.warn('Unable to seed curriculum AY rows in Supabase:', error);
+    }
+  }
+  return toInsert.length;
+}
+async function copyFilteredCurriculumToNextAcademicYear() {
+  let u = state.currentUser;
+  if (!canUserMutateCurriculum(u)) return;
+  let termAy = normalizeAcademicYearInput(state.termAcademicYear) || DEFAULT_ACADEMIC_YEAR;
+  let selectedAy = normalizeAcademicYearInput(state.curriculumAcademicYearFilter) || termAy;
+  let srcAy = selectedAy;
+  let dstAy = nextAcademicYearValue(srcAy);
+  if (!dstAy) {
+    showToast('Academic year format must be YYYY-YYYY.');
+    return;
+  }
+  let chairDept = u?.role === 'chairperson' ? u.dept : '';
+  let adminDeptFilter = u?.role === 'admin' ? state.curriculumDeptFilter : '';
+  let srcRowsForAy = ayVal =>
+    state.curriculum.filter(c => {
+      if (chairDept && curriculumFilterDept(c) !== chairDept) return false;
+      if (adminDeptFilter && curriculumFilterDept(c) !== adminDeptFilter) return false;
+      if (state.curriculumYearFilter !== 'all' && curriculumFilterYear(c) !== state.curriculumYearFilter) return false;
+      if (curriculumAcademicYearForFilter(c) !== ayVal) return false;
+      let sf = curriculumSemFilterEffective();
+      if (!curriculumRowMatchesSemesterFilter(c, sf)) return false;
+      return true;
+    });
+  let srcRows = srcRowsForAy(srcAy);
+  // UX fallback: if selected AY is empty, copy previous AY into selected AY.
+  if (!srcRows.length) {
+    let prevAy = previousAcademicYearValue(selectedAy);
+    if (prevAy) {
+      let prevRows = srcRowsForAy(prevAy);
+      if (prevRows.length) {
+        srcAy = prevAy;
+        dstAy = selectedAy;
+        srcRows = prevRows;
+      }
+    }
+  }
+  if (!srcRows.length) {
+    showToast('No curriculum rows to copy for the current filters (or previous AY fallback).');
+    return;
+  }
+  let existingDst = state.curriculum.filter(c => {
+    if (chairDept && curriculumFilterDept(c) !== chairDept) return false;
+    if (adminDeptFilter && curriculumFilterDept(c) !== adminDeptFilter) return false;
+    return curriculumAcademicYearForFilter(c) === dstAy;
+  });
+  let existingKeys = new Set(existingDst.map(curriculumCopySlotKey));
+  let toInsert = [];
+  for (let row of srcRows) {
+    let key = curriculumCopySlotKey(row);
+    if (!key || existingKeys.has(key)) continue;
+    existingKeys.add(key);
+    toInsert.push(
+      curriculumRowPayloadForSave(row, {
+        id: genId(),
+        academicYear: dstAy,
+      }),
+    );
+  }
+  if (!toInsert.length) {
+    showToast(`Next academic year (${dstAy}) already has the same curriculum rows.`);
+    return;
+  }
+  if (!window.confirm(`Copy ${toInsert.length} curriculum row(s) from ${srcAy} to ${dstAy}?`)) return;
+  if (hasSupabaseClient()) {
+    let { error } = await upsertCurriculumDb(toInsert);
+    if (error) {
+      window.alert(`Unable to copy curriculum rows in Supabase: ${error.message}`);
+      return;
+    }
+  }
+  state.curriculum.push(...toInsert);
+  let custom = Array.isArray(state.termAcademicYearCustomOptions) ? state.termAcademicYearCustomOptions.slice() : [];
+  if (!custom.includes(dstAy)) custom.push(dstAy);
+  state.termAcademicYearCustomOptions = custom;
+  showToast(`Copied ${toInsert.length} row(s) to ${dstAy}.`);
+  render();
+}
 /** Read inline curriculum table inputs and upsert all rows (same semester block). */
 async function commitCurriculumTableInlineSave(tableId) {
   let tid = String(tableId || '').trim();
@@ -1973,6 +2204,10 @@ async function commitCurriculumTableInlineSave(tableId) {
       window.alert(`Unable to save curriculum in Supabase: ${error.message}`);
       return;
     }
+  }
+  let subjSync = await ensureSubjectsExistForCurriculumRows(updates);
+  if (!subjSync.ok) {
+    window.alert(`Curriculum saved, but subject sync failed: ${subjSync.error?.message || 'unknown error'}`);
   }
   for (let row of updates) {
     let i = state.curriculum.findIndex(c => String(c.id) === String(row.id));
@@ -2044,6 +2279,10 @@ async function commitCurriculumTableInlineSaveRow(tableId, rowId) {
       return;
     }
   }
+  let subjSync = await ensureSubjectsExistForCurriculumRows([updated]);
+  if (!subjSync.ok) {
+    window.alert(`Curriculum saved, but subject sync failed: ${subjSync.error?.message || 'unknown error'}`);
+  }
   let i = state.curriculum.findIndex(c => String(c.id) === rid);
   if (i >= 0) state.curriculum[i] = updated;
   if (Number.isFinite(Number(updated.requiredHours))) rememberCurriculumRequiredHours(updated.id, updated.requiredHours);
@@ -2095,22 +2334,43 @@ function timeRangesOverlap(aStart, aEnd, bStart, bEnd) { return aStart < bEnd &&
 function scheduleRoomOccupancyKey(s) {
   if (!s) return '';
   if (s.roomId === ROOM_OTHER_ID) {
-    let t = (s.roomOtherName || '').trim().toLowerCase();
-    return t ? `other:${t}` : '';
+    // "Others" is treated as unspecified physical space: do not create room-conflict locks.
+    return '';
   }
   if (s.roomId != null && s.roomId !== '') return `id:${s.roomId}`;
   let t = (s.roomOtherName || '').trim().toLowerCase();
   return t ? `other:${t}` : '';
 }
 function roomsBookSameSpace(a, b) {
+  const SHARED_ROOM_NAMES = new Set(['GYM']);
+  const roomNameUpper = s => {
+    if (!s) return '';
+    if (s.roomId === ROOM_OTHER_ID) return String(s.roomOtherName || '').trim().toUpperCase();
+    let r = getRoom(s.roomId);
+    return String(r?.name || '').trim().toUpperCase();
+  };
+  let na = roomNameUpper(a);
+  let nb = roomNameUpper(b);
+  if (na && nb && na === nb && SHARED_ROOM_NAMES.has(na)) {
+    // Shared large spaces (e.g., GYM) may host multiple classes concurrently.
+    return false;
+  }
   let ka = scheduleRoomOccupancyKey(a);
   let kb = scheduleRoomOccupancyKey(b);
   return ka !== '' && ka === kb;
 }
+function isSharedRoomName(name) {
+  let n = String(name || '').trim().toUpperCase();
+  if (!n) return false;
+  // Accept common variants (GYM, GYMNASIUM, MAIN GYM, etc.)
+  return n === 'GYM' || n.includes('GYM');
+}
 /** Timetable "By Room": include rows for this room id or any catalog room with the same name (shared physical space across programs). */
 function scheduleMatchesRoomFilter(s, filterRoomId) {
   if (!s || filterRoomId == null || filterRoomId === '' || filterRoomId === ROOM_OTHER_ID) return false;
-  if (s.roomId === filterRoomId) return true;
+  let sid = s.roomId == null ? '' : String(s.roomId).trim();
+  let fid = String(filterRoomId).trim();
+  if (sid !== '' && sid === fid) return true;
   if (s.roomId === ROOM_OTHER_ID) {
     let rf = getRoom(filterRoomId);
     if (!rf?.name) return false;
@@ -2148,6 +2408,17 @@ const SECTION_PROGRAM_PREFIX_BY_DEPT = {
   me: 'BSME',
   ece: 'BSECE',
 };
+function deptFromSectionLabel(sectionLabel) {
+  let t = String(sectionLabel || '')
+    .trim()
+    .toUpperCase()
+    .replace(/\s+/g, ' ');
+  if (!t) return '';
+  for (let [deptId, prefix] of Object.entries(SECTION_PROGRAM_PREFIX_BY_DEPT)) {
+    if (t.startsWith(String(prefix || '').toUpperCase())) return deptId;
+  }
+  return '';
+}
 function sectionLabelMatchesDeptProgram(sectionLabel, deptId) {
   let prefix = SECTION_PROGRAM_PREFIX_BY_DEPT[deptId];
   if (!prefix) return true;
@@ -2316,7 +2587,9 @@ function syncConflictHighlightsAndIds() {
   return { conflictSinceById: map, conflictIds };
 }
 function timetableDeptYearChrome(s) {
-  let dept = s.dept;
+  // Color should follow the section's program (e.g., BSIE* stays IE-colored)
+  // even if professor/borrow flow uses a different department id.
+  let dept = deptFromSectionLabel(s.section) || s.dept;
   let yearLabel = scheduleYearLabelForPalette(s);
   let fill = dept && yearLabel ? DEPT_YEAR_TIMETABLE_HEX[dept]?.[yearLabel] : null;
   if (fill) {
@@ -2514,6 +2787,78 @@ function subjectsSourceForCreateSchedule() {
   let local = (typeof SUBJECTS_DATA !== 'undefined' && Array.isArray(SUBJECTS_DATA)) ? SUBJECTS_DATA : [];
   return local.filter(s => s?.id);
 }
+
+function stableSubjectIdFromDeptAndCode(dept, courseCode) {
+  let d = String(dept || '')
+    .toLowerCase()
+    .replace(/[^a-z0-9]+/g, '_')
+    .replace(/^_+|_+$/g, '');
+  let c = normalizeSubjectCode(courseCode || '')
+    .toLowerCase()
+    .replace(/[^a-z0-9]+/g, '_')
+    .replace(/^_+|_+$/g, '');
+  return `sub_${d || 'dept'}_${c || 'code'}`;
+}
+
+function findSubjectByDeptAndCurriculumCode(dept, courseCode) {
+  let want = normalizeSubjectCode(courseCode || '');
+  if (!dept || !want) return null;
+  let source = Array.isArray(state.subjects) ? state.subjects : [];
+  for (let s of source) {
+    if (!s || s.dept !== dept) continue;
+    if (normalizeSubjectCode(s.code || '') === want) return s;
+  }
+  return null;
+}
+
+async function ensureSubjectsExistForCurriculumRows(rows) {
+  let list = Array.isArray(rows) ? rows : [];
+  let changed = [];
+  for (let r of list) {
+    let dept = String(r?.dept || '').trim();
+    let code = String(r?.courseCode || '').trim();
+    let name = String(r?.subjectName || '').trim();
+    let units = Number.isFinite(Number(r?.units)) ? Number(r.units) : 0;
+    if (!dept || !code || !name) continue;
+    let found = findSubjectByDeptAndCurriculumCode(dept, code);
+    if (found) {
+      let next = { ...found };
+      let didChange = false;
+      if ((next.name || '').trim() !== name) {
+        next.name = name;
+        didChange = true;
+      }
+      if (Number(next.units) !== units) {
+        next.units = units;
+        didChange = true;
+      }
+      if (didChange) {
+        let i = state.subjects.findIndex(s => s.id === next.id);
+        if (i >= 0) state.subjects[i] = next;
+        changed.push(next);
+      }
+      continue;
+    }
+    let created = {
+      id: stableSubjectIdFromDeptAndCode(dept, code),
+      code,
+      name,
+      dept,
+      units,
+      active: true,
+    };
+    state.subjects.push(created);
+    changed.push(created);
+  }
+  if (!changed.length || !hasSupabaseClient()) return { ok: true };
+  let { error } = await upsertSubjectsDb(changed);
+  if (error) {
+    console.warn('Unable to upsert auto-created subjects from curriculum rows:', error);
+    return { ok: false, error };
+  }
+  return { ok: true };
+}
+
 function subjectsForCreateScheduleSlot(dept, year, sem, ay) {
   let rows = curriculumRowsForDept(dept);
   let ayNorm = normalizeAcademicYearInput(ay) || DEFAULT_ACADEMIC_YEAR;
@@ -2535,13 +2880,37 @@ function subjectsForCreateScheduleSlot(dept, year, sem, ay) {
   }
   let out = [];
   let seenId = new Set();
+  let createdSubjects = [];
   for (let r of forSlot) {
     let c = curriculumCodeFromRow(r);
     let sub = findSubjectForCurriculumCode(c);
+    if (!sub && dept && c) {
+      // Self-heal: synthesize missing subject master entries from curriculum rows.
+      sub = {
+        id: stableSubjectIdFromDeptAndCode(dept, c),
+        code: String(c).trim(),
+        name: String(r.subjectName || r.courseName || c).trim(),
+        dept,
+        units: Number.isFinite(Number(r.units)) ? Number(r.units) : 0,
+        active: true,
+      };
+      if (!state.subjects.some(s => s.id === sub.id)) {
+        state.subjects.push(sub);
+        createdSubjects.push(sub);
+      } else {
+        let i = state.subjects.findIndex(s => s.id === sub.id);
+        if (i >= 0) state.subjects[i] = { ...state.subjects[i], ...sub };
+      }
+      source.push(sub);
+    }
     if (sub && !seenId.has(sub.id)) {
       seenId.add(sub.id);
       out.push(sub);
     }
+  }
+  if (createdSubjects.length && hasSupabaseClient()) {
+    // Fire-and-forget DB sync so future sessions get the same subject master rows.
+    upsertSubjectsDb(createdSubjects).catch(() => {});
   }
   return out;
 }
@@ -2989,6 +3358,17 @@ function hasScheduleStartingAtOnDay(scheds, day, timeStart, excludeId) {
       timesEqualClock(s.timeStart, timeStart),
   );
 }
+/** Another schedule on the same day ends exactly at `timeEnd` (used to visually join back-to-back blocks). */
+function hasScheduleEndingAtOnDay(scheds, day, timeEnd, excludeId) {
+  return scheds.some(
+    s =>
+      s &&
+      s.id !== excludeId &&
+      Array.isArray(s.days) &&
+      s.days.includes(day) &&
+      timesEqualClock(s.timeEnd, timeEnd),
+  );
+}
 /** Rowspan through the time row labeled with the end clock for any block length that is a positive multiple of 30m (including one slot, e.g. 7:30–8:00), unless back-to-back. */
 function timeDurationForTimetableGridDisplay(schedule, day, allScheds) {
   let d = timeDuration(schedule.timeStart, schedule.timeEnd);
@@ -3045,6 +3425,9 @@ function checkConflicts(entry, excludeId=null) {
     return true;
   });
   let timeOverlap = (as, ae, bs, be) => as < be && ae > bs;
+  const isOthersLikeRoom = x =>
+    !!x &&
+    (x.roomId === ROOM_OTHER_ID || (x.roomId == null || x.roomId === '') || String(x.roomOtherName || '').trim() !== '');
   for (let s of scheds) {
     if(!s.days.some(d=>entry.days.includes(d))) continue;
     if(!timeOverlap(entry.timeStart,entry.timeEnd,s.timeStart,s.timeEnd)) continue;
@@ -3052,7 +3435,13 @@ function checkConflicts(entry, excludeId=null) {
       let label = professorDisplayLineFromPick(entry.professorId, entry.professorOtherName);
       conflicts.push(`Professor ${label} has class on ${s.days.join('/')} ${fmt12(s.timeStart)}–${fmt12(s.timeEnd)}`);
     }
-    if (roomsBookSameSpace(s, entry)) {
+    // Rule: "Others" room is non-blocking (shared/unspecified), so skip room conflicts.
+    if (isOthersLikeRoom(s) || isOthersLikeRoom(entry)) {
+      // no-op
+    } else if (roomsBookSameSpace(s, entry)) {
+      let sRoom = roomDisplayLineFromPick(s.roomId, s.roomOtherName);
+      let eRoom = roomDisplayLineFromPick(entry.roomId, entry.roomOtherName);
+      if (isSharedRoomName(sRoom) && isSharedRoomName(eRoom)) continue;
       let rn = roomDisplayLineFromPick(entry.roomId, entry.roomOtherName);
       conflicts.push(`Room ${rn} booked on ${s.days.join('/')} ${fmt12(s.timeStart)}–${fmt12(s.timeEnd)}`);
     }
@@ -3128,7 +3517,7 @@ function dashboardSchedulesForConflictScope() {
   let u = state.currentUser;
   if (!u) return [];
   let term = currentTermFilter();
-  let pool = u.role === 'admin' ? state.schedules : state.schedules.filter(s => s.dept === u.dept);
+  let pool = u.role === 'admin' ? state.schedules : state.schedules.filter(s => scheduleVisibleToChairScope(s, u.dept));
   return pool.filter(s => scheduleMatchesCurrentTerm(s, term));
 }
 /** All schedules in the current term (every department) for the dashboard Schedule Summary grid. */
@@ -3139,6 +3528,21 @@ function dashboardScheduleSummarySchedules() {
     .filter(r => requestMatchesCurrentTerm(r, term) && isPendingRoomRequestForTimetable(r))
     .map(pseudoScheduleFromPendingRequest);
   return [...base, ...pending];
+}
+function kickDashboardSummaryAutoSync() {
+  if (!hasSupabaseClient()) return;
+  const term = currentTermFilter();
+  const key = `${term.sem}|${term.ay}`;
+  if (state.dashboardSummarySyncInFlight) return;
+  if (state.dashboardSummaryLastSyncKey === key) return;
+  state.dashboardSummarySyncInFlight = true;
+  syncCoreDataFromSupabase()
+    .catch(() => false)
+    .finally(() => {
+      state.dashboardSummarySyncInFlight = false;
+      state.dashboardSummaryLastSyncKey = key;
+      render();
+    });
 }
 /** Schedule Summary day dropdown: Mon–Sat for all users (same as timetable). */
 function dashboardSummaryDayOptionsForUser(_u) {
@@ -3374,8 +3778,9 @@ function renderPage() {
 
 function renderDashboard() {
   let u = state.currentUser;
+  kickDashboardSummaryAutoSync();
   let term = currentTermFilter();
-  let myScheds = (u.role === 'admin' ? state.schedules : state.schedules.filter(s => s.dept === u.dept))
+  let myScheds = (u.role === 'admin' ? state.schedules : state.schedules.filter(s => scheduleVisibleToChairScope(s, u.dept)))
     .filter(s => scheduleMatchesCurrentTerm(s, term));
   let schedsForConflicts = myScheds;
   let conflictCount = countSchedulesWithConflicts(schedsForConflicts);
@@ -3391,8 +3796,14 @@ function renderDashboard() {
   let summaryDayList = dashboardSummaryDayOptionsForUser(u);
   let summaryDay = state.dashboardSummaryDay || 'Monday';
   if (!summaryDayList.includes(summaryDay)) summaryDay = 'Monday';
-  state.dashboardSummaryDay = summaryDay;
   let summaryScheds = dashboardScheduleSummarySchedules();
+  // If the selected day has no classes, auto-pick the first day in this term that has data.
+  let hasDataOnSelectedDay = summaryScheds.some(s => Array.isArray(s.days) && s.days.includes(summaryDay));
+  if (!hasDataOnSelectedDay) {
+    let firstDayWithData = summaryDayList.find(d => summaryScheds.some(s => Array.isArray(s.days) && s.days.includes(d)));
+    if (firstDayWithData) summaryDay = firstDayWithData;
+  }
+  state.dashboardSummaryDay = summaryDay;
   let dayOpts = summaryDayList.map(
     d => `<option value="${escapeHtml(d)}" ${summaryDay === d ? 'selected' : ''}>${escapeHtml(d)}</option>`,
   ).join('');
@@ -3483,6 +3894,18 @@ function normalizeScheduleFilters() {
   }
 }
 
+/**
+ * Chair scope for Schedule page:
+ * - own department rows are always visible
+ * - include cross-dept borrow rows when the section label belongs to the chair's program
+ *   (e.g. BSIE section scheduled in an EE room after request approval).
+ */
+function scheduleVisibleToChairScope(s, chairDept) {
+  if (!s || !chairDept) return false;
+  if (s.dept === chairDept) return true;
+  return deptFromSectionLabel(s.section) === chairDept;
+}
+
 function renderSchedulePage() {
   let u = state.currentUser;
   normalizeScheduleFilters();
@@ -3495,7 +3918,7 @@ function renderSchedulePage() {
   let scheds =
     u.role === 'admin' || state.filterMode === 'room' || state.filterMode === 'faculty'
       ? state.schedules
-      : state.schedules.filter(s => s.dept === u.dept);
+      : state.schedules.filter(s => scheduleVisibleToChairScope(s, u.dept));
   scheds = scheds.filter(s =>
     (s.schSem || '').trim() === termSem &&
     (normalizeAcademicYearInput(s.schAy) || DEFAULT_ACADEMIC_YEAR) === termAy,
@@ -3608,10 +4031,11 @@ function buildScheduleCellInnerHtml(s, sub, cellLayout, innerStyleOverride) {
     parts.push(`<div style="${lineStyle}">${profLine}</div>`);
   } else {
     parts.push(`<div style="${lineStyle}">${timeLine}</div>`);
+    if (setLine) parts.push(`<div style="${lineStyle}">${setLine}</div>`);
     parts.push(`<div style="${lineStyle}">${roomLine}</div>`);
     parts.push(`<div style="${lineStyle}">${profLine}</div>`);
   }
-  return parts.join('');
+  return `<div class="tt-cell-lines">${parts.join('')}</div>`;
 }
 
 function renderTimetableGrid(scheds, gridOpts) {
@@ -3687,6 +4111,22 @@ function renderTimetableGrid(scheds, gridOpts) {
         const bg = chrome.bg;
         const border = chrome.border;
         const bl = chrome.borderLeftWidth || 3;
+        const hasPrevAdjacent = hasScheduleEndingAtOnDay(scheds, dayCols[col], s.timeStart, s.id);
+        const hasNextAdjacent = hasScheduleStartingAtOnDay(scheds, dayCols[col], s.timeEnd, s.id);
+        // Keep one clear boundary line at exact back-to-back time (e.g. 2:30).
+        const joinBorderStyle = `${hasNextAdjacent ? 'border-bottom:0;' : ''}`;
+        // Draw exact midpoint divider for back-to-back blocks without relying on row-height guesses.
+        const splitLineStyle = hasPrevAdjacent
+          ? 'border-top:0; position:relative;'
+          : '';
+        const splitTopPercent = 50 / Math.max(1, rowspan);
+        const splitLineOverlay = hasPrevAdjacent
+          ? `<div aria-hidden="true" style="position:absolute;left:0;right:0;top:${splitTopPercent}%;height:2px;transform:translateY(-1px);background:rgba(53,66,56,.55);pointer-events:none;"></div>`
+          : '';
+        const joined = hasPrevAdjacent || hasNextAdjacent;
+        const radiusStyle = joined
+          ? 'border-top-left-radius:0;border-top-right-radius:0;border-bottom-left-radius:0;border-bottom-right-radius:0;'
+          : 'border-top-left-radius:6px;border-top-right-radius:6px;border-bottom-left-radius:6px;border-bottom-right-radius:6px;';
         const timeRangeLabel = `${fmt12(s.timeStart || '')}–${fmt12(s.timeEnd || '')}`;
         let busyTitle = `Click for details (${timeRangeLabel})`;
         if (chrome.slotKind === 'conflict') busyTitle = 'Conflict — click for details';
@@ -3694,9 +4134,10 @@ function renderTimetableGrid(scheds, gridOpts) {
         let useClickableBusyCell = !requestView || requestBusyClickable;
         const dataPal = ` data-tt-fill="${escapeHtml(chrome.bg)}" data-tt-border="${escapeHtml(chrome.border)}"`;
         let tdOpen = useClickableBusyCell
-          ? `<td rowspan="${rowspan}" data-schedid="${escapeHtml(s.id)}"${dataPal} title="${escapeHtml(busyTitle)}" style="cursor:pointer; padding: 6px; border: 1px solid var(--border-ui); background: ${bg}; border-left: ${bl}px solid ${border}; border-radius: 6px;">`
-          : `<td rowspan="${rowspan}" class="timetable-slot-busy"${dataPal} title="" style="cursor:default; padding: 6px; border: 1px solid var(--border-ui); background: ${bg}; border-left: ${bl}px solid ${border}; border-radius: 6px;">`;
+          ? `<td rowspan="${rowspan}" data-schedid="${escapeHtml(s.id)}"${dataPal} title="${escapeHtml(busyTitle)}" style="cursor:pointer; padding: 6px; border: 1px solid var(--border-ui); background: ${bg}; border-left: ${bl}px solid ${border};${joinBorderStyle}${splitLineStyle}${radiusStyle}">`
+          : `<td rowspan="${rowspan}" class="timetable-slot-busy"${dataPal} title="" style="cursor:default; padding: 6px; border: 1px solid var(--border-ui); background: ${bg}; border-left: ${bl}px solid ${border};${joinBorderStyle}${splitLineStyle}${radiusStyle}">`;
         html += tdOpen;
+        html += splitLineOverlay;
         html += buildScheduleCellInnerHtml(s, sub, cellLayout, chrome.innerStyles);
         html += `</td>`;
       } else if (!cell || row !== timeToRow(cell.schedule.timeStart)) {
@@ -3760,6 +4201,14 @@ function renderTimetableGrid(scheds, gridOpts) {
         filter: brightness(0.96);
         box-shadow: inset 0 0 0 1px rgba(0,0,0,.06);
       }
+      .timetable-table .tt-cell-lines {
+        min-height: 100%;
+        display: flex;
+        flex-direction: column;
+        justify-content: center;
+        gap: 2px;
+      }
+      .timetable-table .tt-cell-lines > div { line-height: 1.2; }
       .timetable-table td.timetable-slot-empty:hover {
         background: var(--blue-light) !important;
         box-shadow: inset 0 0 0 1px rgba(59,130,246,.25);
@@ -4823,6 +5272,26 @@ function normalizeRequestTimetableFilters() {
     state.requestTimetableProfessor = 'all';
   }
 }
+function focusTermForRequest(req) {
+  if (!req) return;
+  let sem = String(req.schSem || '').trim();
+  let ay = normalizeAcademicYearInput(req.schAy);
+  if (sem) state.termSemester = normalizeTermSemesterStored(sem);
+  if (ay) state.termAcademicYear = ay;
+}
+function focusRequestTimetableForRequest(req) {
+  if (!req) return;
+  let toDept = String(req.toDept || '').trim();
+  if (toDept) state.requestTimetableDept = toDept;
+  let deptRooms = roomsForRequestDeptTimetable(state.requestTimetableDept);
+  let wantsRoom = String(req.roomId || '').trim();
+  if (wantsRoom && deptRooms.some(r => r.id === wantsRoom)) {
+    state.requestTimetableRoom = wantsRoom;
+  } else {
+    state.requestTimetableRoom = deptRooms[0]?.id || state.requestTimetableRoom;
+  }
+  state.requestTimetableProfessor = 'all';
+}
 
 function roomsForRequestDeptTimetable(deptId) {
   let src = roomsSourceForApp();
@@ -5150,6 +5619,15 @@ function renderCurriculum() {
     if (curriculumAcademicYearForFilter(c) !== curriculumAyFilter) return false;
     let sf = curriculumSemFilterEffective();
     if (!curriculumRowMatchesSemesterFilter(c, sf)) return false;
+    return true;
+  });
+  // Hide exact duplicate curriculum slots (same dept/year/sem/code/AY) caused by earlier copy operations.
+  let seenCurriculumSlots = new Set();
+  rows = rows.filter(c => {
+    let key = curriculumAySlotKey(c, c.academicYear);
+    if (!key) return true;
+    if (seenCurriculumSlots.has(key)) return false;
+    seenCurriculumSlots.add(key);
     return true;
   });
   let yearFilterOpts = [['all', 'All Year Levels'], ...SCHEDULE_FORM_YEARS.map(y => [y, y])].map(([y, rawLabel]) => {
@@ -7263,7 +7741,8 @@ function isPendingRoomRequestForTimetable(r) {
   if (!isPendingRequestStatus(r.status)) return false;
   let rid = r.roomId;
   if (rid == null || rid === '' || rid === REQUEST_ROOM_PENDING_ID) return false;
-  return Array.isArray(r.days) && r.days.length > 0 && !!r.timeStart && !!r.timeEnd;
+  let days = parseScheduleDays(r.days);
+  return days.length > 0 && !!r.timeStart && !!r.timeEnd;
 }
 function pseudoScheduleFromPendingRequest(r) {
   let createdRaw = r.created != null ? String(r.created).trim() : '';
@@ -7279,7 +7758,7 @@ function pseudoScheduleFromPendingRequest(r) {
     roomOtherName: null,
     dept: r.fromDept,
     section: r.section || '',
-    days: Array.isArray(r.days) ? [...r.days] : [],
+    days: parseScheduleDays(r.days),
     timeStart: r.timeStart,
     timeEnd: r.timeEnd,
     schYear: r.schYear || '',
@@ -8940,9 +9419,7 @@ function bindPage(){
       if (sub.code && sub.name) {
         if (!window.confirm(MSG_CONFIRM_SAVE_SUBJECT)) return;
         if (hasSupabaseClient()) {
-          const { error } = await window.cenSupabase
-            .from('subjects')
-            .upsert([normalizeSubjectToDb(sub)], { onConflict: 'id' });
+          const { error } = await upsertSubjectsDb([sub]);
           if (error) {
             window.alert(`Unable to save subject in Supabase: ${error.message}`);
             return;
@@ -9020,23 +9497,37 @@ function bindPage(){
         return;
       }
       if (!window.confirm(editId ? MSG_CONFIRM_SAVE_CURRICULUM_EDIT : MSG_CONFIRM_SAVE_CURRICULUM_NEW)) return;
+      let savedRows = [];
       if (editId) {
         let i = state.curriculum.findIndex(c => c.id === editId);
         if (i >= 0) state.curriculum[i] = { ...state.curriculum[i], ...row, id: editId };
+        savedRows = [{ ...row, id: editId }];
       } else {
-        row.id = genId();
-        state.curriculum.push(row);
+        let key = curriculumAySlotKey(row, row.academicYear);
+        let exists = state.curriculum.some(c => curriculumAySlotKey(c, c.academicYear) === key);
+        if (exists) {
+          showToast(`Curriculum row already exists in ${row.academicYear}.`);
+          return;
+        }
+        let newRow = { ...row, id: genId() };
+        state.curriculum.push(newRow);
+        savedRows = [newRow];
       }
-      let savedRow = editId ? { ...row, id: editId } : row;
-      if (Number.isFinite(Number(savedRow.requiredHours))) {
-        rememberCurriculumRequiredHours(savedRow.id, savedRow.requiredHours);
+      for (let sr of savedRows) {
+        if (Number.isFinite(Number(sr.requiredHours))) {
+          rememberCurriculumRequiredHours(sr.id, sr.requiredHours);
+        }
       }
       if (hasSupabaseClient()) {
-        const { error } = await upsertCurriculumDb([savedRow]);
+        const { error } = await upsertCurriculumDb(savedRows);
         if (error) {
           window.alert(`Unable to save curriculum in Supabase: ${error.message}`);
           return;
         }
+      }
+      let subjSync = await ensureSubjectsExistForCurriculumRows(savedRows);
+      if (!subjSync.ok) {
+        window.alert(`Curriculum saved, but subject sync failed: ${subjSync.error?.message || 'unknown error'}`);
       }
       state.modal = null;
       showToast('Curriculum saved');
@@ -9156,6 +9647,8 @@ function bindPage(){
               return;
             }
             state.requests.push(req);
+            focusTermForRequest(req);
+            focusRequestTimetableForRequest(req);
             state.modal = null;
             showToast('Request submitted');
             render();
@@ -9166,6 +9659,8 @@ function bindPage(){
         return;
       }
       state.requests.push(req);
+      focusTermForRequest(req);
+      focusRequestTimetableForRequest(req);
       state.modal = null;
       showToast('Request submitted');
       render();
@@ -9304,8 +9799,10 @@ function bindPage(){
         r = getStateRequestById(el.dataset.approve) || getStateRequestById(r.id) || r;
       }
     }
+    focusTermForRequest(r);
+    focusRequestTimetableForRequest(r);
     let approvedAt = new Date().toISOString();
-    let approvedSched = {id:genId(),subjectId:r.subjectId,professorId:r.professorId||null,professorOtherName:r.professorOtherName||null,roomId:r.roomId,roomOtherName:r.roomOtherName||null,dept:r.fromDept,section:r.section,days:r.days,timeStart:r.timeStart,timeEnd:r.timeEnd,color:'blue',setLabel:r.setLabel||null,labLabel:r.labLabel||null,schYear:r.schYear||'1st Year',schSem:r.schSem||'1st Semester',schAy:normalizeAcademicYearInput(r.schAy)||normalizeAcademicYearInput(state.termAcademicYear)||DEFAULT_ACADEMIC_YEAR,createdAt:approvedAt};
+    let approvedSched = {id:genId(),subjectId:r.subjectId,professorId:r.professorId||null,professorOtherName:r.professorOtherName||null,roomId:r.roomId,roomOtherName:r.roomOtherName||null,dept:r.toDept||r.fromDept,section:r.section,days:r.days,timeStart:r.timeStart,timeEnd:r.timeEnd,color:'blue',setLabel:r.setLabel||null,labLabel:r.labLabel||null,schYear:r.schYear||'1st Year',schSem:r.schSem||'1st Semester',schAy:normalizeAcademicYearInput(r.schAy)||normalizeAcademicYearInput(state.termAcademicYear)||DEFAULT_ACADEMIC_YEAR,createdAt:approvedAt};
     if (hasSupabaseClient()) {
       const { error } = await upsertSchedulesDb([approvedSched]);
       if (error) {
@@ -9369,7 +9866,7 @@ function bindPage(){
     state.curriculumTableEditId = null;
     render();
   });
-  document.getElementById('curriculumAcademicYearFilter')?.addEventListener('change', e => {
+  document.getElementById('curriculumAcademicYearFilter')?.addEventListener('change', async e => {
     state.curriculumAcademicYearFilter = normalizeAcademicYearInput(e.target.value || '') || DEFAULT_ACADEMIC_YEAR;
     state.curriculumTableEditId = null;
     render();
